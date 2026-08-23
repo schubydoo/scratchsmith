@@ -11,12 +11,12 @@ pub mod cli;
 pub mod config;
 pub mod doctor;
 pub mod image;
+pub mod lint;
 pub mod pack;
 pub mod resolver;
 pub mod stager;
 
 // Stages still stubbed until their tasks land. Each file states its own scope.
-pub mod lint;
 pub mod registry;
 pub mod report;
 pub mod supplychain;

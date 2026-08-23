@@ -64,12 +64,11 @@ fn pack_of_a_missing_binary_fails_cleanly() {
 }
 
 #[test]
-fn lint_stub_exits_one_and_explains() {
-    let out = run(&["lint", "/bin/ls"]);
-    assert_eq!(out.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("lint: not yet implemented"),
-        "got: {stderr}"
-    );
+fn lint_reports_hardening_for_a_real_binary() {
+    let out = run(&["lint", "/bin/sh"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for field in ["PIE:", "RELRO:", "NX:", "Canary:", "Fortify:"] {
+        assert!(stdout.contains(field), "missing {field} in: {stdout}");
+    }
 }

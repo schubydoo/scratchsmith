@@ -130,9 +130,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             Ok(())
         }
         Command::Doctor => crate::doctor::run(),
-        // Lint is still stubbed; fail loudly rather than exit 0 so a stub is never
-        // mistaken for a working command.
-        Command::Lint { .. } => bail!("lint: not yet implemented"),
+        Command::Lint { binary } => crate::lint::run(&binary),
     }
 }
 
@@ -258,10 +256,10 @@ mod tests {
     }
 
     #[test]
-    fn lint_stub_fails_loudly() {
-        let cli = Cli::try_parse_from(["scratchsmith", "lint", "/bin/ls"]).unwrap();
-        let err = dispatch(cli).unwrap_err();
-        assert!(err.to_string().contains("lint: not yet implemented"));
+    fn lint_runs_on_a_real_binary() {
+        // /bin/sh is a real dynamic ELF everywhere the tests run.
+        let cli = Cli::try_parse_from(["scratchsmith", "lint", "/bin/sh"]).unwrap();
+        assert!(dispatch(cli).is_ok());
     }
 
     #[test]
