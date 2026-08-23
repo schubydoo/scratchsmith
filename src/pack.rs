@@ -11,8 +11,8 @@ use std::path::Path;
 const SMOKE_TIMEOUT_SECS: u32 = 15;
 
 // Resolve `binary` and build its complete rootfs (libs, loader, cache, NSS/passwd
-// includes) under `dest`. The shared core of every pack path.
-fn build_rootfs(binary: &Path, dest: &Path) -> Result<StagedTree> {
+// includes) under `dest`, optionally stripping. The shared core of every pack path.
+fn build_rootfs(binary: &Path, dest: &Path, strip: bool) -> Result<StagedTree> {
     // Resolve against the host root for now; a pinned sysroot is future work.
     let resolution = resolver::resolve(binary, &Sysroot::new("/"))?;
     if !resolution.missing.is_empty() {
@@ -28,21 +28,25 @@ fn build_rootfs(binary: &Path, dest: &Path) -> Result<StagedTree> {
     for warning in &report.warnings {
         eprintln!("warning: {warning}");
     }
+
+    let sizes = stager::strip_and_measure(dest, &tree, &resolution, strip)?;
+    eprintln!("payload size:");
+    eprintln!("{sizes}");
     Ok(tree)
 }
 
 /// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
-pub fn stage_only(binary: &Path, out_dir: &Path) -> Result<StagedTree> {
-    build_rootfs(binary, out_dir)
+pub fn stage_only(binary: &Path, out_dir: &Path, strip: bool) -> Result<StagedTree> {
+    build_rootfs(binary, out_dir, strip)
 }
 
 /// Pack `binary` into a scratch image loaded in the local Docker daemon; return the
 /// tag. When `smoke` is set, run the image once afterwards and fail if the dynamic
 /// loader could not start it — the guard against a silently broken image.
-pub fn run(binary: &Path, smoke: bool, cfg: &ImageConfig) -> Result<String> {
+pub fn run(binary: &Path, smoke: bool, strip: bool, cfg: &ImageConfig) -> Result<String> {
     let work = tempfile::tempdir()?;
     let dest = work.path().join("rootfs");
-    let tree = build_rootfs(binary, &dest)?;
+    let tree = build_rootfs(binary, &dest, strip)?;
 
     if let Some(user) = &cfg.user {
         if image::is_root_user(user) {

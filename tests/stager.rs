@@ -3,8 +3,17 @@
 //! Requires ldconfig (present on any glibc host, including CI).
 
 use scratchsmith::resolver::{resolve, Sysroot};
-use scratchsmith::stager::{stage, stage_default_includes};
+use scratchsmith::stager::{stage, stage_default_includes, strip_and_measure};
 use std::path::Path;
+use std::process::Command;
+
+fn strip_available() -> bool {
+    Command::new("strip")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
 
 #[test]
 fn stages_a_real_binary_into_a_runnable_tree() {
@@ -79,4 +88,28 @@ fn walk_contains(root: &Path, name: &str) -> bool {
         }
     }
     false
+}
+
+#[test]
+fn strip_reduces_payload_size() {
+    if !strip_available() {
+        eprintln!("skipping strip_reduces_payload_size: no strip");
+        return;
+    }
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let resolution = resolve(bin, &Sysroot::new("/")).expect("resolution");
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = tmp.path().join("rootfs");
+    let tree = stage(bin, &resolution, &dest).expect("stage");
+
+    let report = strip_and_measure(&dest, &tree, &resolution, true).expect("strip+measure");
+    assert!(report.stripped);
+    assert!(!report.entries.is_empty(), "should measure staged files");
+    assert!(
+        report.total_after < report.total_before,
+        "strip should shrink the payload: {} -> {}",
+        report.total_before,
+        report.total_after
+    );
 }

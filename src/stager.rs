@@ -115,6 +115,106 @@ pub fn stage_default_includes(resolution: &Resolution, dest: &Path) -> Result<In
     Ok(report)
 }
 
+/// One staged ELF file's size, before and after an optional strip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SizeEntry {
+    pub path: String,
+    pub before: u64,
+    pub after: u64,
+}
+
+/// Sizes of the staged ELF payload (binary + loader + libraries), with totals.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SizeReport {
+    pub entries: Vec<SizeEntry>,
+    pub total_before: u64,
+    pub total_after: u64,
+    pub stripped: bool,
+}
+
+impl std::fmt::Display for SizeReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for e in &self.entries {
+            if self.stripped {
+                writeln!(f, "  {:>10} -> {:>10}  {}", e.before, e.after, e.path)?;
+            } else {
+                writeln!(f, "  {:>10}  {}", e.after, e.path)?;
+            }
+        }
+        if self.stripped {
+            let saved = self.total_before.saturating_sub(self.total_after);
+            write!(
+                f,
+                "  total {} -> {} bytes (saved {})",
+                self.total_before, self.total_after, saved
+            )
+        } else {
+            write!(f, "  total {} bytes", self.total_after)
+        }
+    }
+}
+
+/// Measure the staged ELF payload, optionally stripping each file first. Strip uses
+/// `strip --strip-unneeded`, which is safe for both executables and shared objects
+/// (it keeps the dynamic symbols the loader needs).
+pub fn strip_and_measure(
+    dest: &Path,
+    tree: &StagedTree,
+    resolution: &Resolution,
+    strip: bool,
+) -> Result<SizeReport> {
+    // The ELF files we placed: the binary, the loader, and every resolved library.
+    let mut targets: Vec<PathBuf> = vec![under(dest, &tree.entrypoint)];
+    if let Some(interp) = &resolution.interpreter {
+        targets.push(under(dest, &interp.image_path));
+    }
+    targets.extend(resolution.libs.iter().map(|l| under(dest, &l.path)));
+
+    let mut report = SizeReport {
+        stripped: strip,
+        ..Default::default()
+    };
+    for path in targets {
+        let before = std::fs::metadata(&path)?.len();
+        if strip {
+            run_strip(&path)?;
+        }
+        let after = std::fs::metadata(&path)?.len();
+        report.total_before += before;
+        report.total_after += after;
+        report.entries.push(SizeEntry {
+            path: display_image_path(dest, &path),
+            before,
+            after,
+        });
+    }
+    Ok(report)
+}
+
+fn run_strip(path: &Path) -> Result<()> {
+    let out = Command::new("strip")
+        .arg("--strip-unneeded")
+        .arg(path)
+        .output()
+        .context("running strip (install binutils?)")?;
+    if !out.status.success() {
+        bail!(
+            "strip failed on {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+// Show a staged file by its image-absolute path, not the temp staging prefix.
+fn display_image_path(dest: &Path, staged: &Path) -> String {
+    staged
+        .strip_prefix(dest)
+        .map(|rel| format!("/{}", rel.display()))
+        .unwrap_or_else(|_| staged.display().to_string())
+}
+
 // The directory libc resolved from — the version-matched source for NSS modules.
 fn libc_dir(resolution: &Resolution) -> Option<PathBuf> {
     resolution
