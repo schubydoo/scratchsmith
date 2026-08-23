@@ -1,0 +1,94 @@
+name: Changeset check
+
+# Advisory, NON-BLOCKING nudge for the changesets-only release model. A PR that
+# changes product code (src/*.rs) but adds no `.changeset/*.md` fragment gets a
+# sticky comment + a warning annotation. It never fails the job, so it cannot
+# block a merge. Opt out per-PR with the `no-changelog` label (CI / refactor /
+# tests / non-user-facing docs). Gated on KNOPE_ENABLED with the release flow.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write # post/update the advisory sticky comment
+
+concurrency:
+  group: changeset-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changeset:
+    # Same-repo PRs only; never on knope's own release PR (it deletes changesets);
+    # and only once the changesets flow is enabled.
+    if: >-
+      ${{ vars.KNOPE_ENABLED == 'true'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && github.head_ref != 'release' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Optional App token for a larger API budget. Soft-fail → GITHUB_TOKEN.
+      - name: Mint scratchsmith-ci App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.SCRATCHSMITH_CI_CLIENT_ID }}
+          private-key: ${{ secrets.SCRATCHSMITH_CI_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-pull-requests: write
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const marker = '<!-- changeset-check -->';
+            try {
+              const labels = (pr.labels || []).map(l => l.name);
+              if (labels.includes('no-changelog')) {
+                core.info('no-changelog label set; skipping.');
+                return;
+              }
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner, repo, pull_number: pr.number, per_page: 100,
+              });
+              const hasChangeset = files.some(f => /^\.changeset\/.+\.md$/.test(f.filename));
+              const touchesCode = files.some(f =>
+                f.filename.startsWith('src/') && f.filename.endsWith('.rs'));
+
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pr.number, per_page: 100,
+              });
+              const existing = comments.find(c => (c.body || '').includes(marker));
+
+              if (touchesCode && !hasChangeset) {
+                const body = [
+                  marker,
+                  '⚠️ **No changeset found.** This PR changes product code but adds no `.changeset/*.md` fragment.',
+                  '',
+                  'Scratchsmith releases are changesets-only: a user-facing change needs a fragment, or it ships with',
+                  '**no changelog entry and no version bump**. Add one — run `knope document-change`, or commit a',
+                  '`.changeset/<slug>.md` with front-matter `default: patch|minor|major|perf|security` and a one-line',
+                  'summary (see `CONTRIBUTING.md`). Internal-only PRs (CI, refactor, tests) can add the',
+                  '**`no-changelog`** label instead.',
+                  '',
+                  '_Advisory only — this check never blocks the merge._',
+                ].join('\n');
+                if (existing) {
+                  await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+                } else {
+                  await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
+                }
+                core.warning('PR changes product code without a changeset — add one or apply the no-changelog label.');
+              } else if (existing) {
+                await github.rest.issues.updateComment({
+                  owner, repo, comment_id: existing.id,
+                  body: `${marker}\n✅ Changeset present (or no code change) — thanks!`,
+                });
+              }
+            } catch (err) {
+              core.warning(`changeset check skipped: ${err.message}`);
+            }
