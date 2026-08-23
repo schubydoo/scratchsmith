@@ -34,50 +34,116 @@ pub fn load_into_docker(staged: &StagedTree, tag: &str, cfg: &ImageConfig) -> Re
     Ok(())
 }
 
-// A docker-archive is a tar of: the image config, the single rootfs layer tar, and
-// a manifest.json tying them together. `docker load` reads exactly this shape.
+// A docker-archive is a tar of: the image config, the single rootfs layer, and a
+// manifest.json tying them together. `docker load` reads exactly this shape.
 fn build_docker_archive(
     staged: &StagedTree,
     tag: &str,
     cfg: &ImageConfig,
     out: &Path,
 ) -> Result<()> {
-    let work = tempfile::tempdir()?;
-    let layer_path = work.path().join("layer.tar");
-    let diff_id = write_layer_tar(&staged.root, &layer_path)?;
+    let layer = build_layer(&staged.root)?;
 
-    let config = image_config(&staged.entrypoint, &diff_id, cfg);
+    let config = image_config(&staged.entrypoint, &layer.diff_id, cfg);
     let config_bytes = serde_json::to_vec(&config)?;
     let config_name = format!("{}.json", hex(Sha256::digest(&config_bytes)));
 
+    // The layer file is referenced by its gzip digest; the config records the
+    // uncompressed diff_id. docker sniffs the gzip so the .tar name is fine.
+    let layer_name = format!("{}/layer.tar", layer.digest);
     let manifest = serde_json::json!([{
         "Config": config_name,
         "RepoTags": [tag],
-        "Layers": [format!("{diff_id}/layer.tar")],
+        "Layers": [layer_name],
     }]);
     let manifest_bytes = serde_json::to_vec(&manifest)?;
 
     let mut ar = tar::Builder::new(std::fs::File::create(out)?);
     append_bytes(&mut ar, &config_name, &config_bytes)?;
-    append_path(&mut ar, &format!("{diff_id}/layer.tar"), &layer_path)?;
+    append_bytes(&mut ar, &layer_name, &layer.gzip)?;
     append_bytes(&mut ar, "manifest.json", &manifest_bytes)?;
     ar.finish().context("finishing image archive")?;
     Ok(())
 }
 
-// Tar the staged rootfs with symlinks preserved (soname links must survive), and
-// return the tar's sha256 as the layer diff_id. No gzip yet, so the compressed
-// layer digest equals this; reproducible ordering/mtimes are Task 2.9.
-fn write_layer_tar(root: &Path, out: &Path) -> Result<String> {
-    let mut builder = tar::Builder::new(std::fs::File::create(out)?);
-    builder.follow_symlinks(false);
-    builder
-        .append_dir_all(".", root)
-        .context("adding staged rootfs to layer")?;
-    builder.finish()?;
-    drop(builder);
-    let bytes = std::fs::read(out)?;
-    Ok(hex(Sha256::digest(&bytes)))
+/// A built image layer: the gzip bytes, plus the two hashes that must stay distinct.
+pub struct Layer {
+    /// gzip-compressed layer tar (what goes in the archive / is pushed).
+    pub gzip: Vec<u8>,
+    /// sha256 of the UNCOMPRESSED tar — the config's `rootfs.diff_ids` entry.
+    pub diff_id: String,
+    /// sha256 of the GZIP blob — the manifest's `layers[].digest`.
+    pub digest: String,
+}
+
+/// Build a reproducible, gzipped layer from the staged rootfs. The diff_id (from the
+/// uncompressed tar) and the digest (from the gzip) are computed separately —
+/// conflating them is the classic bug that yields unpullable images.
+pub fn build_layer(root: &Path) -> Result<Layer> {
+    let tar_bytes = deterministic_tar(root)?;
+    let diff_id = hex(Sha256::digest(&tar_bytes));
+    let gzip = gzip(&tar_bytes)?;
+    let digest = hex(Sha256::digest(&gzip));
+    Ok(Layer {
+        gzip,
+        diff_id,
+        digest,
+    })
+}
+
+// Tar the staged tree reproducibly: entries sorted by path, mtime zeroed, uid/gid 0,
+// canonical modes, symlinks preserved. The same rootfs yields a byte-identical tar.
+fn deterministic_tar(root: &Path) -> Result<Vec<u8>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut paths: Vec<std::path::PathBuf> = walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .map(|e| e.into_path())
+        .filter(|p| p != root)
+        .collect();
+    paths.sort();
+
+    let mut ar = tar::Builder::new(Vec::new());
+    for path in paths {
+        let rel = path.strip_prefix(root)?;
+        let meta = std::fs::symlink_metadata(&path)?;
+        let mut header = tar::Header::new_gnu();
+        header.set_mtime(0);
+        header.set_uid(0);
+        header.set_gid(0);
+
+        if meta.file_type().is_symlink() {
+            let target = std::fs::read_link(&path)?;
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_size(0);
+            header.set_mode(0o777);
+            ar.append_link(&mut header, rel, &target)?;
+        } else if meta.is_dir() {
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_size(0);
+            header.set_mode(0o755);
+            ar.append_data(&mut header, rel, std::io::empty())?;
+        } else {
+            let data = std::fs::read(&path)?;
+            let exec = meta.permissions().mode() & 0o111 != 0;
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_size(data.len() as u64);
+            header.set_mode(if exec { 0o755 } else { 0o644 });
+            ar.append_data(&mut header, rel, &data[..])?;
+        }
+    }
+    Ok(ar.into_inner()?)
+}
+
+// Deterministic gzip: fixed mtime and OS byte in the header so equal input -> equal output.
+fn gzip(data: &[u8]) -> Result<Vec<u8>> {
+    let mut enc = flate2::GzBuilder::new()
+        .mtime(0)
+        .operating_system(255)
+        .write(Vec::new(), flate2::Compression::default());
+    enc.write_all(data)?;
+    Ok(enc.finish()?)
 }
 
 const DEFAULT_PATH: &str = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -199,12 +265,6 @@ fn append_bytes<W: Write>(ar: &mut tar::Builder<W>, name: &str, data: &[u8]) -> 
     Ok(())
 }
 
-fn append_path<W: Write>(ar: &mut tar::Builder<W>, name: &str, path: &Path) -> Result<()> {
-    let mut file = std::fs::File::open(path)?;
-    ar.append_file(name, &mut file)?;
-    Ok(())
-}
-
 fn hex(digest: impl AsRef<[u8]>) -> String {
     use std::fmt::Write as _;
     digest.as_ref().iter().fold(String::new(), |mut s, b| {
@@ -217,17 +277,37 @@ fn hex(digest: impl AsRef<[u8]>) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn layer_tar_is_written_and_hashed() {
+    fn tiny_rootfs() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("root");
         std::fs::create_dir_all(root.join("usr/lib")).unwrap();
-        std::fs::write(root.join("usr/lib/libx.so"), b"x").unwrap();
-        let out = tmp.path().join("layer.tar");
+        std::fs::write(root.join("usr/lib/libx.so.1.2"), b"x").unwrap();
+        std::os::unix::fs::symlink("libx.so.1.2", root.join("usr/lib/libx.so.1")).unwrap();
+        tmp
+    }
 
-        let diff_id = write_layer_tar(&root, &out).unwrap();
-        assert_eq!(diff_id.len(), 64, "sha256 hex is 64 chars");
-        assert!(out.exists() && std::fs::metadata(&out).unwrap().len() > 0);
+    #[test]
+    fn diff_id_and_layer_digest_are_distinct() {
+        let tmp = tiny_rootfs();
+        let layer = build_layer(&tmp.path().join("root")).unwrap();
+        assert_eq!(layer.diff_id.len(), 64);
+        assert_eq!(layer.digest.len(), 64);
+        // diff_id is the uncompressed hash, digest the gzip hash — never equal.
+        assert_ne!(layer.diff_id, layer.digest);
+        assert!(!layer.gzip.is_empty());
+    }
+
+    #[test]
+    fn layer_build_is_reproducible() {
+        // Two builds of the same rootfs must yield identical hashes (sorted entries,
+        // zeroed mtime/uid/gid, deterministic gzip).
+        let tmp = tiny_rootfs();
+        let root = tmp.path().join("root");
+        let a = build_layer(&root).unwrap();
+        let b = build_layer(&root).unwrap();
+        assert_eq!(a.diff_id, b.diff_id, "diff_id must be stable");
+        assert_eq!(a.digest, b.digest, "layer digest must be stable");
+        assert_eq!(a.gzip, b.gzip, "gzip bytes must be identical");
     }
 
     #[test]
