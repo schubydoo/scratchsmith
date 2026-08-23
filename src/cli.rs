@@ -38,9 +38,13 @@ pub fn run() -> Result<()> {
 // touching argv or spawning a process.
 fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
-        // Handlers are stubbed until Tasks 1.2+ implement each stage. Fail loudly
-        // rather than exit 0, so a stub is never mistaken for a working command.
-        Command::Pack { .. } => bail!("pack: not yet implemented"),
+        Command::Pack { binary } => {
+            let tag = crate::pack::run(&binary)?;
+            println!("loaded image {tag}");
+            Ok(())
+        }
+        // Lint and doctor are still stubbed; fail loudly rather than exit 0 so a stub
+        // is never mistaken for a working command.
         Command::Lint { .. } => bail!("lint: not yet implemented"),
         Command::Doctor => bail!("doctor: not yet implemented"),
     }
@@ -122,13 +126,6 @@ mod tests {
         assert!(help.contains("pack"), "help missing pack: {help}");
         assert!(help.contains("lint"), "help missing lint: {help}");
         assert!(help.contains("doctor"), "help missing doctor: {help}");
-    }
-
-    #[test]
-    fn pack_stub_fails_loudly() {
-        let cli = Cli::try_parse_from(["scratchsmith", "pack", "/bin/ls"]).unwrap();
-        let err = dispatch(cli).unwrap_err();
-        assert!(err.to_string().contains("pack: not yet implemented"));
     }
 
     #[test]

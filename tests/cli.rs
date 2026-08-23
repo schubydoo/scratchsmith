@@ -57,14 +57,13 @@ fn doctor_stub_exits_one_and_explains() {
 }
 
 #[test]
-fn pack_stub_exits_one_and_explains() {
-    let out = run(&["pack", "/bin/ls"]);
+fn pack_of_a_missing_binary_fails_cleanly() {
+    // A nonexistent path fails at resolution with a non-zero exit and a real message,
+    // without touching Docker.
+    let out = run(&["pack", "/nonexistent/scratchsmith-xyz"]);
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("pack: not yet implemented"),
-        "got: {stderr}"
-    );
+    assert!(stderr.contains("scratchsmith-xyz"), "got: {stderr}");
 }
 
 #[test]

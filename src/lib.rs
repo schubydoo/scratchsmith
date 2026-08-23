@@ -7,12 +7,15 @@
 
 pub mod cli;
 
-// Pipeline stages, stubbed until their tasks land. Each file states its own scope.
-pub mod config;
+// Implemented pipeline stages.
 pub mod image;
+pub mod pack;
+pub mod resolver;
+pub mod stager;
+
+// Stages still stubbed until their tasks land. Each file states its own scope.
+pub mod config;
 pub mod lint;
 pub mod registry;
 pub mod report;
-pub mod resolver;
-pub mod stager;
 pub mod supplychain;
