@@ -1,0 +1,55 @@
+name: PR Title
+
+# Validate the pull-request title follows Conventional Commits. The repo
+# squash-merges, so the PR title becomes the squashed commit subject — a clean,
+# conventional history. Keep `synchronize`: required checks are evaluated per
+# head-SHA, so a fixup push needs a fresh check run.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: conventional PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    steps:
+      # Mint a short-lived scratchsmith-ci App token (higher REST rate limit than
+      # the github-actions[bot] pool). Same-repo PRs only (forks can't read App
+      # secrets). Soft-fail: an empty token falls back to GITHUB_TOKEN.
+      - name: Mint scratchsmith-ci App token
+        id: app-token
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.SCRATCHSMITH_CI_CLIENT_ID }}
+          private-key: ${{ secrets.SCRATCHSMITH_CI_APP_PRIVATE_KEY }}
+          permission-pull-requests: read
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            security
+            revert
+            docs
+            chore
+            ci
+            build
+            test
+            refactor
+            style

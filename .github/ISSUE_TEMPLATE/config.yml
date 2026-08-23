@@ -1,0 +1,7 @@
+blank_issues_enabled: false
+# No contact_links, deliberately:
+#   - Discussions is not enabled, so a link to /discussions would 404. Usage
+#     questions belong in Issues (Bug Report / Feature Request).
+#   - Once private vulnerability reporting is enabled, GitHub renders its own
+#     "Report a security vulnerability" entry in the chooser; a hand-written link
+#     to /security/advisories/new would duplicate it.
