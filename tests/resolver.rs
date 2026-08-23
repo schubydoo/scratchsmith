@@ -2,7 +2,7 @@
 //! Synthetic fixtures with crafted RPATH/RUNPATH/$ORIGIN layouts come with Task 1.8;
 //! this proves the parser reads a genuine glibc-linked executable.
 
-use scratchsmith::resolver::{read_elf_info, Linking};
+use scratchsmith::resolver::{read_elf_info, resolve, Linking, Sysroot};
 use std::path::Path;
 
 #[test]
@@ -18,5 +18,32 @@ fn reads_a_real_dynamic_binary() {
         info.needed.iter().any(|lib| lib.contains("libc")),
         "expected libc in DT_NEEDED, got: {:?}",
         info.needed
+    );
+}
+
+#[test]
+fn resolves_a_real_binary_against_the_host() {
+    // End-to-end: the goblin-backed resolver walks the real dep tree of the
+    // scratchsmith binary against the host root. On a glibc host this closes fully.
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let res = resolve(bin, &Sysroot::new("/")).expect("resolution should not error");
+
+    assert!(
+        res.interpreter.is_some_and(|p| p.exists()),
+        "loader should resolve to a real file"
+    );
+    assert!(
+        res.libs.iter().any(|l| l.soname.contains("libc")),
+        "libc should be in the resolved set: {:?}",
+        res.libs.iter().map(|l| &l.soname).collect::<Vec<_>>()
+    );
+    assert!(
+        res.missing.is_empty(),
+        "all deps should resolve on a normal host, missing: {:?}",
+        res.missing
+    );
+    assert!(
+        res.libs.iter().all(|l| l.path.exists()),
+        "every resolved lib should be a real file"
     );
 }

@@ -15,6 +15,9 @@ clap = { version = "4.6", features = ["derive"] }
 anyhow = "1.0"
 goblin = "0.10"
 
+[dev-dependencies]
+tempfile = "3"
+
 [profile.release]
 # Ship a small single binary — the size claim is part of the pitch (TAD 8.1).
 lto = true
