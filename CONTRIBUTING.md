@@ -17,19 +17,21 @@ binaries you can rebuild static. Please check a proposal against that scope.
 
 ## Development setup
 
-You need a stable Rust toolchain (the crate builds on MSRV **1.96**). Some integration
-tests need Linux tools that are auto-skipped when absent:
+You need a stable Rust toolchain (the crate builds on MSRV **1.96**) and, for the test
+suite, `ldconfig`. Other tools gate specific tests, which **skip** when the tool is absent:
 
-- `ldconfig` (glibc `libc-bin`) — required for a real `pack`
-- a C compiler (`cc`), `musl-gcc` — build the resolver/lint/musl fixtures
-- Docker — the end-to-end pack/run tests
-- `syft`, `strip`, `tini` — SBOM / `--strip` / `--init` paths
+- **`ldconfig`** (glibc `libc-bin`) — **required**: the stager/pack tests regenerate the
+  loader cache and **fail** (not skip) without it. It's normally already present on any
+  glibc system, so this rarely bites — but a stripped container image is one place it can.
+- a C compiler (`cc`) and `musl-gcc` — build the resolver / lint / musl fixtures (skip if absent)
+- Docker — the end-to-end pack/run tests (skip if absent)
+- `syft`, `strip`, `tini` — the SBOM / `--strip` / `--init` paths (skip if absent)
 
 ```sh
 git clone https://github.com/schubydoo/scratchsmith
 cd scratchsmith
 cargo build
-cargo test            # Docker/cc tests skip if those tools are absent
+cargo test            # needs ldconfig; Docker/cc/syft tests skip if those are absent
 cargo run -- doctor   # shows which external tools are present
 ```
 
@@ -49,11 +51,14 @@ A change that breaks one of these is wrong even if tests pass:
 ## Making a change
 
 1. **Branch from `main`** — all PRs target `main`. Use a short prefixed name
-   (`feat/…`, `fix/…`, `docs/…`, `ci/…`).
+   (`feat/…`, `fix/…`, `docs/…`, `ci/…`). External contributors: **fork** the repo and
+   branch there — you won't have push access here, and the `no-changelog` label needs
+   triage rights, so a maintainer applies it for you.
 2. **Keep it green** before pushing:
    ```sh
    cargo fmt --all --check
    cargo clippy --all-targets --all-features -- -D warnings
+   RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --document-private-items
    cargo test --all-features
    typos                 # spelling; false positives go in _typos.toml
    cargo deny check      # licenses/advisories
@@ -89,10 +94,21 @@ and a one-line summary. **Pre-1.0**, a `major` (breaking) change maps to a *mino
 Internal-only PRs (CI, refactor, tests, non-user-facing docs) need no fragment — apply
 the **`no-changelog`** label instead. Never hand-edit `CHANGELOG.md`; it is generated.
 
+> During initial bring-up the automated release flow is **gated off** behind the
+> `KNOPE_ENABLED` repo variable, and the changeset check is **advisory** (non-blocking).
+> Add fragments anyway — they're the source of truth once releases are switched on.
+
 [knope]: https://knope.tech
 
 ## Review
 
-A maintainer reviews every PR; you can also request a second-opinion pass by commenting
-`@claude review` (maintainer-only). Address review threads and resolve them — the repo
-requires resolved threads before merge. Be kind; see the [Code of Conduct](CODE_OF_CONDUCT.md).
+Every PR runs CI, and you can request a second-opinion pass by commenting `@claude review`
+(maintainer-only). Merge does **not** require an approving review
+(`required_approving_review_count: 0` — this is a solo project), but it **does** require
+all review threads resolved and the required checks green. Be kind; see the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+By contributing, you agree that your contributions are licensed under the project's
+[MIT License](LICENSE) (inbound = outbound).

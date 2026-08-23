@@ -5,10 +5,10 @@
 Scratchsmith is pre-1.0. Only the **latest** release receives security fixes; there are
 no backports to older 0.x versions.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| latest  | :white_check_mark: |
-| < latest | :x:               |
+| Version  | Supported          |
+| -------- | ------------------ |
+| latest   | :white_check_mark: |
+| < latest | :x:                |
 
 ## Reporting a Vulnerability
 
