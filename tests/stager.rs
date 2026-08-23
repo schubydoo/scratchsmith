@@ -45,21 +45,20 @@ fn stages_a_real_binary_into_a_runnable_tree() {
 }
 
 #[test]
-fn default_includes_add_nss_and_ca_from_host() {
+fn default_includes_add_nss_and_passwd_from_host() {
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
     let resolution = resolve(bin, &Sysroot::new("/")).expect("resolution");
 
     let tmp = tempfile::tempdir().unwrap();
     let dest = tmp.path().join("rootfs");
-    let report = stage_default_includes(&resolution, Path::new("/"), &dest).expect("includes");
+    let report = stage_default_includes(&resolution, &dest).expect("includes");
 
     assert!(dest.join("etc/nsswitch.conf").exists(), "nsswitch missing");
+    assert!(dest.join("etc/passwd").exists(), "passwd missing");
     // The version-matched NSS module for DNS must land beside the staged libc.
-    let has_nss = walk_contains(&dest, "libnss_dns.so.2");
-    assert!(has_nss, "libnss_dns.so.2 was not staged");
     assert!(
-        dest.join("etc/ssl/certs/ca-certificates.crt").exists(),
-        "CA bundle not staged (warnings: {:?})",
+        walk_contains(&dest, "libnss_dns.so.2"),
+        "libnss_dns.so.2 was not staged (warnings: {:?})",
         report.warnings
     );
 }

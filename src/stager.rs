@@ -46,7 +46,19 @@ services:       files
 // same directory as libc so the versions match exactly.
 const NSS_MODULES: &[&str] = &["libnss_files.so.2", "libnss_dns.so.2", "libresolv.so.2"];
 
-const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
+// A `passwd: files` nsswitch is a lie without a passwd database, and binaries that
+// call getpwuid() at startup (to find $HOME) get a null and may misbehave. Ship a
+// minimal one, matching dockerize2's template. The non-root default user (Task 2.3)
+// will extend this later.
+const MINIMAL_PASSWD: &str = "\
+root:x:0:0:root:/root:/sbin/nologin
+nobody:x:65534:65534:nobody:/nonexistent:/sbin/nologin
+";
+
+const MINIMAL_GROUP: &str = "\
+root:x:0:
+nobody:x:65534:
+";
 
 /// Stage `binary` and its resolved dependencies under `dest`, then build the cache.
 pub fn stage(binary: &Path, resolution: &Resolution, dest: &Path) -> Result<StagedTree> {
@@ -57,13 +69,9 @@ pub fn stage(binary: &Path, resolution: &Resolution, dest: &Path) -> Result<Stag
 
 /// Add the runtime files glibc loads outside the dependency graph so that DNS and
 /// user lookups work: a minimal nsswitch.conf, the NSS modules (version-matched to
-/// the staged libc), and the CA bundle. `root` is the sysroot the binary resolved
-/// against. Absent items become warnings, not errors.
-pub fn stage_default_includes(
-    resolution: &Resolution,
-    root: &Path,
-    dest: &Path,
-) -> Result<IncludeReport> {
+/// the staged libc), and a minimal passwd/group. Missing NSS modules become
+/// warnings, not errors. TLS CA certs are a separate opt-in (`--ca-certs`, Task 4.5).
+pub fn stage_default_includes(resolution: &Resolution, dest: &Path) -> Result<IncludeReport> {
     let mut report = IncludeReport::default();
 
     let nsswitch = under(dest, Path::new("/etc/nsswitch.conf"));
@@ -92,14 +100,14 @@ pub fn stage_default_includes(
             .push("no libc in resolution; skipped NSS modules".into()),
     }
 
-    let ca_src = under(root, Path::new(CA_BUNDLE));
-    if ca_src.exists() {
-        copy_into(&ca_src, dest, Path::new(CA_BUNDLE))?;
-        report.staged.push(PathBuf::from(CA_BUNDLE));
-    } else {
-        report
-            .warnings
-            .push(format!("CA bundle not found at {CA_BUNDLE}"));
+    for (path, body) in [
+        ("/etc/passwd", MINIMAL_PASSWD),
+        ("/etc/group", MINIMAL_GROUP),
+    ] {
+        let target = under(dest, Path::new(path));
+        std::fs::create_dir_all(target.parent().unwrap())?;
+        std::fs::write(&target, body)?;
+        report.staged.push(PathBuf::from(path));
     }
 
     Ok(report)
@@ -325,17 +333,15 @@ mod tests {
     }
 
     #[test]
-    fn default_includes_stage_nsswitch_nss_modules_and_ca() {
+    fn default_includes_stage_nsswitch_nss_and_passwd() {
         let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("root");
+        let libdir = tmp.path().join("usr/lib/x86_64-linux-gnu");
         let dest = tmp.path().join("dest");
-        let libdir = root.join("usr/lib/x86_64-linux-gnu");
         // libc and its version-matched NSS modules share a directory.
         let libc = make_file(&libdir.join("libc.so.6"), b"LIBC");
         for m in ["libnss_files.so.2", "libnss_dns.so.2", "libresolv.so.2"] {
             make_file(&libdir.join(m), b"NSS");
         }
-        make_file(&root.join("etc/ssl/certs/ca-certificates.crt"), b"CA");
 
         let res = Resolution {
             interpreter: None,
@@ -345,7 +351,7 @@ mod tests {
             }],
             missing: vec![],
         };
-        let report = stage_default_includes(&res, &root, &dest).unwrap();
+        let report = stage_default_includes(&res, &dest).unwrap();
 
         // Minimal nsswitch avoids systemd NSS modules: files + dns only.
         let nsswitch = std::fs::read_to_string(dest.join("etc/nsswitch.conf")).unwrap();
@@ -358,18 +364,19 @@ mod tests {
         let dir = res.libs[0].path.parent().unwrap();
         assert!(under(&dest, &dir.join("libnss_dns.so.2")).exists());
         assert!(under(&dest, &dir.join("libresolv.so.2")).exists());
-        // The CA bundle lands at its fixed image path.
-        assert!(dest.join("etc/ssl/certs/ca-certificates.crt").exists());
+        // passwd: files needs a passwd database, or startup getpwuid() gets null.
+        let passwd = std::fs::read_to_string(dest.join("etc/passwd")).unwrap();
+        assert!(passwd.contains("root:x:0:0"), "{passwd}");
+        assert!(dest.join("etc/group").exists());
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     }
 
     #[test]
-    fn missing_includes_warn_but_do_not_fail() {
+    fn missing_nss_modules_warn_but_do_not_fail() {
         let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("root"); // no CA bundle here
         let dest = tmp.path().join("dest");
-        let libdir = root.join("usr/lib");
-        let libc = make_file(&libdir.join("libc.so.6"), b"LIBC"); // no NSS modules beside it
+        // libc with no NSS modules beside it.
+        let libc = make_file(&tmp.path().join("usr/lib/libc.so.6"), b"LIBC");
 
         let res = Resolution {
             interpreter: None,
@@ -379,11 +386,11 @@ mod tests {
             }],
             missing: vec![],
         };
-        let report = stage_default_includes(&res, &root, &dest).unwrap();
+        let report = stage_default_includes(&res, &dest).unwrap();
 
-        // nsswitch is always written; the absent NSS modules and CA become warnings.
+        // nsswitch/passwd are always written; absent NSS modules become warnings.
         assert!(dest.join("etc/nsswitch.conf").exists());
+        assert!(dest.join("etc/passwd").exists());
         assert!(report.warnings.iter().any(|w| w.contains("libnss_files")));
-        assert!(report.warnings.iter().any(|w| w.contains("CA bundle")));
     }
 }
