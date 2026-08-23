@@ -4,6 +4,7 @@
 use crate::image::{self, ImageConfig};
 use crate::resolver::{self, Sysroot};
 use crate::stager::{self, SizeReport, StagedTree};
+use crate::supplychain::{self, SbomRequest};
 use anyhow::{bail, Result};
 use serde::Serialize;
 use std::path::Path;
@@ -27,6 +28,19 @@ pub struct PackReport {
     pub warnings: Vec<String>,
     /// Smoke-run result: `Some(true)` if started, `None` if not run.
     pub smoke_ok: Option<bool>,
+    /// Path of the generated SBOM, if `--sbom` was requested.
+    pub sbom: Option<String>,
+}
+
+// Generate the SBOM of the staged rootfs if requested, returning its path.
+fn maybe_sbom(rootfs: &Path, sbom: Option<&SbomRequest>) -> Result<Option<String>> {
+    match sbom {
+        Some(req) => {
+            supplychain::generate_sbom(rootfs, req.format, &req.path)?;
+            Ok(Some(req.path.display().to_string()))
+        }
+        None => Ok(None),
+    }
 }
 
 impl PackReport {
@@ -43,6 +57,9 @@ impl PackReport {
         }
         if let Some(dir) = &self.staged_dir {
             out.push_str(&format!("staged to {dir}\n"));
+        }
+        if let Some(sbom) = &self.sbom {
+            out.push_str(&format!("sbom: {sbom}\n"));
         }
         if self.smoke_ok == Some(true) {
             out.push_str("smoke-run ok: the binary starts inside the image\n");
@@ -78,8 +95,14 @@ fn build_rootfs(
 }
 
 /// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
-pub fn stage_only(binary: &Path, out_dir: &Path, strip: bool) -> Result<PackReport> {
+pub fn stage_only(
+    binary: &Path,
+    out_dir: &Path,
+    strip: bool,
+    sbom: Option<&SbomRequest>,
+) -> Result<PackReport> {
     let (tree, size, warnings) = build_rootfs(binary, out_dir, strip)?;
+    let sbom = maybe_sbom(out_dir, sbom)?;
     Ok(PackReport {
         tag: None,
         staged_dir: Some(tree.root.display().to_string()),
@@ -87,16 +110,25 @@ pub fn stage_only(binary: &Path, out_dir: &Path, strip: bool) -> Result<PackRepo
         size,
         warnings,
         smoke_ok: None,
+        sbom,
     })
 }
 
 /// Pack `binary` into a scratch image loaded in the local Docker daemon. When `smoke`
 /// is set, run the image once afterwards and fail if the dynamic loader could not
 /// start it — the guard against a silently broken image.
-pub fn run(binary: &Path, smoke: bool, strip: bool, cfg: &ImageConfig) -> Result<PackReport> {
+pub fn run(
+    binary: &Path,
+    smoke: bool,
+    strip: bool,
+    sbom: Option<&SbomRequest>,
+    cfg: &ImageConfig,
+) -> Result<PackReport> {
     let work = tempfile::tempdir()?;
     let dest = work.path().join("rootfs");
     let (tree, size, warnings) = build_rootfs(binary, &dest, strip)?;
+    // Generate the SBOM while the staged rootfs still exists (dest is temporary).
+    let sbom = maybe_sbom(&dest, sbom)?;
 
     if let Some(user) = &cfg.user {
         if image::is_root_user(user) {
@@ -126,6 +158,7 @@ pub fn run(binary: &Path, smoke: bool, strip: bool, cfg: &ImageConfig) -> Result
         size,
         warnings,
         smoke_ok,
+        sbom,
     })
 }
 
@@ -164,6 +197,7 @@ mod tests {
             },
             warnings: vec!["NSS module not found: libnss_dns.so.2".into()],
             smoke_ok: Some(true),
+            sbom: Some("sbom.json".into()),
         }
     }
 

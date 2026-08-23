@@ -26,13 +26,51 @@ fn rmi(tag: &str) {
     let _ = Command::new("docker").args(["rmi", "-f", tag]).output();
 }
 
+fn syft_available() -> bool {
+    Command::new("syft")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[test]
+fn sbom_is_generated_or_fails_with_a_clear_error() {
+    // The -n -o path needs no Docker. Whether syft is present or not, --sbom must
+    // never silently skip: it writes the SBOM, or it fails with an install hint.
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let tmp = tempfile::tempdir().unwrap();
+    let rootfs = tmp.path().join("rf");
+    let sbom = tmp.path().join("sbom.json");
+    let out = Command::new(bin)
+        .args([
+            "pack",
+            "-n",
+            "-o",
+            rootfs.to_str().unwrap(),
+            "--sbom",
+            "--sbom-file",
+            sbom.to_str().unwrap(),
+            bin,
+        ])
+        .output()
+        .unwrap();
+    if syft_available() {
+        assert!(out.status.success(), "pack --sbom should succeed with syft");
+        assert!(sbom.exists(), "SBOM file should be written");
+    } else {
+        assert!(!out.status.success(), "missing syft must fail, not skip");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("syft not found"));
+    }
+}
+
 #[test]
 fn stage_only_writes_a_rootfs_without_docker() {
     // The -n -o path needs no Docker: it just stages the tree to a directory.
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("rootfs");
-    let report = scratchsmith::pack::stage_only(bin, &out, false).expect("stage-only");
+    let report = scratchsmith::pack::stage_only(bin, &out, false, None).expect("stage-only");
 
     // Binary at its entrypoint path, the loader, the cache, and the includes.
     assert!(out
@@ -59,7 +97,7 @@ fn packs_a_binary_that_runs_in_docker() {
     }
     let _g = docker_lock();
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
-    let tag = scratchsmith::pack::run(bin, false, false, &ImageConfig::default())
+    let tag = scratchsmith::pack::run(bin, false, false, None, &ImageConfig::default())
         .expect("pack should succeed")
         .tag
         .unwrap();
@@ -104,7 +142,7 @@ fn image_config_is_reflected_in_docker_inspect() {
         workdir: Some("/work".into()),
         user: None,
     };
-    let tag = scratchsmith::pack::run(bin, false, false, &cfg)
+    let tag = scratchsmith::pack::run(bin, false, false, None, &cfg)
         .expect("pack")
         .tag
         .unwrap();
@@ -187,7 +225,7 @@ fn smoke_run_passes_for_a_plain_binary() {
     }
     let _g = docker_lock();
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
-    let tag = scratchsmith::pack::run(bin, false, false, &ImageConfig::default())
+    let tag = scratchsmith::pack::run(bin, false, false, None, &ImageConfig::default())
         .expect("pack")
         .tag
         .unwrap();
@@ -221,7 +259,7 @@ fn smoke_run_proves_nss_lookups_work_in_image() {
         eprintln!("skipping: getent not present");
         return;
     }
-    let tag = scratchsmith::pack::run(getent, false, false, &ImageConfig::default())
+    let tag = scratchsmith::pack::run(getent, false, false, None, &ImageConfig::default())
         .expect("pack getent")
         .tag
         .unwrap();

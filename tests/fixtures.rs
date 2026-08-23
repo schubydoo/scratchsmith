@@ -154,6 +154,6 @@ fn musl_binaries_are_detected_and_pack_hard_fails() {
     );
 
     let dest = tmp.path().join("rootfs");
-    let err = scratchsmith::pack::stage_only(&app, &dest, false).unwrap_err();
+    let err = scratchsmith::pack::stage_only(&app, &dest, false, None).unwrap_err();
     assert!(err.to_string().contains("musl"), "got: {err}");
 }

@@ -15,8 +15,8 @@ pub mod lint;
 pub mod pack;
 pub mod resolver;
 pub mod stager;
+pub mod supplychain;
 
 // Stages still stubbed until their tasks land. Each file states its own scope.
 pub mod registry;
 pub mod report;
-pub mod supplychain;
