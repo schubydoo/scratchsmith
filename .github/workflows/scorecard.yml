@@ -22,8 +22,11 @@ permissions:
   contents: read
 
 concurrency:
+  # All triggers here resolve to refs/heads/main (never a PR), so they share one
+  # group; do NOT cancel — else a push to main kills the weekly scan, and two
+  # ruleset saves (branch_protection_rule) would cancel each other to just the last.
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   analysis:
