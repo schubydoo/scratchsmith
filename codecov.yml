@@ -1,0 +1,86 @@
+# Codecov config. Coverage is REPORTED here for visibility (PR comment, trend
+# graphs, per-module breakdown). The REAL gate is the CI line floor in
+# .github/workflows/ci.yml (the `coverage` job runs
+# `cargo llvm-cov --fail-under-lines 90`). Coverage uploads from ONE Linux cell,
+# so flags/carryforward/report-merging are not needed. Tokenless (public repo).
+#
+# Rust note: Codecov ingests the lcov `cargo llvm-cov --lcov` emits directly.
+# Baseline ~94.5% lines (2026-08-23). Validate config with:
+#   curl -X POST --data-binary @codecov.yml https://api.codecov.io/validate
+
+codecov:
+  # ci.yml uploads coverage even when the floor step fails (`!cancelled()`), so a
+  # drop surfaces exactly when a change breaks the floor. Do not gate on CI.
+  require_ci_to_pass: false
+  notify:
+    wait_for_ci: false
+    after_n_builds: 1 # single Ubuntu coverage cell
+
+coverage:
+  precision: 2
+  round: down # a strict floor rounds down, matching the CI --fail-under-lines gate
+  range: "88...96" # red-to-green band around the ~94.5% baseline
+  status:
+    project:
+      default:
+        target: 90% # mirror the ci.yml line floor
+        threshold: 1%
+        informational: true # a nudge, never a block; ci.yml is the source of truth
+    patch:
+      default:
+        target: 80% # new-code (diff) coverage; below the ~94% overall so it flags
+        threshold: 0%
+        informational: false # a red/green signal (still a non-required check)
+        if_not_found: success # docs-only PRs upload no diff; do not block them
+
+# src/main.rs is the thin process entry (parse → dispatch → exit code); a run of
+# the binary exercises it, not unit tests. Excluded from the REPORTED coverage so
+# the dashboard reflects testable code. The CI line floor still measures it.
+ignore:
+  - "src/main.rs"
+
+github_checks:
+  annotations: false # per-line PR annotations are clutter; the comment carries the signal
+
+comment:
+  layout: "condensed_header, diff, components, files"
+  behavior: default
+  require_changes: true # only comment when coverage actually moves
+  hide_project_coverage: false
+
+# Per-module coverage breakdown. IMPORTANT: paths are EXPLICIT FILES, not globs —
+# Codecov's component matcher silently ignores `**` globs here (the component
+# renders empty even at 100%), whereas explicit file paths match. Add a module's
+# `.rs` file here when it appears. No `statuses` = visibility only, no extra checks.
+component_management:
+  individual_components:
+    - component_id: resolver
+      name: resolver (ld.so emulation)
+      paths:
+        - src/resolver.rs
+    - component_id: stager
+      name: stager (rootfs, includes, extras)
+      paths:
+        - src/stager.rs
+    - component_id: image
+      name: image (OCI assembly, docker)
+      paths:
+        - src/image.rs
+    - component_id: pack
+      name: pack (orchestration)
+      paths:
+        - src/pack.rs
+    - component_id: lint
+      name: lint (ELF hardening)
+      paths:
+        - src/lint.rs
+    - component_id: supplychain
+      name: supplychain (sbom, cosign)
+      paths:
+        - src/supplychain.rs
+    - component_id: cli
+      name: cli · config · doctor
+      paths:
+        - src/cli.rs
+        - src/config.rs
+        - src/doctor.rs

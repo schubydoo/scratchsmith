@@ -1,63 +1,160 @@
 name: CI
 
+# fmt + clippy + rustdoc + typos, the test suite, an MSRV build, coverage with a
+# line floor, and a supply-chain audit. A single aggregator job — `ci required
+# checks passed` — is what branch protection requires; extend it via `needs`.
+
 on:
   push:
     branches: [main]
   pull_request:
 
+# Least privilege by default (OpenSSF Scorecard Token-Permissions).
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
 
 jobs:
-  fmt:
+  lint:
+    name: fmt · clippy · docs · typos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          components: rustfmt
-      - run: cargo fmt --all --check
-
-  clippy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+          persist-credentials: false
+      # Spell-check all text (comments included); false positives go in _typos.toml.
+      - name: Typos
+        uses: crate-ci/typos@8a48f81b6c64dcfea44b3633223084c4be58ac5f # v1.49.0
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --all-features
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      # The only step that fires rustdoc:: lints (broken intra-doc links, bad code
+      # blocks). --document-private-items because this is a binary crate.
+      - name: Docs (deny warnings)
+        run: cargo doc --no-deps --all-features --document-private-items
+        env:
+          RUSTDOCFLAGS: -D warnings
 
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all-features
-
-  # Prove the crate still builds on its declared MSRV, not just latest stable.
   msrv:
+    # Prove the crate still builds on its declared MSRV, not just latest stable.
+    # scratchsmith pins MSRV 1.96 (unlike the sibling repos, which track stable).
+    name: build (MSRV 1.96)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.96.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # 1.96.0
+        with:
+          toolchain: 1.96.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo build --all-features
 
-  coverage:
+  test:
+    # Linux-only: scratchsmith packs Linux ELF binaries and its integration tests
+    # need ldconfig / the ELF loader / Docker, which don't exist on macOS/Windows.
+    name: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # nextest instead of `cargo test`: same gate, plus a junit.xml (the ci
+      # profile in .config/nextest.toml) — the only format Codecov Test Analytics
+      # ingests. Prebuilt binary via install-action.
+      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
+        with:
+          tool: cargo-nextest
+      - name: Test (nextest → JUnit)
+        run: cargo nextest run --all-features --profile ci
+      # nextest does not run doctests; run them separately (reuses the build cache).
+      - name: Doctests
+        run: cargo test --all-features --doc
+      # Non-blocking, tokenless (public repo); uploads even on failure (nextest
+      # writes junit.xml before exiting non-zero), which is when analytics matter.
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
+        with:
+          files: target/nextest/ci/junit.xml
+          disable_search: true
+          report_type: test_results
+          fail_ci_if_error: false
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           components: llvm-tools-preview
-      - uses: taiki-e/install-action@cargo-llvm-cov
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo llvm-cov --all-features --lcov --output-path lcov.info
-      - run: cargo llvm-cov report --summary-only
-      - uses: actions/upload-artifact@v4
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
         with:
-          name: coverage-lcov
-          path: lcov.info
+          tool: cargo-llvm-cov
+      # Enforce the line floor (baseline ~94.5%) and emit lcov. cargo-llvm-cov
+      # writes lcov.info before the threshold check, so the upload still runs on a
+      # floor failure.
+      - name: Coverage (lcov + line floor)
+        run: cargo llvm-cov --all-features --lcov --output-path lcov.info --fail-under-lines 90
+      - name: Upload to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+
+  supply-chain:
+    name: audit · deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
+        with:
+          tool: cargo-audit,cargo-deny
+      - name: Audit
+        run: cargo audit
+      - name: Deny
+        run: cargo deny check
+
+  ci-required-checks:
+    # The single status branch protection requires. Add new required jobs to needs.
+    name: ci required checks passed
+    if: always()
+    needs: [lint, msrv, test, coverage, supply-chain]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check required jobs passed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          failing=$(echo "$NEEDS_JSON" | jq -r '
+            to_entries[]
+            | select(.value.result != "success" and .value.result != "skipped")
+            | "\(.key): \(.value.result)"
+          ')
+          if [ -n "$failing" ]; then
+            echo "Failed or cancelled jobs:"
+            echo "$failing"
+            exit 1
+          fi
+          echo "All required jobs passed."
