@@ -64,6 +64,15 @@ pub enum Command {
         /// SBOM format (with --sbom).
         #[arg(long = "sbom-format", value_enum, default_value_t = crate::supplychain::SbomFormat::CyclonedxJson)]
         sbom_format: crate::supplychain::SbomFormat,
+        /// Add the TLS CA bundle (/etc/ssl/certs/ca-certificates.crt).
+        #[arg(long = "ca-certs")]
+        ca_certs: bool,
+        /// Add the resolved local timezone (/etc/localtime).
+        #[arg(long)]
+        tz: bool,
+        /// Add a minimal init (tini) as pid 1 wrapping the entrypoint.
+        #[arg(long)]
+        init: bool,
         /// Report format.
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
@@ -106,6 +115,9 @@ fn dispatch(cli: Cli) -> Result<()> {
             sbom,
             sbom_file,
             sbom_format,
+            ca_certs,
+            tz,
+            init,
             format,
         } => {
             // Load the config file (if any), then let CLI flags override its values.
@@ -118,18 +130,16 @@ fn dispatch(cli: Cli) -> Result<()> {
                     "no binary to pack: pass one on the command line or set `binary` in --config"
                 );
             };
-            let strip = strip || file.strip; // either source enabling strip is enough
-            let sbom_req = sbom.then_some(crate::supplychain::SbomRequest {
-                path: sbom_file,
-                format: sbom_format,
-            });
 
-            let report = if no_build {
-                // clap guarantees output is present when no_build is set.
-                let dir = output.expect("--no-build requires --output");
-                crate::pack::stage_only(&binary, &dir, strip, sbom_req.as_ref())?
-            } else {
-                let cfg = crate::image::ImageConfig {
+            let opts = crate::pack::PackOptions {
+                smoke,
+                strip: strip || file.strip, // either source enabling strip is enough
+                sbom: sbom.then_some(crate::supplychain::SbomRequest {
+                    path: sbom_file,
+                    format: sbom_format,
+                }),
+                extras: crate::stager::RuntimeExtras { ca_certs, tz, init },
+                image: crate::image::ImageConfig {
                     entrypoint: entrypoint
                         .or(file.entrypoint)
                         .map(|e| vec![e])
@@ -138,8 +148,15 @@ fn dispatch(cli: Cli) -> Result<()> {
                     env: if env.is_empty() { file.env } else { env },
                     workdir: workdir.or(file.workdir),
                     user: user.or(file.user),
-                };
-                crate::pack::run(&binary, smoke, strip, sbom_req.as_ref(), &cfg)?
+                },
+            };
+
+            let report = if no_build {
+                // clap guarantees output is present when no_build is set.
+                let dir = output.expect("--no-build requires --output");
+                crate::pack::stage_only(&binary, &dir, &opts)?
+            } else {
+                crate::pack::run(&binary, &opts)?
             };
 
             match format {

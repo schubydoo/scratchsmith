@@ -19,6 +19,73 @@ pub struct StagedTree {
     pub entrypoint: PathBuf,
 }
 
+/// Optional runtime files a user can inject (Task 4.5). Unlike the always-on NSS
+/// includes, these are opt-in, and an explicit request that can't be satisfied is an
+/// error (the user asked for it), not a warning.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuntimeExtras {
+    /// TLS CA bundle at /etc/ssl/certs/ca-certificates.crt.
+    pub ca_certs: bool,
+    /// The resolved local timezone at /etc/localtime.
+    pub tz: bool,
+    /// A minimal init (`tini`) at /tini, to reap zombies / forward signals.
+    pub init: bool,
+}
+
+/// Result of staging runtime extras — notably where `tini` landed, so the caller can
+/// wrap the entrypoint with it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuntimeResult {
+    pub tini_image_path: Option<String>,
+}
+
+const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
+
+/// Inject the requested runtime extras into the staged rootfs.
+pub fn stage_runtime_extras(dest: &Path, extras: &RuntimeExtras) -> Result<RuntimeResult> {
+    let mut result = RuntimeResult::default();
+
+    if extras.ca_certs {
+        let src = Path::new(CA_BUNDLE);
+        if !src.exists() {
+            bail!("--ca-certs: CA bundle not found at {CA_BUNDLE}");
+        }
+        copy_into(src, dest, src)?;
+    }
+
+    if extras.tz {
+        // /etc/localtime is usually a symlink into the zoneinfo DB; copy the resolved
+        // zone file so the container's local time is correct without the whole DB.
+        let localtime = Path::new("/etc/localtime");
+        let real = std::fs::canonicalize(localtime).context("resolving /etc/localtime")?;
+        copy_into(&real, dest, localtime)?;
+    }
+
+    if extras.init {
+        let tini = find_tini().context("--init: tini not found; install tini")?;
+        copy_into(&tini, dest, Path::new("/tini"))?;
+        result.tini_image_path = Some("/tini".to_string());
+    }
+
+    Ok(result)
+}
+
+// Locate a tini binary in the usual places.
+fn find_tini() -> Result<PathBuf> {
+    for candidate in [
+        "/usr/bin/tini",
+        "/sbin/tini",
+        "/usr/bin/tini-static",
+        "/bin/tini",
+    ] {
+        let path = PathBuf::from(candidate);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+    bail!("no tini binary found")
+}
+
 /// What the default-include step added, and what it could not find.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct IncludeReport {

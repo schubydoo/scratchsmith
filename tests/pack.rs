@@ -2,6 +2,8 @@
 //! and smoke-run them. Skipped when no Docker daemon is reachable (e.g. minimal CI).
 
 use scratchsmith::image::{smoke_run, ImageConfig};
+use scratchsmith::pack::PackOptions;
+use scratchsmith::stager::RuntimeExtras;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Mutex;
@@ -65,12 +67,52 @@ fn sbom_is_generated_or_fails_with_a_clear_error() {
 }
 
 #[test]
+fn runtime_extras_stage_ca_and_tz_without_docker() {
+    // --ca-certs and --tz copy host files into the rootfs (no Docker needed).
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("rootfs");
+    let opts = PackOptions {
+        extras: RuntimeExtras {
+            ca_certs: true,
+            tz: true,
+            init: false,
+        },
+        ..Default::default()
+    };
+    scratchsmith::pack::stage_only(bin, &out, &opts).expect("stage with extras");
+    assert!(
+        out.join("etc/ssl/certs/ca-certificates.crt").exists(),
+        "CA bundle not staged"
+    );
+    assert!(out.join("etc/localtime").exists(), "localtime not staged");
+}
+
+#[test]
+fn init_without_tini_fails_clearly() {
+    // tini is absent here, so --init must fail loud (not silently skip).
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("rootfs");
+    let opts = PackOptions {
+        extras: RuntimeExtras {
+            init: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let err = scratchsmith::pack::stage_only(bin, &out, &opts).unwrap_err();
+    assert!(err.to_string().contains("tini"), "got: {err}");
+}
+
+#[test]
 fn stage_only_writes_a_rootfs_without_docker() {
     // The -n -o path needs no Docker: it just stages the tree to a directory.
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("rootfs");
-    let report = scratchsmith::pack::stage_only(bin, &out, false, None).expect("stage-only");
+    let report =
+        scratchsmith::pack::stage_only(bin, &out, &PackOptions::default()).expect("stage-only");
 
     // Binary at its entrypoint path, the loader, the cache, and the includes.
     assert!(out
@@ -97,7 +139,7 @@ fn packs_a_binary_that_runs_in_docker() {
     }
     let _g = docker_lock();
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
-    let tag = scratchsmith::pack::run(bin, false, false, None, &ImageConfig::default())
+    let tag = scratchsmith::pack::run(bin, &PackOptions::default())
         .expect("pack should succeed")
         .tag
         .unwrap();
@@ -142,10 +184,16 @@ fn image_config_is_reflected_in_docker_inspect() {
         workdir: Some("/work".into()),
         user: None,
     };
-    let tag = scratchsmith::pack::run(bin, false, false, None, &cfg)
-        .expect("pack")
-        .tag
-        .unwrap();
+    let tag = scratchsmith::pack::run(
+        bin,
+        &PackOptions {
+            image: cfg,
+            ..Default::default()
+        },
+    )
+    .expect("pack")
+    .tag
+    .unwrap();
 
     let inspect = |fmt: &str| {
         let out = Command::new("docker")
@@ -225,7 +273,7 @@ fn smoke_run_passes_for_a_plain_binary() {
     }
     let _g = docker_lock();
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
-    let tag = scratchsmith::pack::run(bin, false, false, None, &ImageConfig::default())
+    let tag = scratchsmith::pack::run(bin, &PackOptions::default())
         .expect("pack")
         .tag
         .unwrap();
@@ -259,7 +307,7 @@ fn smoke_run_proves_nss_lookups_work_in_image() {
         eprintln!("skipping: getent not present");
         return;
     }
-    let tag = scratchsmith::pack::run(getent, false, false, None, &ImageConfig::default())
+    let tag = scratchsmith::pack::run(getent, &PackOptions::default())
         .expect("pack getent")
         .tag
         .unwrap();

@@ -3,7 +3,7 @@
 
 use crate::image::{self, ImageConfig};
 use crate::resolver::{self, Sysroot};
-use crate::stager::{self, SizeReport, StagedTree};
+use crate::stager::{self, RuntimeExtras, SizeReport, StagedTree};
 use crate::supplychain::{self, SbomRequest};
 use anyhow::{bail, Result};
 use serde::Serialize;
@@ -94,15 +94,23 @@ fn build_rootfs(
     Ok((tree, sizes, includes.warnings))
 }
 
+/// Everything a pack needs beyond the binary itself. A struct (rather than a long
+/// argument list) so new options — sbom, runtime extras, later push/upx — don't keep
+/// widening every call site.
+#[derive(Debug, Default, Clone)]
+pub struct PackOptions {
+    pub smoke: bool,
+    pub strip: bool,
+    pub sbom: Option<SbomRequest>,
+    pub extras: RuntimeExtras,
+    pub image: ImageConfig,
+}
+
 /// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
-pub fn stage_only(
-    binary: &Path,
-    out_dir: &Path,
-    strip: bool,
-    sbom: Option<&SbomRequest>,
-) -> Result<PackReport> {
-    let (tree, size, warnings) = build_rootfs(binary, out_dir, strip)?;
-    let sbom = maybe_sbom(out_dir, sbom)?;
+pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<PackReport> {
+    let (tree, size, warnings) = build_rootfs(binary, out_dir, opts.strip)?;
+    stager::stage_runtime_extras(out_dir, &opts.extras)?;
+    let sbom = maybe_sbom(out_dir, opts.sbom.as_ref())?;
     Ok(PackReport {
         tag: None,
         staged_dir: Some(tree.root.display().to_string()),
@@ -114,21 +122,28 @@ pub fn stage_only(
     })
 }
 
-/// Pack `binary` into a scratch image loaded in the local Docker daemon. When `smoke`
-/// is set, run the image once afterwards and fail if the dynamic loader could not
-/// start it — the guard against a silently broken image.
-pub fn run(
-    binary: &Path,
-    smoke: bool,
-    strip: bool,
-    sbom: Option<&SbomRequest>,
-    cfg: &ImageConfig,
-) -> Result<PackReport> {
+/// Pack `binary` into a scratch image loaded in the local Docker daemon. With
+/// `opts.smoke`, run the image once afterwards and fail if the dynamic loader could
+/// not start it — the guard against a silently broken image.
+pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
     let work = tempfile::tempdir()?;
     let dest = work.path().join("rootfs");
-    let (tree, size, warnings) = build_rootfs(binary, &dest, strip)?;
+    let (tree, size, warnings) = build_rootfs(binary, &dest, opts.strip)?;
+    let extras = stager::stage_runtime_extras(&dest, &opts.extras)?;
     // Generate the SBOM while the staged rootfs still exists (dest is temporary).
-    let sbom = maybe_sbom(&dest, sbom)?;
+    let sbom = maybe_sbom(&dest, opts.sbom.as_ref())?;
+
+    // Effective image config: if --init staged tini, wrap the entrypoint so tini is
+    // pid 1 and reaps/forwards for the real binary.
+    let mut cfg = opts.image.clone();
+    if let Some(tini) = &extras.tini_image_path {
+        let base = if cfg.entrypoint.is_empty() {
+            vec![tree.entrypoint.display().to_string()]
+        } else {
+            cfg.entrypoint.clone()
+        };
+        cfg.entrypoint = init_entrypoint(tini, base);
+    }
 
     if let Some(user) = &cfg.user {
         if image::is_root_user(user) {
@@ -137,10 +152,10 @@ pub fn run(
     }
 
     let tag = image_tag(binary);
-    image::load_into_docker(&tree, &tag, cfg)?;
+    image::load_into_docker(&tree, &tag, &cfg)?;
 
     let mut smoke_ok = None;
-    if smoke {
+    if opts.smoke {
         let outcome = image::smoke_run(&tag, &[], SMOKE_TIMEOUT_SECS)?;
         if outcome.loader_failed() {
             bail!(
@@ -162,6 +177,14 @@ pub fn run(
     })
 }
 
+// Wrap the entrypoint so tini is pid 1: [tini, --, <original entrypoint...>].
+fn init_entrypoint(tini: &str, base: Vec<String>) -> Vec<String> {
+    [tini.to_string(), "--".to_string()]
+        .into_iter()
+        .chain(base)
+        .collect()
+}
+
 // A valid, lowercase Docker tag derived from the binary name.
 fn image_tag(binary: &Path) -> String {
     let name = binary
@@ -181,6 +204,14 @@ mod tests {
         assert_eq!(
             image_tag(Path::new("/usr/bin/MyApp")),
             "scratchsmith/myapp:packed"
+        );
+    }
+
+    #[test]
+    fn init_wraps_the_entrypoint_with_tini() {
+        assert_eq!(
+            init_entrypoint("/tini", vec!["/app".into(), "--serve".into()]),
+            vec!["/tini", "--", "/app", "--serve"]
         );
     }
 

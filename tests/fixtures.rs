@@ -3,6 +3,7 @@
 //! agree with what an actual linker emits (DT_RPATH vs DT_RUNPATH, $ORIGIN, versioned
 //! sonames). Skipped when no C compiler is available.
 
+use scratchsmith::pack::PackOptions;
 use scratchsmith::resolver::{read_elf_info, resolve, Sysroot};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -154,6 +155,6 @@ fn musl_binaries_are_detected_and_pack_hard_fails() {
     );
 
     let dest = tmp.path().join("rootfs");
-    let err = scratchsmith::pack::stage_only(&app, &dest, false, None).unwrap_err();
+    let err = scratchsmith::pack::stage_only(&app, &dest, &PackOptions::default()).unwrap_err();
     assert!(err.to_string().contains("musl"), "got: {err}");
 }
