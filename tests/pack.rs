@@ -36,6 +36,17 @@ fn syft_available() -> bool {
         .unwrap_or(false)
 }
 
+fn find_tini_exists() -> bool {
+    [
+        "/usr/bin/tini",
+        "/sbin/tini",
+        "/usr/bin/tini-static",
+        "/bin/tini",
+    ]
+    .iter()
+    .any(|p| Path::new(p).exists())
+}
+
 #[test]
 fn sbom_is_generated_or_fails_with_a_clear_error() {
     // The -n -o path needs no Docker. Whether syft is present or not, --sbom must
@@ -89,8 +100,54 @@ fn runtime_extras_stage_ca_and_tz_without_docker() {
 }
 
 #[test]
+fn init_wraps_the_entrypoint_with_tini_and_still_runs() {
+    if !docker_available() {
+        eprintln!("skipping: no Docker daemon");
+        return;
+    }
+    if !Path::new("/usr/bin/tini").exists() {
+        eprintln!("skipping: no tini");
+        return;
+    }
+    let _g = docker_lock();
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let opts = PackOptions {
+        extras: RuntimeExtras {
+            init: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let tag = scratchsmith::pack::run(bin, &opts)
+        .expect("pack --init")
+        .tag
+        .unwrap();
+
+    // Entrypoint is wrapped so tini is pid 1.
+    let ep = Command::new("docker")
+        .args(["inspect", "--format", "{{json .Config.Entrypoint}}", &tag])
+        .output()
+        .unwrap();
+    let ep = String::from_utf8_lossy(&ep.stdout);
+    assert!(ep.contains("/tini"), "entrypoint not wrapped: {ep}");
+
+    // And the wrapped binary still runs under tini.
+    let run = Command::new("docker")
+        .args(["run", "--rm", &tag, "--version"])
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "tini-wrapped run failed: {run:?}");
+    assert!(String::from_utf8_lossy(&run.stdout).contains("scratchsmith"));
+    rmi(&tag);
+}
+
+#[test]
 fn init_without_tini_fails_clearly() {
-    // tini is absent here, so --init must fail loud (not silently skip).
+    // Only meaningful where tini is absent; --init must fail loud, not silently skip.
+    if find_tini_exists() {
+        eprintln!("skipping: tini is installed");
+        return;
+    }
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("rootfs");
