@@ -17,6 +17,9 @@ pub enum Command {
     Pack {
         /// Path to the dynamically linked binary to pack.
         binary: PathBuf,
+        /// After loading, run the image once and fail if the binary can't start.
+        #[arg(long)]
+        smoke: bool,
     },
     /// Report a binary's ELF hardening posture (PIE/RELRO/NX).
     Lint {
@@ -38,8 +41,8 @@ pub fn run() -> Result<()> {
 // touching argv or spawning a process.
 fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Pack { binary } => {
-            let tag = crate::pack::run(&binary)?;
+        Command::Pack { binary, smoke } => {
+            let tag = crate::pack::run(&binary, smoke)?;
             println!("loaded image {tag}");
             Ok(())
         }
@@ -63,10 +66,13 @@ mod tests {
     }
 
     #[test]
-    fn pack_parses_binary_path() {
-        let cli = Cli::try_parse_from(["scratchsmith", "pack", "/bin/ls"]).unwrap();
+    fn pack_parses_binary_path_and_smoke_flag() {
+        let cli = Cli::try_parse_from(["scratchsmith", "pack", "--smoke", "/bin/ls"]).unwrap();
         match cli.command {
-            Command::Pack { binary } => assert_eq!(binary, PathBuf::from("/bin/ls")),
+            Command::Pack { binary, smoke } => {
+                assert_eq!(binary, PathBuf::from("/bin/ls"));
+                assert!(smoke);
+            }
             other => panic!("expected Pack, got {other:?}"),
         }
     }

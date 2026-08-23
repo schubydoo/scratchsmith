@@ -73,6 +73,44 @@ fn image_config(entrypoint: &Path, diff_id: &str) -> serde_json::Value {
     })
 }
 
+/// The result of running a packed image once.
+#[derive(Debug, Clone)]
+pub struct SmokeOutcome {
+    /// Process exit code, or `None` if the container was killed (e.g. timeout).
+    pub code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl SmokeOutcome {
+    /// True when the dynamic loader failed to start the binary — a missing library,
+    /// missing interpreter, or bad exec. This is the staging failure a smoke-run
+    /// exists to catch, distinct from the app's own non-zero exit.
+    pub fn loader_failed(&self) -> bool {
+        matches!(self.code, Some(126) | Some(127))
+            || self.stderr.contains("error while loading shared libraries")
+            || self.stderr.contains("cannot open shared object file")
+            || self.stderr.contains("no such file or directory")
+    }
+}
+
+/// Run the packed image once (`docker run --rm <tag> <args>`) under a timeout, so a
+/// missing-library or missing-loader failure is caught before the image is trusted.
+/// A timeout is treated as "started" — a long-running entrypoint is not a failure.
+pub fn smoke_run(tag: &str, args: &[&str], timeout_secs: u32) -> Result<SmokeOutcome> {
+    let out = Command::new("timeout")
+        .arg(timeout_secs.to_string())
+        .args(["docker", "run", "--rm", tag])
+        .args(args)
+        .output()
+        .context("running docker run for the smoke test")?;
+    Ok(SmokeOutcome {
+        code: out.status.code().filter(|&c| c != 124), // 124 = timeout killed it
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    })
+}
+
 fn docker_load(archive: &Path) -> Result<()> {
     let out = Command::new("docker")
         .arg("load")
@@ -134,5 +172,31 @@ mod tests {
         let cfg = image_config(Path::new("/opt/app"), "abc123");
         assert_eq!(cfg["config"]["Entrypoint"][0], "/opt/app");
         assert_eq!(cfg["rootfs"]["diff_ids"][0], "sha256:abc123");
+    }
+
+    fn outcome(code: Option<i32>, stderr: &str) -> SmokeOutcome {
+        SmokeOutcome {
+            code,
+            stdout: String::new(),
+            stderr: stderr.into(),
+        }
+    }
+
+    #[test]
+    fn loader_failure_is_detected_by_exit_code_or_message() {
+        // A missing library shows up as exit 127 and/or the loader's message.
+        assert!(outcome(Some(127), "").loader_failed());
+        assert!(
+            outcome(Some(1), "error while loading shared libraries: libz.so.1").loader_failed()
+        );
+        assert!(outcome(Some(126), "").loader_failed());
+    }
+
+    #[test]
+    fn an_app_nonzero_exit_is_not_a_loader_failure() {
+        // The binary started fine and chose to exit non-zero (e.g. bad args).
+        assert!(!outcome(Some(2), "error: missing subcommand").loader_failed());
+        // A timeout (code None) means it started and kept running.
+        assert!(!outcome(None, "").loader_failed());
     }
 }

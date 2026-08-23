@@ -7,8 +7,13 @@ use crate::stager;
 use anyhow::{bail, Result};
 use std::path::Path;
 
-/// Pack `binary` into a scratch image loaded in the local Docker daemon; return the tag.
-pub fn run(binary: &Path) -> Result<String> {
+/// How long to let a smoke-run's entrypoint run before treating it as "started".
+const SMOKE_TIMEOUT_SECS: u32 = 15;
+
+/// Pack `binary` into a scratch image loaded in the local Docker daemon; return the
+/// tag. When `smoke` is set, run the image once afterwards and fail if the dynamic
+/// loader could not start it — the guard against a silently broken image.
+pub fn run(binary: &Path, smoke: bool) -> Result<String> {
     // Resolve against the host root for now; a pinned sysroot is future work.
     let resolution = resolver::resolve(binary, &Sysroot::new("/"))?;
     if !resolution.missing.is_empty() {
@@ -29,6 +34,18 @@ pub fn run(binary: &Path) -> Result<String> {
 
     let tag = image_tag(binary);
     image::load_into_docker(&tree, &tag)?;
+
+    if smoke {
+        let outcome = image::smoke_run(&tag, &[], SMOKE_TIMEOUT_SECS)?;
+        if outcome.loader_failed() {
+            bail!(
+                "smoke-run failed: the image could not start the binary.\n{}",
+                outcome.stderr.trim()
+            );
+        }
+        eprintln!("smoke-run ok: the binary starts inside the image");
+    }
+
     Ok(tag)
 }
 
