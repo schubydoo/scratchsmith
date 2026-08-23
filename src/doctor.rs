@@ -137,9 +137,19 @@ mod tests {
     fn probe_reports_every_known_tool() {
         let statuses = probe();
         assert_eq!(statuses.len(), TOOLS.len());
-        // strip and ldconfig are present in dev/CI, so they must be found.
-        let strip = statuses.iter().find(|s| s.name == "strip").unwrap();
-        assert!(strip.version.is_some(), "strip should be found");
+        // strip is optional; when the host does have it, probe() must report it —
+        // a regression signal on capable hosts (incl. CI), without requiring the tool.
+        let host_has_strip = Command::new("strip")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if host_has_strip {
+            let strip = statuses.iter().find(|s| s.name == "strip").unwrap();
+            assert!(
+                strip.version.is_some(),
+                "strip is on PATH but probe missed it"
+            );
+        }
     }
 
     #[test]

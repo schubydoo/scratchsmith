@@ -17,21 +17,19 @@ binaries you can rebuild static. Please check a proposal against that scope.
 
 ## Development setup
 
-You need a stable Rust toolchain (the crate builds on MSRV **1.96**). **Two** external tools
-are required for `cargo test` to pass — the suite *fails* (not skips) without them:
+You need a stable Rust toolchain (the crate builds on MSRV **1.96**). **One** external tool is
+required for `cargo test` to pass — the suite *fails* (not skips) without it:
 
 - **`ldconfig`** (glibc `libc-bin`) — the stager/pack tests regenerate the loader cache and
   bail without it. It's normally already present on any glibc system, so this rarely bites —
   but a stripped container image is one place it can be missing.
-- **`strip`** (binutils) — the `doctor` probe test in `src/doctor.rs` asserts it is found.
-  That unit test is the only place it's required; the `--strip` *integration* test itself
-  skips when `strip` is absent.
 
 Everything else is optional — these tests **skip** when the tool is absent, so `cargo test`
 still passes:
 
 - a C compiler (`cc`) and `musl-gcc` — build the resolver / lint / musl fixtures
 - Docker — the end-to-end pack/run tests
+- `strip` (binutils) — the `--strip` test
 - `tini` — the `--init` test (a companion test instead checks that `--init` *fails loudly*
   when `tini` is absent)
 
@@ -43,7 +41,7 @@ isn't — so the suite is green either way.
 git clone https://github.com/schubydoo/scratchsmith
 cd scratchsmith
 cargo build
-cargo test            # ldconfig + strip required; cc/musl-gcc/Docker/tini tests skip if absent
+cargo test            # ldconfig required; other tool-specific tests skip if absent
 cargo run -- doctor   # shows which external tools are present
 ```
 
