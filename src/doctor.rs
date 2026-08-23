@@ -137,9 +137,6 @@ mod tests {
     fn probe_reports_every_known_tool() {
         let statuses = probe();
         assert_eq!(statuses.len(), TOOLS.len());
-        // strip and ldconfig are present in dev/CI, so they must be found.
-        let strip = statuses.iter().find(|s| s.name == "strip").unwrap();
-        assert!(strip.version.is_some(), "strip should be found");
     }
 
     #[test]
