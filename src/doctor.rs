@@ -85,6 +85,12 @@ fn probe_tool(tool: &Tool) -> ToolStatus {
     let version = locate(tool.name)
         .and_then(|path| run_version(&path, tool.version_args))
         .map(|out| first_line(&out));
+    status_of(tool, version)
+}
+
+// Split from the lookup so the found/missing mapping is testable without
+// depending on which tools happen to be installed on the host.
+fn status_of(tool: &Tool, version: Option<String>) -> ToolStatus {
     ToolStatus {
         name: tool.name,
         version,
@@ -139,8 +145,20 @@ mod tests {
         assert_eq!(statuses.len(), TOOLS.len());
     }
 
+    // The found-path: a located version maps through to Some, with the tool's
+    // static metadata intact. Deterministic — no installed tool required.
+    #[test]
+    fn a_found_tool_reports_its_version() {
+        let tool = &TOOLS[0];
+        let status = status_of(tool, Some("ldconfig (GNU libc) 2.39".into()));
+        assert_eq!(status.version.as_deref(), Some("ldconfig (GNU libc) 2.39"));
+        assert_eq!(status.name, tool.name);
+        assert_eq!(status.purpose, tool.purpose);
+    }
+
     #[test]
     fn a_missing_tool_reports_no_version() {
+        assert!(status_of(&TOOLS[0], None).version.is_none());
         assert!(locate("scratchsmith-definitely-not-a-real-tool").is_none());
     }
 }
