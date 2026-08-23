@@ -32,11 +32,15 @@ fn stage_only_writes_a_rootfs_without_docker() {
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("rootfs");
-    let tree = scratchsmith::pack::stage_only(bin, &out, false).expect("stage-only");
+    let report = scratchsmith::pack::stage_only(bin, &out, false).expect("stage-only");
 
     // Binary at its entrypoint path, the loader, the cache, and the includes.
     assert!(out
-        .join(tree.entrypoint.strip_prefix("/").unwrap())
+        .join(
+            std::path::Path::new(&report.entrypoint)
+                .strip_prefix("/")
+                .unwrap()
+        )
         .exists());
     assert!(out.join("etc/ld.so.cache").exists(), "cache missing");
     assert!(out.join("etc/nsswitch.conf").exists(), "nsswitch missing");
@@ -56,7 +60,9 @@ fn packs_a_binary_that_runs_in_docker() {
     let _g = docker_lock();
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
     let tag = scratchsmith::pack::run(bin, false, false, &ImageConfig::default())
-        .expect("pack should succeed");
+        .expect("pack should succeed")
+        .tag
+        .unwrap();
 
     let run = Command::new("docker")
         .args(["run", "--rm", &tag, "--version"])
@@ -98,7 +104,10 @@ fn image_config_is_reflected_in_docker_inspect() {
         workdir: Some("/work".into()),
         user: None,
     };
-    let tag = scratchsmith::pack::run(bin, false, false, &cfg).expect("pack");
+    let tag = scratchsmith::pack::run(bin, false, false, &cfg)
+        .expect("pack")
+        .tag
+        .unwrap();
 
     let inspect = |fmt: &str| {
         let out = Command::new("docker")
@@ -178,7 +187,10 @@ fn smoke_run_passes_for_a_plain_binary() {
     }
     let _g = docker_lock();
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
-    let tag = scratchsmith::pack::run(bin, false, false, &ImageConfig::default()).expect("pack");
+    let tag = scratchsmith::pack::run(bin, false, false, &ImageConfig::default())
+        .expect("pack")
+        .tag
+        .unwrap();
 
     let outcome = smoke_run(&tag, &["--version"], 15).expect("smoke run");
     assert!(
@@ -210,7 +222,9 @@ fn smoke_run_proves_nss_lookups_work_in_image() {
         return;
     }
     let tag = scratchsmith::pack::run(getent, false, false, &ImageConfig::default())
-        .expect("pack getent");
+        .expect("pack getent")
+        .tag
+        .unwrap();
 
     let outcome = smoke_run(&tag, &["hosts", "localhost"], 15).expect("smoke run");
     assert!(

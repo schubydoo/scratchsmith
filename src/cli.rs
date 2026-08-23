@@ -1,8 +1,15 @@
 //! Command-line surface and dispatch.
 
 use anyhow::{bail, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+
+/// Output format for the pack report.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum Format {
+    Text,
+    Json,
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "scratchsmith", version, about, long_about = None)]
@@ -48,6 +55,9 @@ pub enum Command {
         /// Strip symbols from the binary and libraries (strip --strip-unneeded).
         #[arg(long)]
         strip: bool,
+        /// Report format.
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
     },
     /// Report a binary's ELF hardening posture (PIE/RELRO/NX).
     Lint {
@@ -81,6 +91,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             workdir,
             user,
             strip,
+            format,
         } => {
             // Load the config file (if any), then let CLI flags override its values.
             let file = match &config {
@@ -94,11 +105,10 @@ fn dispatch(cli: Cli) -> Result<()> {
             };
             let strip = strip || file.strip; // either source enabling strip is enough
 
-            if no_build {
+            let report = if no_build {
                 // clap guarantees output is present when no_build is set.
                 let dir = output.expect("--no-build requires --output");
-                let tree = crate::pack::stage_only(&binary, &dir, strip)?;
-                println!("staged to {}", tree.root.display());
+                crate::pack::stage_only(&binary, &dir, strip)?
             } else {
                 let cfg = crate::image::ImageConfig {
                     entrypoint: entrypoint
@@ -110,8 +120,12 @@ fn dispatch(cli: Cli) -> Result<()> {
                     workdir: workdir.or(file.workdir),
                     user: user.or(file.user),
                 };
-                let tag = crate::pack::run(&binary, smoke, strip, &cfg)?;
-                println!("loaded image {tag}");
+                crate::pack::run(&binary, smoke, strip, &cfg)?
+            };
+
+            match format {
+                Format::Text => println!("{}", report.to_text()),
+                Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
             }
             Ok(())
         }

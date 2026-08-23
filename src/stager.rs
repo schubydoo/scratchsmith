@@ -116,7 +116,7 @@ pub fn stage_default_includes(resolution: &Resolution, dest: &Path) -> Result<In
 }
 
 /// One staged ELF file's size, before and after an optional strip.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SizeEntry {
     pub path: String,
     pub before: u64,
@@ -124,7 +124,7 @@ pub struct SizeEntry {
 }
 
 /// Sizes of the staged ELF payload (binary + loader + libraries), with totals.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct SizeReport {
     pub entries: Vec<SizeEntry>,
     pub total_before: u64,
