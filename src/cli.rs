@@ -15,8 +15,11 @@ pub struct Cli {
 pub enum Command {
     /// Pack a dynamic ELF binary into a minimal scratch image.
     Pack {
-        /// Path to the dynamically linked binary to pack.
-        binary: PathBuf,
+        /// Path to the dynamically linked binary to pack (or set `binary` in --config).
+        binary: Option<PathBuf>,
+        /// Read defaults from a scratchsmith.toml; CLI flags override it.
+        #[arg(long, value_name = "FILE")]
+        config: Option<PathBuf>,
         /// After loading, run the image once and fail if the binary can't start.
         #[arg(long, conflicts_with = "no_build")]
         smoke: bool,
@@ -68,6 +71,7 @@ fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Pack {
             binary,
+            config,
             smoke,
             no_build,
             output,
@@ -78,6 +82,18 @@ fn dispatch(cli: Cli) -> Result<()> {
             user,
             strip,
         } => {
+            // Load the config file (if any), then let CLI flags override its values.
+            let file = match &config {
+                Some(path) => crate::config::Config::load(path)?,
+                None => crate::config::Config::default(),
+            };
+            let Some(binary) = binary.or(file.binary) else {
+                bail!(
+                    "no binary to pack: pass one on the command line or set `binary` in --config"
+                );
+            };
+            let strip = strip || file.strip; // either source enabling strip is enough
+
             if no_build {
                 // clap guarantees output is present when no_build is set.
                 let dir = output.expect("--no-build requires --output");
@@ -85,11 +101,14 @@ fn dispatch(cli: Cli) -> Result<()> {
                 println!("staged to {}", tree.root.display());
             } else {
                 let cfg = crate::image::ImageConfig {
-                    entrypoint: entrypoint.map(|e| vec![e]).unwrap_or_default(),
-                    cmd,
-                    env,
-                    workdir,
-                    user,
+                    entrypoint: entrypoint
+                        .or(file.entrypoint)
+                        .map(|e| vec![e])
+                        .unwrap_or_default(),
+                    cmd: if cmd.is_empty() { file.cmd } else { cmd },
+                    env: if env.is_empty() { file.env } else { env },
+                    workdir: workdir.or(file.workdir),
+                    user: user.or(file.user),
                 };
                 let tag = crate::pack::run(&binary, smoke, strip, &cfg)?;
                 println!("loaded image {tag}");
@@ -120,7 +139,7 @@ mod tests {
         let cli = Cli::try_parse_from(["scratchsmith", "pack", "--smoke", "/bin/ls"]).unwrap();
         match cli.command {
             Command::Pack { binary, smoke, .. } => {
-                assert_eq!(binary, PathBuf::from("/bin/ls"));
+                assert_eq!(binary, Some(PathBuf::from("/bin/ls")));
                 assert!(smoke);
             }
             other => panic!("expected Pack, got {other:?}"),
@@ -196,9 +215,12 @@ mod tests {
     }
 
     #[test]
-    fn pack_requires_a_binary_argument() {
-        let err = Cli::try_parse_from(["scratchsmith", "pack"]).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    fn pack_without_binary_or_config_errors_at_dispatch() {
+        // binary is now optional at parse (config may supply it); the requirement is
+        // enforced at dispatch with a clear message.
+        let cli = Cli::try_parse_from(["scratchsmith", "pack"]).unwrap();
+        let err = dispatch(cli).unwrap_err();
+        assert!(err.to_string().contains("no binary to pack"));
     }
 
     #[test]

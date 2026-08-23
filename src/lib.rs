@@ -8,13 +8,13 @@
 pub mod cli;
 
 // Implemented pipeline stages.
+pub mod config;
 pub mod image;
 pub mod pack;
 pub mod resolver;
 pub mod stager;
 
 // Stages still stubbed until their tasks land. Each file states its own scope.
-pub mod config;
 pub mod lint;
 pub mod registry;
 pub mod report;

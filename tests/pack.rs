@@ -116,6 +116,61 @@ fn image_config_is_reflected_in_docker_inspect() {
 }
 
 #[test]
+fn config_file_applies_and_cli_overrides_it() {
+    if !docker_available() {
+        eprintln!("skipping: no Docker daemon");
+        return;
+    }
+    let _g = docker_lock();
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let tmp = tempfile::tempdir().unwrap();
+    let toml = tmp.path().join("scratchsmith.toml");
+    std::fs::write(&toml, "env = [\"CFGONLY=1\"]\nuser = \"1234:1234\"\n").unwrap();
+
+    // Config only: values come from the file.
+    let ok = Command::new(bin)
+        .args(["pack", "--config", toml.to_str().unwrap(), bin])
+        .status()
+        .unwrap();
+    assert!(ok.success());
+    let user = |tag: &str| {
+        let out = Command::new("docker")
+            .args([
+                "inspect",
+                "--format",
+                "{{.Config.User}} {{json .Config.Env}}",
+                tag,
+            ])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let out = user("scratchsmith/scratchsmith:packed");
+    assert!(out.contains("1234:1234"), "config user not applied: {out}");
+    assert!(out.contains("CFGONLY=1"), "config env not applied: {out}");
+    rmi("scratchsmith/scratchsmith:packed");
+
+    // CLI --user overrides the config value.
+    Command::new(bin)
+        .args([
+            "pack",
+            "--config",
+            toml.to_str().unwrap(),
+            "--user",
+            "9999:9999",
+            bin,
+        ])
+        .status()
+        .unwrap();
+    let out = user("scratchsmith/scratchsmith:packed");
+    assert!(
+        out.contains("9999:9999"),
+        "CLI should override config user: {out}"
+    );
+    rmi("scratchsmith/scratchsmith:packed");
+}
+
+#[test]
 fn smoke_run_passes_for_a_plain_binary() {
     if !docker_available() {
         eprintln!("skipping: no Docker daemon");
