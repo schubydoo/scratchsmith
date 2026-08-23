@@ -1,0 +1,143 @@
+name: Security
+
+# Scratchsmith's extra security scanners in one file: secret scanning
+# (gitleaks) and a GitHub Actions workflow audit (zizmor). Each is its own JOB,
+# so they run in parallel. zizmor uploads a SARIF, so its findings land in the
+# code-scanning Security tab; gitleaks has no SARIF upload (and only
+# contents:read), so a leak surfaces as a failed required check plus the job
+# log/summary, not in the Security tab. Rust SAST lives in codeql.yml, and Rust
+# supply-chain (cargo audit/deny) lives in ci.yml; this file deliberately does
+# not duplicate them. There is no container image to scan (scratchsmith BUILDS
+# images, it does not ship one), so there is no trivy job here.
+#
+# NOTE: action refs are pinned to full commit SHAs and the zizmor install is
+# version-pinned (the repo's Actions policy requires pinning; also satisfies
+# Scorecard Pinned-Dependencies); Renovate keeps them current.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "37 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  # event-scoped so a push to main can't cancel the weekly scheduled scan
+  # (both resolve github.ref to refs/heads/main); PR runs still supersede by head_ref.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    name: secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history so the scan covers every commit
+          persist-credentials: false
+      # scratchsmith-ci App token (>=5,000 REST req/hr), so that the action's
+      # GitHub API calls do not exhaust the 1,000/hr github-actions[bot] pool.
+      # Same-repo runs only: fork PRs cannot read the App secrets, so the mint
+      # is skipped (soft-fail) and the token falls back to GITHUB_TOKEN below.
+      # gitleaks-action is free for public repos / individual accounts; no
+      # GITLEAKS_LICENSE is needed.
+      - name: Mint scratchsmith-ci App token
+        id: app-token
+        if: >-
+          ${{ github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.SCRATCHSMITH_CI_CLIENT_ID }}
+          private-key: ${{ secrets.SCRATCHSMITH_CI_APP_PRIVATE_KEY }}
+          permission-contents: read
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+
+  zizmor:
+    name: workflow audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # scratchsmith-ci App token, so that zizmor's advisory API lookups do not
+      # 403 against the 1,000/hr github-actions[bot] pool. Same-repo only;
+      # fork PRs fall back.
+      - name: Mint scratchsmith-ci App token
+        id: app-token
+        if: >-
+          ${{ github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.SCRATCHSMITH_CI_CLIENT_ID }}
+          private-key: ${{ secrets.SCRATCHSMITH_CI_APP_PRIVATE_KEY }}
+          permission-contents: read
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - name: Install zizmor
+        # Pinned so a required check never depends on whatever zizmor ships that
+        # hour, and so Renovate has a version to bump. Keep in step with the SHAs above.
+        run: uv tool install zizmor==1.29.0
+      # Advisory: `|| true` swallows zizmor's non-zero exit (findings OR a tool
+      # crash) so it never gates the merge. The upload then runs only when a SARIF
+      # was actually written, so a crash that leaves a 0-byte file can't invert into
+      # a hard upload failure. Drop `|| true` to make findings enforcing.
+      - name: Run zizmor
+        id: zizmor
+        run: |
+          zizmor --format sarif . > results.sarif || true
+          if [ -s results.sarif ]; then echo "have_sarif=true" >> "$GITHUB_OUTPUT"; fi
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+      - name: Upload SARIF
+        if: steps.zizmor.outputs.have_sarif == 'true'
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        with:
+          sarif_file: results.sarif
+          category: zizmor
+
+  security-required-checks-passed:
+    name: security required checks passed
+    # The single required status context for this file (the `main` ruleset requires
+    # "security required checks passed"). Skipped jobs count as passing, so a
+    # PR-skipped job never wedges the required check on pull requests.
+    if: always()
+    needs:
+      - gitleaks
+      - zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check required jobs passed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          failing=$(echo "$NEEDS_JSON" | jq -r '
+            to_entries[]
+            | select(.value.result != "success" and .value.result != "skipped")
+            | "\(.key): \(.value.result)"
+          ')
+          if [ -n "$failing" ]; then
+            echo "Failed or cancelled jobs:"
+            echo "$failing"
+            exit 1
+          fi
+          echo "All required jobs passed (or were intentionally skipped)."

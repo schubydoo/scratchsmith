@@ -1,0 +1,72 @@
+name: Scorecard
+
+# OpenSSF Scorecard: a repository-level security best-practices audit. It
+# runs on branch_protection_rule (ruleset changes then trigger a
+# re-evaluation), on a weekly schedule, and on pushes to main. It is
+# intentionally NOT a required check: it never runs on pull_request, so a
+# requirement on it would leave every PR perpetually pending. The signal
+# lives in the Security tab (Code scanning → Scorecard) and at scorecard.dev
+# once publish_results is enabled.
+#
+# NOTE: action refs are pinned to full commit SHAs (the repo's Actions policy
+# requires it; also satisfies Scorecard Pinned-Dependencies); Renovate keeps them current.
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: "18 7 * * 1"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # All triggers here resolve to refs/heads/main (never a PR), so they share one
+  # group; do NOT cancel — else a push to main kills the weekly scan, and two
+  # ruleset saves (branch_protection_rule) would cancel each other to just the last.
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  analysis:
+    name: OpenSSF Scorecard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      security-events: write # upload the SARIF to code scanning
+      id-token: write # publish results to the public Scorecard API
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # scratchsmith-ci App token as Scorecard's repo_token: the Branch-Protection
+      # check needs administration:read (the default GITHUB_TOKEN cannot read
+      # branch rules, so that check scores 0 / inconclusive). The App source
+      # also lifts the API budget to >=5,000/hr. This requires the App to be
+      # granted `administration: read`. Soft-fail: until the App has that grant,
+      # the mint yields an empty token, and Scorecard falls back to
+      # GITHUB_TOKEN (Branch-Protection stays inconclusive); the run does not fail.
+      - name: Mint scratchsmith-ci App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.SCRATCHSMITH_CI_CLIENT_ID }}
+          private-key: ${{ secrets.SCRATCHSMITH_CI_APP_PRIVATE_KEY }}
+          permission-administration: read
+          permission-contents: read
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+          repo_token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        with:
+          sarif_file: results.sarif
+          category: scorecard
