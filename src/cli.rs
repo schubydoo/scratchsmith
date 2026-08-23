@@ -115,10 +115,10 @@ fn dispatch(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        // Lint and doctor are still stubbed; fail loudly rather than exit 0 so a stub
-        // is never mistaken for a working command.
+        Command::Doctor => crate::doctor::run(),
+        // Lint is still stubbed; fail loudly rather than exit 0 so a stub is never
+        // mistaken for a working command.
         Command::Lint { .. } => bail!("lint: not yet implemented"),
-        Command::Doctor => bail!("doctor: not yet implemented"),
     }
 }
 
@@ -251,9 +251,8 @@ mod tests {
     }
 
     #[test]
-    fn doctor_stub_fails_loudly() {
+    fn doctor_runs_and_succeeds() {
         let cli = Cli::try_parse_from(["scratchsmith", "doctor"]).unwrap();
-        let err = dispatch(cli).unwrap_err();
-        assert!(err.to_string().contains("doctor: not yet implemented"));
+        assert!(dispatch(cli).is_ok(), "doctor always exits 0");
     }
 }

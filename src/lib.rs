@@ -9,6 +9,7 @@ pub mod cli;
 
 // Implemented pipeline stages.
 pub mod config;
+pub mod doctor;
 pub mod image;
 pub mod pack;
 pub mod resolver;

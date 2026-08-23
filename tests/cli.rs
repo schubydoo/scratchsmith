@@ -44,16 +44,13 @@ fn unknown_subcommand_is_a_usage_error() {
 }
 
 #[test]
-fn doctor_stub_exits_one_and_explains() {
+fn doctor_exits_zero_and_reports_tools() {
     let out = run(&["doctor"]);
-    // Runtime stub failure is exit 1 (main maps any error to FAILURE), distinct
-    // from clap's exit 2 for bad arguments.
-    assert_eq!(out.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("doctor: not yet implemented"),
-        "got: {stderr}"
-    );
+    // doctor always exits 0; missing tools are informational, not failures.
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // ldconfig is present wherever the tests build, so it should report ok.
+    assert!(stdout.contains("ldconfig"), "got: {stdout}");
 }
 
 #[test]
