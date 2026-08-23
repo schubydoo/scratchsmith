@@ -28,9 +28,14 @@ fn resolves_a_real_binary_against_the_host() {
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
     let res = resolve(bin, &Sysroot::new("/")).expect("resolution should not error");
 
+    let interp = res.interpreter.expect("loader should resolve");
     assert!(
-        res.interpreter.is_some_and(|p| p.exists()),
-        "loader should resolve to a real file"
+        interp.source.exists(),
+        "loader source should be a real file"
+    );
+    assert!(
+        interp.image_path.is_absolute(),
+        "loader image path should be the absolute PT_INTERP location"
     );
     assert!(
         res.libs.iter().any(|l| l.soname.contains("libc")),

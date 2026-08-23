@@ -125,12 +125,23 @@ pub struct ResolvedLib {
     pub path: PathBuf,
 }
 
+/// The dynamic loader. Staging needs both facts: the kernel execs `PT_INTERP`
+/// verbatim, so the loader must live at `image_path`, but the bytes come from the
+/// real file at `source` (the `PT_INTERP` symlink is often canonicalized away).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedInterp {
+    /// The `PT_INTERP` path the loader must occupy in the image (e.g. `/lib64/ld-...`).
+    pub image_path: PathBuf,
+    /// The real file to copy the loader bytes from.
+    pub source: PathBuf,
+}
+
 /// The closed set of what a binary needs at runtime.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Resolution {
-    /// The dynamic loader (`PT_INTERP`), rerooted into the sysroot. `None` only for
-    /// a static binary or when the loader is absent from the sysroot.
-    pub interpreter: Option<PathBuf>,
+    /// The dynamic loader. `None` only for a static binary or when the loader is
+    /// absent from the sysroot.
+    pub interpreter: Option<ResolvedInterp>,
     /// Every transitive shared library, deduplicated by real path.
     pub libs: Vec<ResolvedLib>,
     /// Sonames that could not be located. Non-empty means the image would be broken,
@@ -171,10 +182,14 @@ pub fn resolve_with(
     let mut resolution = Resolution::default();
 
     // The loader is named by PT_INTERP, not DT_NEEDED, so resolve it separately.
+    // Keep the verbatim PT_INTERP path (where it must live) alongside the real file.
     if let Some(interp) = &root_info.interpreter {
-        let path = reroot(&sysroot.root, Path::new(interp));
-        if path.exists() {
-            resolution.interpreter = Some(canonical(&path));
+        let source = reroot(&sysroot.root, Path::new(interp));
+        if source.exists() {
+            resolution.interpreter = Some(ResolvedInterp {
+                image_path: PathBuf::from(interp),
+                source: canonical(&source),
+            });
         } else {
             resolution.missing.push(interp.clone());
         }
