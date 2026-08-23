@@ -26,6 +26,19 @@ pub enum Command {
         /// Directory to stage into (with --no-build).
         #[arg(short = 'o', long, value_name = "DIR", requires = "no_build")]
         output: Option<PathBuf>,
+        /// Image entrypoint (defaults to the packed binary's path).
+        #[arg(long, value_name = "PATH")]
+        entrypoint: Option<String>,
+        /// Default argument for the entrypoint; repeatable. Flag-like values are
+        /// allowed, so `--cmd --version` passes `--version` through.
+        #[arg(long = "cmd", value_name = "ARG", allow_hyphen_values = true)]
+        cmd: Vec<String>,
+        /// Environment entry `KEY=VALUE`; repeatable.
+        #[arg(long = "env", value_name = "KEY=VALUE")]
+        env: Vec<String>,
+        /// Working directory inside the image.
+        #[arg(long, value_name = "DIR")]
+        workdir: Option<String>,
     },
     /// Report a binary's ELF hardening posture (PIE/RELRO/NX).
     Lint {
@@ -52,6 +65,10 @@ fn dispatch(cli: Cli) -> Result<()> {
             smoke,
             no_build,
             output,
+            entrypoint,
+            cmd,
+            env,
+            workdir,
         } => {
             if no_build {
                 // clap guarantees output is present when no_build is set.
@@ -59,7 +76,13 @@ fn dispatch(cli: Cli) -> Result<()> {
                 let tree = crate::pack::stage_only(&binary, &dir)?;
                 println!("staged to {}", tree.root.display());
             } else {
-                let tag = crate::pack::run(&binary, smoke)?;
+                let cfg = crate::image::ImageConfig {
+                    entrypoint: entrypoint.map(|e| vec![e]).unwrap_or_default(),
+                    cmd,
+                    env,
+                    workdir,
+                };
+                let tag = crate::pack::run(&binary, smoke, &cfg)?;
                 println!("loaded image {tag}");
             }
             Ok(())

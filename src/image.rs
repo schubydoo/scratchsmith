@@ -9,23 +9,42 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
+/// User-configurable image metadata (Task 2.2). Empty fields fall back to defaults:
+/// the entrypoint defaults to the packed binary, and PATH is always present.
+#[derive(Debug, Clone, Default)]
+pub struct ImageConfig {
+    /// Overrides the default entrypoint (the packed binary) when non-empty.
+    pub entrypoint: Vec<String>,
+    /// Default arguments (`Cmd`) appended to the entrypoint.
+    pub cmd: Vec<String>,
+    /// Extra environment entries (`KEY=VALUE`); override PATH by key if given.
+    pub env: Vec<String>,
+    /// Working directory inside the image.
+    pub workdir: Option<String>,
+}
+
 /// Assemble `staged` into an image and load it into the local Docker daemon as `tag`.
-pub fn load_into_docker(staged: &StagedTree, tag: &str) -> Result<()> {
+pub fn load_into_docker(staged: &StagedTree, tag: &str, cfg: &ImageConfig) -> Result<()> {
     let work = tempfile::tempdir().context("temp dir for image archive")?;
     let archive = work.path().join("image.tar");
-    build_docker_archive(staged, tag, &archive)?;
+    build_docker_archive(staged, tag, cfg, &archive)?;
     docker_load(&archive)?;
     Ok(())
 }
 
 // A docker-archive is a tar of: the image config, the single rootfs layer tar, and
 // a manifest.json tying them together. `docker load` reads exactly this shape.
-fn build_docker_archive(staged: &StagedTree, tag: &str, out: &Path) -> Result<()> {
+fn build_docker_archive(
+    staged: &StagedTree,
+    tag: &str,
+    cfg: &ImageConfig,
+    out: &Path,
+) -> Result<()> {
     let work = tempfile::tempdir()?;
     let layer_path = work.path().join("layer.tar");
     let diff_id = write_layer_tar(&staged.root, &layer_path)?;
 
-    let config = image_config(&staged.entrypoint, &diff_id);
+    let config = image_config(&staged.entrypoint, &diff_id, cfg);
     let config_bytes = serde_json::to_vec(&config)?;
     let config_name = format!("{}.json", hex(Sha256::digest(&config_bytes)));
 
@@ -59,18 +78,49 @@ fn write_layer_tar(root: &Path, out: &Path) -> Result<String> {
     Ok(hex(Sha256::digest(&bytes)))
 }
 
-fn image_config(entrypoint: &Path, diff_id: &str) -> serde_json::Value {
+const DEFAULT_PATH: &str = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+fn image_config(default_entrypoint: &Path, diff_id: &str, cfg: &ImageConfig) -> serde_json::Value {
+    let entrypoint = if cfg.entrypoint.is_empty() {
+        vec![default_entrypoint.to_string_lossy().into_owned()]
+    } else {
+        cfg.entrypoint.clone()
+    };
+
+    let mut config = serde_json::json!({
+        "Entrypoint": entrypoint,
+        "Env": merged_env(&cfg.env),
+    });
+    if !cfg.cmd.is_empty() {
+        config["Cmd"] = serde_json::json!(cfg.cmd);
+    }
+    if let Some(wd) = &cfg.workdir {
+        config["WorkingDir"] = serde_json::json!(wd);
+    }
+
     serde_json::json!({
         // Host-arch only at v1; multi-arch is Task 5.4.
         "architecture": "amd64",
         "os": "linux",
-        "config": {
-            "Entrypoint": [entrypoint.to_string_lossy()],
-            "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
-        },
+        "config": config,
         "rootfs": { "type": "layers", "diff_ids": [format!("sha256:{diff_id}")] },
         "history": [{ "created": "1970-01-01T00:00:00Z", "created_by": "scratchsmith" }],
     })
+}
+
+// Start from the default PATH, then apply user env entries, overriding by key so a
+// user-supplied PATH replaces the default rather than duplicating it.
+fn merged_env(user: &[String]) -> Vec<String> {
+    let key_of = |e: &str| e.split('=').next().unwrap_or(e).to_string();
+    let mut env = vec![DEFAULT_PATH.to_string()];
+    for entry in user {
+        let key = key_of(entry);
+        match env.iter_mut().find(|e| key_of(e) == key) {
+            Some(slot) => *slot = entry.clone(),
+            None => env.push(entry.clone()),
+        }
+    }
+    env
 }
 
 /// The result of running a packed image once.
@@ -168,10 +218,43 @@ mod tests {
     }
 
     #[test]
-    fn config_names_the_entrypoint_and_layer() {
-        let cfg = image_config(Path::new("/opt/app"), "abc123");
+    fn config_defaults_to_the_packed_binary_entrypoint() {
+        let cfg = image_config(Path::new("/opt/app"), "abc123", &ImageConfig::default());
         assert_eq!(cfg["config"]["Entrypoint"][0], "/opt/app");
         assert_eq!(cfg["rootfs"]["diff_ids"][0], "sha256:abc123");
+        // PATH is always present; no Cmd/WorkingDir unless set.
+        assert!(cfg["config"]["Env"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("PATH="));
+        assert!(cfg["config"]["Cmd"].is_null());
+    }
+
+    #[test]
+    fn config_applies_entrypoint_cmd_env_and_workdir() {
+        let opts = ImageConfig {
+            entrypoint: vec!["/bin/tool".into()],
+            cmd: vec!["--serve".into()],
+            env: vec!["FOO=bar".into()],
+            workdir: Some("/work".into()),
+        };
+        let cfg = image_config(Path::new("/opt/app"), "d", &opts);
+        assert_eq!(cfg["config"]["Entrypoint"][0], "/bin/tool");
+        assert_eq!(cfg["config"]["Cmd"][0], "--serve");
+        assert_eq!(cfg["config"]["WorkingDir"], "/work");
+        let env: Vec<&str> = cfg["config"]["Env"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(env.contains(&"FOO=bar"));
+    }
+
+    #[test]
+    fn user_path_overrides_the_default_instead_of_duplicating() {
+        let env = merged_env(&["PATH=/only".to_string()]);
+        assert_eq!(env, vec!["PATH=/only".to_string()]);
     }
 
     fn outcome(code: Option<i32>, stderr: &str) -> SmokeOutcome {

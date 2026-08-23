@@ -1,9 +1,18 @@
 //! End-to-end against a live Docker daemon: pack real binaries into scratch images
 //! and smoke-run them. Skipped when no Docker daemon is reachable (e.g. minimal CI).
 
-use scratchsmith::image::smoke_run;
+use scratchsmith::image::{smoke_run, ImageConfig};
 use std::path::Path;
 use std::process::Command;
+use std::sync::Mutex;
+
+// Docker tests pack the same binary into the same derived tag, so they must not run
+// concurrently or one test's cleanup deletes another's image. Serialize them.
+static DOCKER: Mutex<()> = Mutex::new(());
+
+fn docker_lock() -> std::sync::MutexGuard<'static, ()> {
+    DOCKER.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 fn docker_available() -> bool {
     Command::new("docker")
@@ -44,8 +53,10 @@ fn packs_a_binary_that_runs_in_docker() {
         eprintln!("skipping: no Docker daemon");
         return;
     }
+    let _g = docker_lock();
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
-    let tag = scratchsmith::pack::run(bin, false).expect("pack should succeed");
+    let tag =
+        scratchsmith::pack::run(bin, false, &ImageConfig::default()).expect("pack should succeed");
 
     let run = Command::new("docker")
         .args(["run", "--rm", &tag, "--version"])
@@ -73,13 +84,43 @@ fn packs_a_binary_that_runs_in_docker() {
 }
 
 #[test]
+fn image_config_is_reflected_in_docker_inspect() {
+    if !docker_available() {
+        eprintln!("skipping: no Docker daemon");
+        return;
+    }
+    let _g = docker_lock();
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let cfg = ImageConfig {
+        entrypoint: vec![],
+        cmd: vec!["--version".into()],
+        env: vec!["FOO=bar".into()],
+        workdir: Some("/work".into()),
+    };
+    let tag = scratchsmith::pack::run(bin, false, &cfg).expect("pack");
+
+    let inspect = |fmt: &str| {
+        let out = Command::new("docker")
+            .args(["inspect", "--format", fmt, &tag])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert!(inspect("{{json .Config.Env}}").contains("FOO=bar"));
+    assert!(inspect("{{json .Config.Cmd}}").contains("--version"));
+    assert!(inspect("{{.Config.WorkingDir}}").contains("/work"));
+    rmi(&tag);
+}
+
+#[test]
 fn smoke_run_passes_for_a_plain_binary() {
     if !docker_available() {
         eprintln!("skipping: no Docker daemon");
         return;
     }
+    let _g = docker_lock();
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
-    let tag = scratchsmith::pack::run(bin, false).expect("pack");
+    let tag = scratchsmith::pack::run(bin, false, &ImageConfig::default()).expect("pack");
 
     let outcome = smoke_run(&tag, &["--version"], 15).expect("smoke run");
     assert!(
@@ -101,6 +142,7 @@ fn smoke_run_proves_nss_lookups_work_in_image() {
         eprintln!("skipping: no Docker daemon");
         return;
     }
+    let _g = docker_lock();
     // getent is a dynamic glibc binary that resolves names through NSS. Packing it
     // and resolving `localhost` exercises the whole default-include chain (nsswitch
     // + libnss_files) inside the scratch image — the DNS-using-binary case.
@@ -109,7 +151,7 @@ fn smoke_run_proves_nss_lookups_work_in_image() {
         eprintln!("skipping: getent not present");
         return;
     }
-    let tag = scratchsmith::pack::run(getent, false).expect("pack getent");
+    let tag = scratchsmith::pack::run(getent, false, &ImageConfig::default()).expect("pack getent");
 
     let outcome = smoke_run(&tag, &["hosts", "localhost"], 15).expect("smoke run");
     assert!(

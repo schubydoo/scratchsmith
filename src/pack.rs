@@ -1,7 +1,7 @@
 //! Orchestrate a pack: resolve → stage → default-includes → assemble → load.
 //! This is the glue behind `scratchsmith pack`.
 
-use crate::image;
+use crate::image::{self, ImageConfig};
 use crate::resolver::{self, Sysroot};
 use crate::stager::{self, StagedTree};
 use anyhow::{bail, Result};
@@ -39,13 +39,13 @@ pub fn stage_only(binary: &Path, out_dir: &Path) -> Result<StagedTree> {
 /// Pack `binary` into a scratch image loaded in the local Docker daemon; return the
 /// tag. When `smoke` is set, run the image once afterwards and fail if the dynamic
 /// loader could not start it — the guard against a silently broken image.
-pub fn run(binary: &Path, smoke: bool) -> Result<String> {
+pub fn run(binary: &Path, smoke: bool, cfg: &ImageConfig) -> Result<String> {
     let work = tempfile::tempdir()?;
     let dest = work.path().join("rootfs");
     let tree = build_rootfs(binary, &dest)?;
 
     let tag = image_tag(binary);
-    image::load_into_docker(&tree, &tag)?;
+    image::load_into_docker(&tree, &tag, cfg)?;
 
     if smoke {
         let outcome = image::smoke_run(&tag, &[], SMOKE_TIMEOUT_SECS)?;
