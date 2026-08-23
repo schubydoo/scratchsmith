@@ -40,6 +40,9 @@ pub struct ElfInfo {
     pub is_64: bool,
     /// ELF machine (`e_machine`). Drives `$PLATFORM` and the default lib triplet.
     pub machine: u16,
+    /// References `dlopen`/`dlsym` — its runtime plugins are NOT in the dependency
+    /// graph, so resolution may be incomplete (the user may need `--include`).
+    pub uses_dlopen: bool,
 }
 
 impl ElfInfo {
@@ -102,7 +105,17 @@ fn parse_elf_info(bytes: &[u8]) -> Result<ElfInfo> {
         soname: elf.soname.map(str::to_owned),
         is_64: elf.is_64,
         machine: elf.header.e_machine,
+        uses_dlopen: references_dlopen(&elf),
     })
+}
+
+// A binary that calls dlopen imports the symbol, so its presence in the dynamic
+// symbols means runtime plugin loading the static graph can't see.
+fn references_dlopen(elf: &goblin::elf::Elf) -> bool {
+    elf.dynsyms
+        .iter()
+        .filter_map(|sym| elf.dynstrtab.get_at(sym.st_name))
+        .any(|name| name == "dlopen" || name == "dlmopen")
 }
 
 // ---------------------------------------------------------------------------
@@ -187,18 +200,33 @@ impl LinkInfoSource for GoblinSource {
 
 /// Resolve a binary's transitive dependencies against a sysroot, using goblin.
 pub fn resolve(binary: &Path, sysroot: &Sysroot) -> Result<Resolution> {
-    resolve_with(binary, sysroot, &GoblinSource)
+    resolve_with(binary, sysroot, &[], &GoblinSource)
+}
+
+/// Resolve, additionally pulling in `includes` (sonames or paths) as if the binary
+/// had needed them — the `--include` escape hatch for `dlopen`'d plugins the static
+/// graph cannot see.
+pub fn resolve_with_includes(
+    binary: &Path,
+    sysroot: &Sysroot,
+    includes: &[String],
+) -> Result<Resolution> {
+    resolve_with(binary, sysroot, includes, &GoblinSource)
 }
 
 /// Resolve using an explicit link-info source (the testable entry point).
 pub fn resolve_with(
     binary: &Path,
     sysroot: &Sysroot,
+    includes: &[String],
     source: &dyn LinkInfoSource,
 ) -> Result<Resolution> {
     let root_path =
         std::fs::canonicalize(binary).with_context(|| format!("locating {}", binary.display()))?;
-    let root_info = source.read(&root_path)?;
+    let mut root_info = source.read(&root_path)?;
+    // Treat --include entries as extra direct dependencies of the binary, so they and
+    // their own transitive deps are resolved and staged like anything else.
+    root_info.needed.extend(includes.iter().cloned());
 
     let mut resolution = Resolution::default();
 
@@ -356,6 +384,7 @@ mod tests {
             soname: None,
             is_64: true,
             machine: goblin::elf::header::EM_X86_64,
+            uses_dlopen: false,
         }
     }
 
@@ -388,6 +417,7 @@ mod tests {
             soname: None,
             is_64: true,
             machine: goblin::elf::header::EM_X86_64,
+            uses_dlopen: false,
         };
         assert_eq!(elf.rpaths, vec!["/opt/rpath".to_string()]);
         assert_eq!(elf.runpaths, vec!["/opt/runpath".to_string()]);
@@ -445,6 +475,7 @@ mod tests {
             soname: None,
             is_64: true,
             machine: goblin::elf::header::EM_X86_64,
+            uses_dlopen: false,
         }
     }
 
@@ -485,7 +516,7 @@ mod tests {
         );
         infos.insert(canonical(&mid), elf(&["libleaf.so"], &[], &[], None));
         infos.insert(canonical(&leaf), elf(&[], &[], &[], None));
-        let res = resolve_with(&exe, &sysroot, &MapSource { infos }).unwrap();
+        let res = resolve_with(&exe, &sysroot, &[], &MapSource { infos }).unwrap();
         assert!(res.missing.is_empty(), "rpath variant: {:?}", res.missing);
         assert!(has(&res, "libleaf.so"));
         assert!(res.interpreter.is_some(), "loader should resolve");
@@ -504,7 +535,7 @@ mod tests {
         );
         infos.insert(canonical(&mid), elf(&["libleaf.so"], &[], &[], None));
         infos.insert(canonical(&leaf), elf(&[], &[], &[], None));
-        let res = resolve_with(&exe, &sysroot, &MapSource { infos }).unwrap();
+        let res = resolve_with(&exe, &sysroot, &[], &MapSource { infos }).unwrap();
         assert!(has(&res, "libmid.so"), "runpath resolves the direct dep");
         assert!(
             res.missing.contains(&"libleaf.so".to_string()),
@@ -539,7 +570,7 @@ mod tests {
             elf(&["libleaf.so"], &["$ORIGIN/deep"], &[], None),
         );
         infos.insert(canonical(&leaf), elf(&[], &[], &[], None));
-        let res = resolve_with(&exe, &Sysroot::new(root), &MapSource { infos }).unwrap();
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
         assert!(
             res.missing.is_empty(),
             "origin should be object-local: {:?}",
@@ -574,7 +605,7 @@ mod tests {
         infos.insert(canonical(&stray), elf(&[], &[], &[], None));
 
         std::env::set_var("LD_LIBRARY_PATH", &stray_dir);
-        let res = resolve_with(&exe, &Sysroot::new(root), &MapSource { infos }).unwrap();
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
         std::env::remove_var("LD_LIBRARY_PATH");
         assert!(
             res.missing.contains(&"libonlyhere.so".to_string()),
@@ -612,7 +643,7 @@ mod tests {
         infos.insert(canonical(&a), elf(&["libc_shared.so"], &[], &[], None));
         infos.insert(canonical(&b), elf(&["libc_shared.so"], &[], &[], None));
         infos.insert(canonical(&c), elf(&[], &[], &[], None));
-        let res = resolve_with(&exe, &Sysroot::new(root), &MapSource { infos }).unwrap();
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
         assert!(res.missing.is_empty(), "{:?}", res.missing);
         let count = res
             .libs
@@ -630,7 +661,7 @@ mod tests {
         touch(&exe);
         let mut infos = HashMap::new();
         infos.insert(canonical(&exe), elf(&["libghost.so"], &[], &[], None));
-        let res = resolve_with(&exe, &Sysroot::new(root), &MapSource { infos }).unwrap();
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
         assert_eq!(res.missing, vec!["libghost.so".to_string()]);
     }
 }

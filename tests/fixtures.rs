@@ -158,3 +158,101 @@ fn musl_binaries_are_detected_and_pack_hard_fails() {
     let err = scratchsmith::pack::stage_only(&app, &dest, &PackOptions::default()).unwrap_err();
     assert!(err.to_string().contains("musl"), "got: {err}");
 }
+
+#[test]
+fn dlopen_use_is_detected() {
+    if !cc_available() {
+        eprintln!("skipping: no C compiler");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    // A dlopen user imports the symbol; a plain binary does not.
+    std::fs::write(
+        tmp.path().join("dl.c"),
+        "#include <dlfcn.h>\nint main(void){return dlopen(\"x\",2)?0:0;}",
+    )
+    .unwrap();
+    let dl = tmp.path().join("dluser");
+    let out = Command::new("cc")
+        .args([
+            tmp.path().join("dl.c").to_str().unwrap(),
+            "-o",
+            dl.to_str().unwrap(),
+            "-ldl",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "cc: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        read_elf_info(&dl).unwrap().uses_dlopen,
+        "dlopen user should be flagged"
+    );
+
+    let plain = build_fixture(tmp.path(), "plain", "-Wl,--disable-new-dtags");
+    assert!(
+        !read_elf_info(&plain).unwrap().uses_dlopen,
+        "plain binary is not a dlopen user"
+    );
+}
+
+#[test]
+fn pack_warns_about_dlopen_and_include_stages_extra_libs() {
+    if !cc_available() {
+        eprintln!("skipping: no C compiler");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("dl.c"),
+        "#include <dlfcn.h>\nint main(void){return dlopen(\"x\",2)?0:0;}",
+    )
+    .unwrap();
+    let dl = tmp.path().join("dluser");
+    Command::new("cc")
+        .args([
+            tmp.path().join("dl.c").to_str().unwrap(),
+            "-o",
+            dl.to_str().unwrap(),
+            "-ldl",
+        ])
+        .output()
+        .unwrap();
+
+    // The report warns about dlopen, and --include force-stages an extra library.
+    let out = tmp.path().join("rootfs");
+    let opts = PackOptions {
+        includes: vec!["libz.so.1".to_string()],
+        ..Default::default()
+    };
+    let report = scratchsmith::pack::stage_only(&dl, &out, &opts).expect("stage dlopen user");
+    assert!(
+        report.warnings.iter().any(|w| w.contains("dlopen")),
+        "expected a dlopen warning, got {:?}",
+        report.warnings
+    );
+    assert!(
+        walk_contains(&out, "libz.so.1"),
+        "--include libz.so.1 should be staged"
+    );
+}
+
+fn walk_contains(root: &Path, name: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if walk_contains(&path, name) {
+                return true;
+            }
+        } else if path.file_name().is_some_and(|n| n == name) {
+            return true;
+        }
+    }
+    false
+}

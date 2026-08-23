@@ -19,6 +19,9 @@ pub struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+// Pack carries many flags, dwarfing Lint/Doctor. This enum is parsed once at startup,
+// so the size difference is irrelevant; boxing it would only add noise.
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Pack a dynamic ELF binary into a minimal scratch image.
     Pack {
@@ -73,6 +76,10 @@ pub enum Command {
         /// Add a minimal init (tini) as pid 1 wrapping the entrypoint.
         #[arg(long)]
         init: bool,
+        /// Force-stage an extra library (soname or path), e.g. a dlopen'd plugin;
+        /// repeatable.
+        #[arg(long = "include", value_name = "LIB")]
+        include: Vec<String>,
         /// Report format.
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
@@ -118,6 +125,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             ca_certs,
             tz,
             init,
+            include,
             format,
         } => {
             // Load the config file (if any), then let CLI flags override its values.
@@ -139,6 +147,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                     format: sbom_format,
                 }),
                 extras: crate::stager::RuntimeExtras { ca_certs, tz, init },
+                includes: include,
                 image: crate::image::ImageConfig {
                     entrypoint: entrypoint
                         .or(file.entrypoint)
