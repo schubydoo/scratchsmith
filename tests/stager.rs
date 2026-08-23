@@ -3,7 +3,7 @@
 //! Requires ldconfig (present on any glibc host, including CI).
 
 use scratchsmith::resolver::{resolve, Sysroot};
-use scratchsmith::stager::stage;
+use scratchsmith::stager::{stage, stage_default_includes};
 use std::path::Path;
 
 #[test]
@@ -42,4 +42,42 @@ fn stages_a_real_binary_into_a_runnable_tree() {
     assert!(dest
         .join(tree.entrypoint.strip_prefix("/").unwrap())
         .exists());
+}
+
+#[test]
+fn default_includes_add_nss_and_ca_from_host() {
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let resolution = resolve(bin, &Sysroot::new("/")).expect("resolution");
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = tmp.path().join("rootfs");
+    let report = stage_default_includes(&resolution, Path::new("/"), &dest).expect("includes");
+
+    assert!(dest.join("etc/nsswitch.conf").exists(), "nsswitch missing");
+    // The version-matched NSS module for DNS must land beside the staged libc.
+    let has_nss = walk_contains(&dest, "libnss_dns.so.2");
+    assert!(has_nss, "libnss_dns.so.2 was not staged");
+    assert!(
+        dest.join("etc/ssl/certs/ca-certificates.crt").exists(),
+        "CA bundle not staged (warnings: {:?})",
+        report.warnings
+    );
+}
+
+// Small recursive check so the test does not hard-code the libc directory triplet.
+fn walk_contains(root: &Path, name: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if walk_contains(&path, name) {
+                return true;
+            }
+        } else if path.file_name().is_some_and(|n| n == name) {
+            return true;
+        }
+    }
+    false
 }

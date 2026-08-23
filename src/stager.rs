@@ -19,11 +19,99 @@ pub struct StagedTree {
     pub entrypoint: PathBuf,
 }
 
+/// What the default-include step added, and what it could not find.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct IncludeReport {
+    /// Image paths added (nsswitch, NSS modules, CA bundle).
+    pub staged: Vec<PathBuf>,
+    /// Best-effort items that were absent on the host — surfaced, never silently skipped.
+    pub warnings: Vec<String>,
+}
+
+// A scratch image has no name-service config, so glibc name lookups fail before
+// they even try. Ship a minimal one: local files plus DNS, which needs only the
+// libnss_files/libnss_dns modules — no systemd/mymachines NSS module to drag in.
+const MINIMAL_NSSWITCH: &str = "\
+passwd:         files
+group:          files
+shadow:         files
+hosts:          files dns
+networks:       files
+protocols:      files
+services:       files
+";
+
+// The glibc NSS/resolver modules that `hosts: files dns` needs. They are dlopen'd,
+// so the resolver never sees them; they must be pulled in explicitly, and from the
+// same directory as libc so the versions match exactly.
+const NSS_MODULES: &[&str] = &["libnss_files.so.2", "libnss_dns.so.2", "libresolv.so.2"];
+
+const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
+
 /// Stage `binary` and its resolved dependencies under `dest`, then build the cache.
 pub fn stage(binary: &Path, resolution: &Resolution, dest: &Path) -> Result<StagedTree> {
     let tree = stage_files(binary, resolution, dest)?;
     generate_ld_cache(dest, resolution)?;
     Ok(tree)
+}
+
+/// Add the runtime files glibc loads outside the dependency graph so that DNS and
+/// user lookups work: a minimal nsswitch.conf, the NSS modules (version-matched to
+/// the staged libc), and the CA bundle. `root` is the sysroot the binary resolved
+/// against. Absent items become warnings, not errors.
+pub fn stage_default_includes(
+    resolution: &Resolution,
+    root: &Path,
+    dest: &Path,
+) -> Result<IncludeReport> {
+    let mut report = IncludeReport::default();
+
+    let nsswitch = under(dest, Path::new("/etc/nsswitch.conf"));
+    std::fs::create_dir_all(nsswitch.parent().unwrap())?;
+    std::fs::write(&nsswitch, MINIMAL_NSSWITCH)?;
+    report.staged.push(PathBuf::from("/etc/nsswitch.conf"));
+
+    // NSS modules live beside libc; without libc (a static binary) there is nothing
+    // to match against, so there is nothing to do here.
+    match libc_dir(resolution) {
+        Some(dir) => {
+            for name in NSS_MODULES {
+                let src = dir.join(name);
+                if src.exists() {
+                    copy_into(&src, dest, &src)?;
+                    report.staged.push(src);
+                } else {
+                    report
+                        .warnings
+                        .push(format!("NSS module not found: {name}"));
+                }
+            }
+        }
+        None => report
+            .warnings
+            .push("no libc in resolution; skipped NSS modules".into()),
+    }
+
+    let ca_src = under(root, Path::new(CA_BUNDLE));
+    if ca_src.exists() {
+        copy_into(&ca_src, dest, Path::new(CA_BUNDLE))?;
+        report.staged.push(PathBuf::from(CA_BUNDLE));
+    } else {
+        report
+            .warnings
+            .push(format!("CA bundle not found at {CA_BUNDLE}"));
+    }
+
+    Ok(report)
+}
+
+// The directory libc resolved from — the version-matched source for NSS modules.
+fn libc_dir(resolution: &Resolution) -> Option<PathBuf> {
+    resolution
+        .libs
+        .iter()
+        .find(|l| l.soname.starts_with("libc.so"))
+        .and_then(|l| l.path.parent().map(Path::to_path_buf))
 }
 
 // File placement only — no ld.so.cache — so the copy and symlink logic is testable
@@ -234,5 +322,68 @@ mod tests {
         };
         let err = stage_files(&binary, &res, &dest).unwrap_err();
         assert!(err.to_string().contains("libmissing.so"));
+    }
+
+    #[test]
+    fn default_includes_stage_nsswitch_nss_modules_and_ca() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        let dest = tmp.path().join("dest");
+        let libdir = root.join("usr/lib/x86_64-linux-gnu");
+        // libc and its version-matched NSS modules share a directory.
+        let libc = make_file(&libdir.join("libc.so.6"), b"LIBC");
+        for m in ["libnss_files.so.2", "libnss_dns.so.2", "libresolv.so.2"] {
+            make_file(&libdir.join(m), b"NSS");
+        }
+        make_file(&root.join("etc/ssl/certs/ca-certificates.crt"), b"CA");
+
+        let res = Resolution {
+            interpreter: None,
+            libs: vec![ResolvedLib {
+                soname: "libc.so.6".into(),
+                path: libc,
+            }],
+            missing: vec![],
+        };
+        let report = stage_default_includes(&res, &root, &dest).unwrap();
+
+        // Minimal nsswitch avoids systemd NSS modules: files + dns only.
+        let nsswitch = std::fs::read_to_string(dest.join("etc/nsswitch.conf")).unwrap();
+        assert!(nsswitch.contains("files dns"), "want files+dns: {nsswitch}");
+        assert!(
+            !nsswitch.contains("mymachines"),
+            "must avoid systemd NSS: {nsswitch}"
+        );
+        // NSS modules mirror their real (temp) source dir, so compute from that.
+        let dir = res.libs[0].path.parent().unwrap();
+        assert!(under(&dest, &dir.join("libnss_dns.so.2")).exists());
+        assert!(under(&dest, &dir.join("libresolv.so.2")).exists());
+        // The CA bundle lands at its fixed image path.
+        assert!(dest.join("etc/ssl/certs/ca-certificates.crt").exists());
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    }
+
+    #[test]
+    fn missing_includes_warn_but_do_not_fail() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root"); // no CA bundle here
+        let dest = tmp.path().join("dest");
+        let libdir = root.join("usr/lib");
+        let libc = make_file(&libdir.join("libc.so.6"), b"LIBC"); // no NSS modules beside it
+
+        let res = Resolution {
+            interpreter: None,
+            libs: vec![ResolvedLib {
+                soname: "libc.so.6".into(),
+                path: libc,
+            }],
+            missing: vec![],
+        };
+        let report = stage_default_includes(&res, &root, &dest).unwrap();
+
+        // nsswitch is always written; the absent NSS modules and CA become warnings.
+        assert!(dest.join("etc/nsswitch.conf").exists());
+        assert!(report.warnings.iter().any(|w| w.contains("libnss_files")));
+        assert!(report.warnings.iter().any(|w| w.contains("CA bundle")));
     }
 }
