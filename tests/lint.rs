@@ -89,3 +89,29 @@ fn unhardened_binary_reports_missing_mitigations() {
     assert!(!h.nx, "execstack should leave the stack executable");
     assert!(!h.canary, "no stack protector => no canary");
 }
+
+#[test]
+fn fail_on_gate_controls_the_exit_code() {
+    if !cc_available() {
+        eprintln!("skipping: no C compiler");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let weak = compile(tmp.path(), "weak", &["-no-pie", "-Wl,-z,norelro"]);
+    let ss = env!("CARGO_BIN_EXE_scratchsmith");
+
+    // With the gate, a no-RELRO binary fails and names the check.
+    let gated = Command::new(ss)
+        .args(["lint", "--fail-on", "no-relro", weak.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(gated.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&gated.stderr).contains("hardening gate failed"));
+
+    // Without a gate, lint only reports and exits 0.
+    let ungated = Command::new(ss)
+        .args(["lint", weak.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(ungated.status.success());
+}

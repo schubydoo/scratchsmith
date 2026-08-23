@@ -63,6 +63,9 @@ pub enum Command {
     Lint {
         /// Path to the binary to inspect.
         binary: PathBuf,
+        /// Fail (non-zero) if a mitigation is missing; repeatable.
+        #[arg(long = "fail-on", value_enum, value_name = "CHECK")]
+        fail_on: Vec<crate::lint::Gate>,
     },
     /// Check for the external tools Scratchsmith can use (syft, cosign, ...).
     Doctor,
@@ -130,7 +133,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             Ok(())
         }
         Command::Doctor => crate::doctor::run(),
-        Command::Lint { binary } => crate::lint::run(&binary),
+        Command::Lint { binary, fail_on } => crate::lint::run(&binary, &fail_on),
     }
 }
 
@@ -199,7 +202,7 @@ mod tests {
     fn lint_parses_binary_path() {
         let cli = Cli::try_parse_from(["scratchsmith", "lint", "/bin/ls"]).unwrap();
         match cli.command {
-            Command::Lint { binary } => assert_eq!(binary, PathBuf::from("/bin/ls")),
+            Command::Lint { binary, .. } => assert_eq!(binary, PathBuf::from("/bin/ls")),
             other => panic!("expected Lint, got {other:?}"),
         }
     }

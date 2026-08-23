@@ -3,9 +3,21 @@
 //! Each property is derived from the exact ELF structure that encodes it, so the
 //! report matches what checksec-style tools show.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use goblin::elf::{dynamic, header, program_header, Elf};
 use std::path::Path;
+
+/// A hardening weakness that can gate a build (`--fail-on`). Each variant fails when
+/// the corresponding mitigation is missing (or, for `partial-relro`, not full).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Gate {
+    NoPie,
+    NoRelro,
+    PartialRelro,
+    NoNx,
+    NoCanary,
+    NoFortify,
+}
 
 /// RELRO protects the GOT: `Partial` marks the relocations read-only after load,
 /// `Full` also resolves them eagerly (BIND_NOW) so the GOT itself is read-only.
@@ -81,6 +93,35 @@ fn analyze_elf(elf: &Elf) -> Hardening {
     }
 }
 
+impl Hardening {
+    /// Which of the requested gates this binary violates.
+    pub fn violations(&self, gates: &[Gate]) -> Vec<Gate> {
+        gates
+            .iter()
+            .copied()
+            .filter(|g| self.violates(*g))
+            .collect()
+    }
+
+    fn violates(&self, gate: Gate) -> bool {
+        match gate {
+            Gate::NoPie => !self.pie,
+            Gate::NoRelro => self.relro == Relro::None,
+            Gate::PartialRelro => self.relro != Relro::Full,
+            Gate::NoNx => !self.nx,
+            Gate::NoCanary => !self.canary,
+            Gate::NoFortify => !self.fortify,
+        }
+    }
+}
+
+fn gate_name(gate: Gate) -> String {
+    use clap::ValueEnum;
+    gate.to_possible_value()
+        .map(|v| v.get_name().to_string())
+        .unwrap_or_default()
+}
+
 fn has_dynsym(elf: &Elf, pred: impl Fn(&str) -> bool) -> bool {
     elf.dynsyms
         .iter()
@@ -104,9 +145,65 @@ impl std::fmt::Display for Hardening {
     }
 }
 
-/// Analyze and print the hardening report (the `lint` subcommand).
-pub fn run(binary: &Path) -> Result<()> {
+/// Analyze and print the hardening report (the `lint` subcommand). When `gates` are
+/// given, fail (non-zero) if any is violated, naming the offending checks — without
+/// a gate, lint only reports and always succeeds.
+pub fn run(binary: &Path, gates: &[Gate]) -> Result<()> {
     let hardening = analyze(binary)?;
     println!("{hardening}");
+
+    let violations = hardening.violations(gates);
+    if !violations.is_empty() {
+        let names: Vec<String> = violations.into_iter().map(gate_name).collect();
+        bail!("hardening gate failed: {}", names.join(", "));
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strong() -> Hardening {
+        Hardening {
+            pie: true,
+            relro: Relro::Full,
+            nx: true,
+            canary: true,
+            fortify: true,
+        }
+    }
+
+    #[test]
+    fn gates_flag_only_real_weaknesses() {
+        let weak = Hardening {
+            pie: false,
+            relro: Relro::None,
+            nx: false,
+            canary: false,
+            fortify: false,
+        };
+        assert_eq!(weak.violations(&[Gate::NoRelro]), vec![Gate::NoRelro]);
+        assert!(strong()
+            .violations(&[Gate::NoRelro, Gate::NoPie])
+            .is_empty());
+    }
+
+    #[test]
+    fn partial_relro_gate_requires_full() {
+        let partial = Hardening {
+            relro: Relro::Partial,
+            ..strong()
+        };
+        assert_eq!(
+            partial.violations(&[Gate::PartialRelro]),
+            vec![Gate::PartialRelro]
+        );
+        assert!(strong().violations(&[Gate::PartialRelro]).is_empty());
+    }
+
+    #[test]
+    fn gate_names_are_kebab_case() {
+        assert_eq!(gate_name(Gate::NoRelro), "no-relro");
+    }
 }
