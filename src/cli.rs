@@ -39,6 +39,9 @@ pub enum Command {
         /// Working directory inside the image.
         #[arg(long, value_name = "DIR")]
         workdir: Option<String>,
+        /// Image user `UID[:GID]` (defaults to a non-root user; root warns).
+        #[arg(long, value_name = "USER")]
+        user: Option<String>,
     },
     /// Report a binary's ELF hardening posture (PIE/RELRO/NX).
     Lint {
@@ -69,6 +72,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             cmd,
             env,
             workdir,
+            user,
         } => {
             if no_build {
                 // clap guarantees output is present when no_build is set.
@@ -81,6 +85,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                     cmd,
                     env,
                     workdir,
+                    user,
                 };
                 let tag = crate::pack::run(&binary, smoke, &cfg)?;
                 println!("loaded image {tag}");

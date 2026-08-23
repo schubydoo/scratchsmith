@@ -52,11 +52,13 @@ const NSS_MODULES: &[&str] = &["libnss_files.so.2", "libnss_dns.so.2", "libresol
 // will extend this later.
 const MINIMAL_PASSWD: &str = "\
 root:x:0:0:root:/root:/sbin/nologin
+nonroot:x:65532:65532:nonroot:/home/nonroot:/sbin/nologin
 nobody:x:65534:65534:nobody:/nonexistent:/sbin/nologin
 ";
 
 const MINIMAL_GROUP: &str = "\
 root:x:0:
+nonroot:x:65532:
 nobody:x:65534:
 ";
 

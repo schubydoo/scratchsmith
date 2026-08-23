@@ -96,6 +96,7 @@ fn image_config_is_reflected_in_docker_inspect() {
         cmd: vec!["--version".into()],
         env: vec!["FOO=bar".into()],
         workdir: Some("/work".into()),
+        user: None,
     };
     let tag = scratchsmith::pack::run(bin, false, &cfg).expect("pack");
 
@@ -109,6 +110,8 @@ fn image_config_is_reflected_in_docker_inspect() {
     assert!(inspect("{{json .Config.Env}}").contains("FOO=bar"));
     assert!(inspect("{{json .Config.Cmd}}").contains("--version"));
     assert!(inspect("{{.Config.WorkingDir}}").contains("/work"));
+    // Non-root by default (Task 2.3).
+    assert!(inspect("{{.Config.User}}").contains("65532"));
     rmi(&tag);
 }
 

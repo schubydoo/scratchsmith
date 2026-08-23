@@ -44,6 +44,12 @@ pub fn run(binary: &Path, smoke: bool, cfg: &ImageConfig) -> Result<String> {
     let dest = work.path().join("rootfs");
     let tree = build_rootfs(binary, &dest)?;
 
+    if let Some(user) = &cfg.user {
+        if image::is_root_user(user) {
+            eprintln!("warning: --user {user} runs the image as root; the default non-root user is recommended");
+        }
+    }
+
     let tag = image_tag(binary);
     image::load_into_docker(&tree, &tag, cfg)?;
 

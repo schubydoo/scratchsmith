@@ -21,6 +21,8 @@ pub struct ImageConfig {
     pub env: Vec<String>,
     /// Working directory inside the image.
     pub workdir: Option<String>,
+    /// Image user; defaults to the non-root `nonroot` uid when unset.
+    pub user: Option<String>,
 }
 
 /// Assemble `staged` into an image and load it into the local Docker daemon as `tag`.
@@ -79,6 +81,8 @@ fn write_layer_tar(root: &Path, out: &Path) -> Result<String> {
 }
 
 const DEFAULT_PATH: &str = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+/// Distroless-style non-root uid:gid; the default so images never run as root.
+const DEFAULT_USER: &str = "65532:65532";
 
 fn image_config(default_entrypoint: &Path, diff_id: &str, cfg: &ImageConfig) -> serde_json::Value {
     let entrypoint = if cfg.entrypoint.is_empty() {
@@ -87,9 +91,11 @@ fn image_config(default_entrypoint: &Path, diff_id: &str, cfg: &ImageConfig) -> 
         cfg.entrypoint.clone()
     };
 
+    let user = cfg.user.clone().unwrap_or_else(|| DEFAULT_USER.to_string());
     let mut config = serde_json::json!({
         "Entrypoint": entrypoint,
         "Env": merged_env(&cfg.env),
+        "User": user,
     });
     if !cfg.cmd.is_empty() {
         config["Cmd"] = serde_json::json!(cfg.cmd);
@@ -106,6 +112,13 @@ fn image_config(default_entrypoint: &Path, diff_id: &str, cfg: &ImageConfig) -> 
         "rootfs": { "type": "layers", "diff_ids": [format!("sha256:{diff_id}")] },
         "history": [{ "created": "1970-01-01T00:00:00Z", "created_by": "scratchsmith" }],
     })
+}
+
+/// True when an image user string denotes root (uid 0 or `root`), so the caller can
+/// warn. Accepts the `uid`, `uid:gid`, and name forms.
+pub fn is_root_user(user: &str) -> bool {
+    let uid = user.split(':').next().unwrap_or(user);
+    uid == "0" || uid == "root"
 }
 
 // Start from the default PATH, then apply user env entries, overriding by key so a
@@ -228,6 +241,17 @@ mod tests {
             .unwrap()
             .starts_with("PATH="));
         assert!(cfg["config"]["Cmd"].is_null());
+        // Non-root by default.
+        assert_eq!(cfg["config"]["User"], "65532:65532");
+    }
+
+    #[test]
+    fn root_user_is_recognized_in_every_form() {
+        assert!(is_root_user("0"));
+        assert!(is_root_user("0:0"));
+        assert!(is_root_user("root"));
+        assert!(!is_root_user("65532"));
+        assert!(!is_root_user("nonroot"));
     }
 
     #[test]
@@ -237,6 +261,7 @@ mod tests {
             cmd: vec!["--serve".into()],
             env: vec!["FOO=bar".into()],
             workdir: Some("/work".into()),
+            user: None,
         };
         let cfg = image_config(Path::new("/opt/app"), "d", &opts);
         assert_eq!(cfg["config"]["Entrypoint"][0], "/bin/tool");
