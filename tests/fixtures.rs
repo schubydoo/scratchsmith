@@ -7,6 +7,14 @@ use scratchsmith::resolver::{read_elf_info, resolve, Sysroot};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+fn tool_available(tool: &str) -> bool {
+    Command::new(tool)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 fn cc_available() -> bool {
     Command::new("cc")
         .arg("--version")
@@ -115,4 +123,37 @@ fn resolves_a_real_binary_via_origin_rpath_and_versioned_soname() {
         "unexpected missing: {:?}",
         res.missing
     );
+}
+
+#[test]
+fn musl_binaries_are_detected_and_pack_hard_fails() {
+    if !tool_available("musl-gcc") {
+        eprintln!("skipping: no musl-gcc");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("m.c");
+    std::fs::write(&src, "int main(void){return 0;}").unwrap();
+    let app = tmp.path().join("musl_app");
+    let out = Command::new("musl-gcc")
+        .args([src.to_str().unwrap(), "-o", app.to_str().unwrap()])
+        .output()
+        .expect("run musl-gcc");
+    assert!(
+        out.status.success(),
+        "musl-gcc failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The interpreter marks it as musl, and packing must refuse loudly.
+    let info = read_elf_info(&app).unwrap();
+    assert!(
+        info.is_musl(),
+        "expected musl interpreter, got {:?}",
+        info.interpreter
+    );
+
+    let dest = tmp.path().join("rootfs");
+    let err = scratchsmith::pack::stage_only(&app, &dest, false).unwrap_err();
+    assert!(err.to_string().contains("musl"), "got: {err}");
 }

@@ -4,7 +4,7 @@
 //! This file covers Task 1.2: read the raw dynamic-linking facts from an ELF. The
 //! search-order emulation that turns sonames into real paths lands in Task 1.3.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
@@ -53,6 +53,14 @@ impl ElfInfo {
         }
     }
 
+    /// True when the interpreter is the musl loader. musl differs fundamentally from
+    /// glibc (no NSS, libc-is-the-loader), so v1 detects and rejects it.
+    pub fn is_musl(&self) -> bool {
+        self.interpreter
+            .as_deref()
+            .is_some_and(|i| i.contains("ld-musl") || i.contains("libc.musl"))
+    }
+
     // The `$PLATFORM` token value. Only the arches v1 targets are named; anything
     // else falls back to an empty string rather than guessing wrong.
     fn platform(&self) -> &'static str {
@@ -62,6 +70,19 @@ impl ElfInfo {
             _ => "",
         }
     }
+}
+
+/// Reject binaries Scratchsmith cannot correctly pack at v1. musl is fundamentally
+/// different (loader path, no NSS module system), so it is hard-failed loudly rather
+/// than packed into a subtly broken image.
+pub fn ensure_glibc(info: &ElfInfo) -> Result<()> {
+    if info.is_musl() {
+        bail!(
+            "musl binaries are out of scope; v1 targets glibc (interpreter: {})",
+            info.interpreter.clone().unwrap_or_default()
+        );
+    }
+    Ok(())
 }
 
 /// Read an ELF file and extract its dynamic-linking facts.
@@ -377,6 +398,21 @@ mod tests {
     fn non_elf_bytes_are_rejected() {
         let err = parse_elf_info(b"not an elf at all").unwrap_err();
         assert!(err.to_string().contains("ELF"));
+    }
+
+    #[test]
+    fn musl_is_detected_and_rejected() {
+        let musl = info(Some("/lib/ld-musl-x86_64.so.1"), &["libc.so"]);
+        assert!(musl.is_musl());
+        let err = ensure_glibc(&musl).unwrap_err();
+        assert!(err.to_string().contains("musl"));
+    }
+
+    #[test]
+    fn glibc_is_accepted() {
+        let glibc = info(Some("/lib64/ld-linux-x86-64.so.2"), &["libc.so.6"]);
+        assert!(!glibc.is_musl());
+        assert!(ensure_glibc(&glibc).is_ok());
     }
 
     // --- Task 1.3: ld.so search-order emulation --------------------------------

@@ -13,6 +13,9 @@ const SMOKE_TIMEOUT_SECS: u32 = 15;
 // Resolve `binary` and build its complete rootfs (libs, loader, cache, NSS/passwd
 // includes) under `dest`, optionally stripping. The shared core of every pack path.
 fn build_rootfs(binary: &Path, dest: &Path, strip: bool) -> Result<StagedTree> {
+    // Reject musl up front rather than staging a subtly broken image (Task 2.5).
+    resolver::ensure_glibc(&resolver::read_elf_info(binary)?)?;
+
     // Resolve against the host root for now; a pinned sysroot is future work.
     let resolution = resolver::resolve(binary, &Sysroot::new("/"))?;
     if !resolution.missing.is_empty() {
