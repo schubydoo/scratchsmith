@@ -18,8 +18,14 @@ pub enum Command {
         /// Path to the dynamically linked binary to pack.
         binary: PathBuf,
         /// After loading, run the image once and fail if the binary can't start.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "no_build")]
         smoke: bool,
+        /// Stage the rootfs only; build no image. Requires --output.
+        #[arg(short = 'n', long, requires = "output")]
+        no_build: bool,
+        /// Directory to stage into (with --no-build).
+        #[arg(short = 'o', long, value_name = "DIR", requires = "no_build")]
+        output: Option<PathBuf>,
     },
     /// Report a binary's ELF hardening posture (PIE/RELRO/NX).
     Lint {
@@ -41,9 +47,21 @@ pub fn run() -> Result<()> {
 // touching argv or spawning a process.
 fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Pack { binary, smoke } => {
-            let tag = crate::pack::run(&binary, smoke)?;
-            println!("loaded image {tag}");
+        Command::Pack {
+            binary,
+            smoke,
+            no_build,
+            output,
+        } => {
+            if no_build {
+                // clap guarantees output is present when no_build is set.
+                let dir = output.expect("--no-build requires --output");
+                let tree = crate::pack::stage_only(&binary, &dir)?;
+                println!("staged to {}", tree.root.display());
+            } else {
+                let tag = crate::pack::run(&binary, smoke)?;
+                println!("loaded image {tag}");
+            }
             Ok(())
         }
         // Lint and doctor are still stubbed; fail loudly rather than exit 0 so a stub
@@ -69,12 +87,49 @@ mod tests {
     fn pack_parses_binary_path_and_smoke_flag() {
         let cli = Cli::try_parse_from(["scratchsmith", "pack", "--smoke", "/bin/ls"]).unwrap();
         match cli.command {
-            Command::Pack { binary, smoke } => {
+            Command::Pack { binary, smoke, .. } => {
                 assert_eq!(binary, PathBuf::from("/bin/ls"));
                 assert!(smoke);
             }
             other => panic!("expected Pack, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn pack_parses_no_build_with_output() {
+        let cli =
+            Cli::try_parse_from(["scratchsmith", "pack", "-n", "-o", "out", "/bin/ls"]).unwrap();
+        match cli.command {
+            Command::Pack {
+                no_build, output, ..
+            } => {
+                assert!(no_build);
+                assert_eq!(output, Some(PathBuf::from("out")));
+            }
+            other => panic!("expected Pack, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_build_requires_output() {
+        // -n without -o is a usage error (clap `requires`).
+        let err = Cli::try_parse_from(["scratchsmith", "pack", "-n", "/bin/ls"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn smoke_conflicts_with_no_build() {
+        let err = Cli::try_parse_from([
+            "scratchsmith",
+            "pack",
+            "-n",
+            "-o",
+            "out",
+            "--smoke",
+            "/bin/ls",
+        ])
+        .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
     }
 
     #[test]

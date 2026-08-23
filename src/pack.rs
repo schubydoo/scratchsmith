@@ -1,19 +1,18 @@
 //! Orchestrate a pack: resolve → stage → default-includes → assemble → load.
-//! This is the glue Task 1.6 wires behind `scratchsmith pack`.
+//! This is the glue behind `scratchsmith pack`.
 
 use crate::image;
 use crate::resolver::{self, Sysroot};
-use crate::stager;
+use crate::stager::{self, StagedTree};
 use anyhow::{bail, Result};
 use std::path::Path;
 
 /// How long to let a smoke-run's entrypoint run before treating it as "started".
 const SMOKE_TIMEOUT_SECS: u32 = 15;
 
-/// Pack `binary` into a scratch image loaded in the local Docker daemon; return the
-/// tag. When `smoke` is set, run the image once afterwards and fail if the dynamic
-/// loader could not start it — the guard against a silently broken image.
-pub fn run(binary: &Path, smoke: bool) -> Result<String> {
+// Resolve `binary` and build its complete rootfs (libs, loader, cache, NSS/passwd
+// includes) under `dest`. The shared core of every pack path.
+fn build_rootfs(binary: &Path, dest: &Path) -> Result<StagedTree> {
     // Resolve against the host root for now; a pinned sysroot is future work.
     let resolution = resolver::resolve(binary, &Sysroot::new("/"))?;
     if !resolution.missing.is_empty() {
@@ -23,14 +22,27 @@ pub fn run(binary: &Path, smoke: bool) -> Result<String> {
         );
     }
 
-    let work = tempfile::tempdir()?;
-    let dest = work.path().join("rootfs");
-    let tree = stager::stage(binary, &resolution, &dest)?;
-    let report = stager::stage_default_includes(&resolution, &dest)?;
+    let tree = stager::stage(binary, &resolution, dest)?;
+    let report = stager::stage_default_includes(&resolution, dest)?;
     // The orchestrator is the app boundary, so surfacing warnings here is correct.
     for warning in &report.warnings {
         eprintln!("warning: {warning}");
     }
+    Ok(tree)
+}
+
+/// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
+pub fn stage_only(binary: &Path, out_dir: &Path) -> Result<StagedTree> {
+    build_rootfs(binary, out_dir)
+}
+
+/// Pack `binary` into a scratch image loaded in the local Docker daemon; return the
+/// tag. When `smoke` is set, run the image once afterwards and fail if the dynamic
+/// loader could not start it — the guard against a silently broken image.
+pub fn run(binary: &Path, smoke: bool) -> Result<String> {
+    let work = tempfile::tempdir()?;
+    let dest = work.path().join("rootfs");
+    let tree = build_rootfs(binary, &dest)?;
 
     let tag = image_tag(binary);
     image::load_into_docker(&tree, &tag)?;

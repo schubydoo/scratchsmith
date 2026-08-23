@@ -18,6 +18,27 @@ fn rmi(tag: &str) {
 }
 
 #[test]
+fn stage_only_writes_a_rootfs_without_docker() {
+    // The -n -o path needs no Docker: it just stages the tree to a directory.
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("rootfs");
+    let tree = scratchsmith::pack::stage_only(bin, &out).expect("stage-only");
+
+    // Binary at its entrypoint path, the loader, the cache, and the includes.
+    assert!(out
+        .join(tree.entrypoint.strip_prefix("/").unwrap())
+        .exists());
+    assert!(out.join("etc/ld.so.cache").exists(), "cache missing");
+    assert!(out.join("etc/nsswitch.conf").exists(), "nsswitch missing");
+    assert!(out.join("etc/passwd").exists(), "passwd missing");
+    assert!(
+        out.join("lib64").exists() || out.join("lib").exists(),
+        "no loader dir"
+    );
+}
+
+#[test]
 fn packs_a_binary_that_runs_in_docker() {
     if !docker_available() {
         eprintln!("skipping: no Docker daemon");
