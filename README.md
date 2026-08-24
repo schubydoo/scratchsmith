@@ -123,6 +123,36 @@ scratchsmith pack --sbom --strip --smoke ./app        # SBOM + stripped + auto s
 scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate for CI
 ```
 
+## GitHub Action
+
+Pack in CI with no shell glue. The composite action downloads the signed release binary for the
+runner, verifies it against the release checksums, and runs `pack`:
+
+```yaml
+- uses: schubydoo/scratchsmith@v0.1.2
+  with:
+    binary: ./dist/app         # your prebuilt dynamic glibc binary
+    sbom: true                 # needs syft on the runner
+    strip: true
+    smoke: true                # fail the job if the packed image can't start
+```
+
+Outputs `image` (the loaded tag), `rootfs` (with `output:`), and the full JSON `report`. To publish
+the built image, log in first and set `push`:
+
+```yaml
+- uses: docker/login-action@v3
+  with: { registry: ghcr.io, username: ${{ github.actor }}, password: ${{ secrets.GITHUB_TOKEN }} }
+- uses: schubydoo/scratchsmith@v0.1.2
+  with:
+    binary: ./dist/app
+    push: ghcr.io/${{ github.repository }}:latest
+```
+
+Pin to a release tag (`@v0.1.2`) or a commit SHA — the same supply-chain hygiene the tool itself
+practices. `version:` overrides which scratchsmith release the action runs (defaults to the pinned
+tag, else `latest`).
+
 ## Verifying releases
 
 Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
@@ -192,11 +222,12 @@ Scratchsmith owns the one input the others don't serve: **an arbitrary prebuilt 
 ## Roadmap
 
 Shipped in v0.1: signed release binaries (amd64 + arm64), cosign keyless signing + SLSA build
-provenance, a signed multi-arch GHCR image, and a versioned docs site. Next:
+provenance, a signed multi-arch GHCR image, a [GitHub Action](#github-action), and a versioned docs
+site. Next:
 
 - **Daemonless output** — pure-Rust OCI archive + direct registry push (drops the Docker
   dependency), which also unlocks signing the image `pack` produces.
-- **Distribution** — a GitHub Action and a Homebrew tap.
+- **Distribution** — a Homebrew tap.
 - **Broader inputs (later)** — a dynamic musl/Alpine backend and cross-arch resolution are
   on the long-term wishlist. No committed date.
 

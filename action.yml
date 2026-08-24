@@ -1,0 +1,195 @@
+name: Scratchsmith
+description: >-
+  Pack a prebuilt dynamic glibc Linux binary into a minimal, non-root FROM scratch OCI image —
+  no Dockerfile, no static-linking prerequisite.
+author: schubydoo
+branding:
+  icon: package
+  color: orange
+
+# Composite (not Docker): `pack` needs docker + ldconfig (and optionally syft) on the runner,
+# which the FROM scratch release image deliberately lacks. So this downloads the signed release
+# binary for the runner arch, verifies it against the release checksums, and runs `pack` on the
+# GitHub-hosted runner (which has Docker). It maps inputs to REAL pack flags only — there is no
+# image-signing or registry-push flag yet (those are roadmap), so none is exposed here.
+
+inputs:
+  binary:
+    description: Path to the dynamically linked glibc ELF binary to pack.
+    required: true
+  version:
+    description: >-
+      scratchsmith release to use — a tag like `v0.1.2`, or `latest`. Defaults to the ref this
+      action was called with when that is a version tag (so `@v0.1.2` uses the v0.1.2 CLI), else
+      `latest`.
+    required: false
+    default: ""
+  output:
+    description: If set, stage the rootfs into this directory instead of building an image (`--no-build`).
+    required: false
+    default: ""
+  user:
+    description: Image user `UID[:GID]`. Empty keeps the non-root default (65532); `0` warns.
+    required: false
+    default: ""
+  strip:
+    description: Strip symbols from the binary and libraries.
+    required: false
+    default: "false"
+  smoke:
+    description: After building, run the image once and fail if the binary can't start.
+    required: false
+    default: "false"
+  sbom:
+    description: Generate an SBOM of the packed rootfs (requires `syft` on the runner).
+    required: false
+    default: "false"
+  sbom-format:
+    description: SBOM format (`cyclonedx-json` or `spdx-json`) when `sbom` is enabled.
+    required: false
+    default: cyclonedx-json
+  ca-certs:
+    description: Add the TLS CA bundle to the image.
+    required: false
+    default: "false"
+  tz:
+    description: Add the resolved local timezone to the image.
+    required: false
+    default: "false"
+  init:
+    description: Add a minimal init (tini) as pid 1 wrapping the entrypoint.
+    required: false
+    default: "false"
+  include:
+    description: Extra libraries to force-stage (e.g. dlopen'd plugins), one soname/path per line.
+    required: false
+    default: ""
+  args:
+    description: Extra raw `pack` flags appended verbatim (escape hatch for anything not mapped above).
+    required: false
+    default: ""
+  push:
+    description: >-
+      If set to a registry ref (e.g. `ghcr.io/you/app:tag`), tag the built image as this and
+      `docker push` it. Requires a prior registry login (e.g. docker/login-action) and an image
+      build (not compatible with `output`).
+    required: false
+    default: ""
+
+outputs:
+  image:
+    description: The loaded image tag (empty when `output` staged a rootfs instead).
+    value: ${{ steps.pack.outputs.image }}
+  rootfs:
+    description: The staged rootfs directory (empty when an image was built).
+    value: ${{ steps.pack.outputs.rootfs }}
+  report:
+    description: The full pack report as JSON.
+    value: ${{ steps.pack.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Download and verify the scratchsmith binary
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+        REPO: schubydoo/scratchsmith
+      run: |
+        set -euo pipefail
+        # Runner arch → release tarball arch token.
+        case "$(uname -m)" in
+          x86_64) arch=linux-amd64 ;;
+          aarch64|arm64) arch=linux-arm64 ;;
+          *) echo "::error::unsupported runner arch $(uname -m); scratchsmith ships linux amd64/arm64"; exit 1 ;;
+        esac
+        # Version precedence: explicit input → the calling ref (if a version tag) → latest.
+        ver="${INPUT_VERSION:-}"
+        if [ -z "$ver" ] || [ "$ver" = "latest" ]; then
+          case "$ACTION_REF" in
+            v[0-9]*.[0-9]*.[0-9]*) ver="$ACTION_REF" ;;
+            *) ver="" ;;
+          esac
+        fi
+        if [ -z "$ver" ]; then
+          ver="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | jq -r .tag_name)"
+        fi
+        [ -n "$ver" ] && [ "$ver" != "null" ] || { echo "::error::could not resolve a scratchsmith release version"; exit 1; }
+        ver="${ver#v}" # normalise to the bare X.Y.Z used inside the tarball name
+        tarball="scratchsmith-v${ver}-${arch}.tar.gz"
+        base="https://github.com/${REPO}/releases/download/v${ver}"
+        tmp="$(mktemp -d)"
+        echo "Downloading ${tarball} (scratchsmith v${ver})"
+        curl -fsSL -o "${tmp}/${tarball}" "${base}/${tarball}"
+        curl -fsSL -o "${tmp}/checksums.txt" "${base}/checksums.txt"
+        # Verify integrity against the release's signed checksums manifest.
+        ( cd "$tmp" && sha256sum --ignore-missing --strict -c checksums.txt )
+        tar -xzf "${tmp}/${tarball}" -C "$tmp"
+        bindir="$tmp/scratchsmith-v${ver}-${arch}"
+        chmod +x "${bindir}/scratchsmith"
+        echo "$bindir" >> "$GITHUB_PATH"
+    - name: Pack
+      id: pack
+      shell: bash
+      env:
+        IN_BINARY: ${{ inputs.binary }}
+        IN_OUTPUT: ${{ inputs.output }}
+        IN_USER: ${{ inputs.user }}
+        IN_STRIP: ${{ inputs.strip }}
+        IN_SMOKE: ${{ inputs.smoke }}
+        IN_SBOM: ${{ inputs.sbom }}
+        IN_SBOM_FORMAT: ${{ inputs.sbom-format }}
+        IN_CA_CERTS: ${{ inputs.ca-certs }}
+        IN_TZ: ${{ inputs.tz }}
+        IN_INIT: ${{ inputs.init }}
+        IN_INCLUDE: ${{ inputs.include }}
+        IN_ARGS: ${{ inputs.args }}
+      run: |
+        set -euo pipefail
+        [ -n "$IN_BINARY" ] || { echo "::error::input 'binary' is required"; exit 1; }
+        # Preflight: fail loud with a hint rather than a confusing pack error.
+        if [ "$IN_SBOM" = "true" ] && ! command -v syft >/dev/null 2>&1; then
+          echo "::error::sbom: true needs syft on the runner — add a step that installs it (e.g. anchore/sbom-action's installer) before this action."
+          exit 1
+        fi
+        args=("pack" "$IN_BINARY" "--format" "json")
+        [ -n "$IN_OUTPUT" ] && args+=("--no-build" "--output" "$IN_OUTPUT")
+        [ -n "$IN_USER" ] && args+=("--user" "$IN_USER")
+        [ "$IN_STRIP" = "true" ] && args+=("--strip")
+        [ "$IN_SMOKE" = "true" ] && args+=("--smoke")
+        [ "$IN_CA_CERTS" = "true" ] && args+=("--ca-certs")
+        [ "$IN_TZ" = "true" ] && args+=("--tz")
+        [ "$IN_INIT" = "true" ] && args+=("--init")
+        if [ "$IN_SBOM" = "true" ]; then
+          args+=("--sbom" "--sbom-format" "$IN_SBOM_FORMAT")
+        fi
+        # One --include per non-empty line.
+        while IFS= read -r lib; do
+          [ -n "$lib" ] && args+=("--include" "$lib")
+        done <<< "$IN_INCLUDE"
+        # Verbatim escape-hatch flags (word-split intentionally).
+        # shellcheck disable=SC2206
+        [ -n "$IN_ARGS" ] && args+=($IN_ARGS)
+        scratchsmith "${args[@]}" | tee report.json
+        report="$(cat report.json)"
+        image="$(jq -r '.tag // empty' report.json)"
+        rootfs="$(jq -r '.staged_dir // empty' report.json)"
+        {
+          echo "image=$image"
+          echo "rootfs=$rootfs"
+          echo "report<<SSEOF"
+          echo "$report"
+          echo "SSEOF"
+        } >> "$GITHUB_OUTPUT"
+    - name: Push the built image
+      if: ${{ inputs.push != '' }}
+      shell: bash
+      env:
+        IN_PUSH: ${{ inputs.push }}
+        IMAGE: ${{ steps.pack.outputs.image }}
+      run: |
+        set -euo pipefail
+        [ -n "$IMAGE" ] || { echo "::error::push was requested but no image was built (did you set 'output'?)"; exit 1; }
+        docker tag "$IMAGE" "$IN_PUSH"
+        docker push "$IN_PUSH"

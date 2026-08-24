@@ -1,0 +1,61 @@
+name: Action self-test
+
+# Exercises action.yml end-to-end: it downloads the latest RELEASED scratchsmith binary and
+# packs a real dynamic glibc binary (both the image path and the --output rootfs path). This
+# validates the action wiring, not the PR's own build (the action ships releases, not HEAD).
+# Runs only when the action or this workflow changes — it needs a published release to download.
+
+on:
+  pull_request:
+    paths:
+      - action.yml
+      - .github/workflows/action-selftest.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: action-selftest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # /usr/bin/id is a dynamic glibc binary that touches NSS — a fair smoke of the
+      # whole resolve → stage → assemble path.
+      - name: Pack a system binary → image
+        id: image
+        uses: ./
+        with:
+          binary: /usr/bin/id
+          strip: "true"
+          smoke: "true"
+      - name: Assert the image loaded and runs
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          set -euo pipefail
+          [ -n "$IMAGE" ] || { echo "::error::action produced no image output"; exit 1; }
+          docker image inspect "$IMAGE" >/dev/null
+          docker run --rm "$IMAGE"        # prints uid=65532 (non-root default)
+          echo "packed and ran $IMAGE"
+      - name: Pack the same binary → rootfs only (no daemon)
+        id: rootfs
+        uses: ./
+        with:
+          binary: /usr/bin/id
+          output: ./staged
+      - name: Assert the rootfs staged
+        env:
+          ROOTFS: ${{ steps.rootfs.outputs.rootfs }}
+        run: |
+          set -euo pipefail
+          [ -n "$ROOTFS" ] || { echo "::error::action produced no rootfs output"; exit 1; }
+          test -e "$ROOTFS/usr/bin/id"    # staged at its verbatim path
+          echo "staged rootfs at $ROOTFS"
