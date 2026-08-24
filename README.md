@@ -14,6 +14,10 @@ symlinks), stages the glibc pieces nothing else remembers (NSS modules, a workin
 `nsswitch.conf`, minimal `passwd`/`group`), and assembles a **non-root** image with
 reproducible layers.
 
+<p align="center">
+  <img src="docs/demo/scratchsmith.svg" alt="Scratchsmith packing a dynamic glibc binary into a 2.5 MB FROM scratch image with an SBOM and a smoke-run, then running it" width="720">
+</p>
+
 > **Status — v0.1, pre-release.** The core works end to end (see [What works
 > today](#what-works-today)). Two honest caveats up front:
 > - **Not yet published.** No `cargo install` / Homebrew / release binaries yet — [build from
