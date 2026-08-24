@@ -345,6 +345,12 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_handles_completions_without_a_subcommand() {
+        let cli = Cli::try_parse_from(["scratchsmith", "--completions", "fish"]).unwrap();
+        assert!(dispatch(cli).is_ok());
+    }
+
+    #[test]
     fn completions_emit_a_script_for_each_supported_shell() {
         for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
             let mut buf = Vec::new();
