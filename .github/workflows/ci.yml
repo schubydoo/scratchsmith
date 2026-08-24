@@ -150,15 +150,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends zsh fish
-      - run: cargo build --release
+      # Debug build: completion output is byte-identical to release, and this
+      # job is on the required-checks critical path — reuse the warm rust-cache
+      # instead of the slow LTO release profile.
+      - run: cargo build
       - name: Generate and source completions
         run: |
-          bin=target/release/scratchsmith
+          bin=target/debug/scratchsmith
           "$bin" --completions bash > ss.bash
           "$bin" --completions zsh  > _scratchsmith
           "$bin" --completions fish > ss.fish
           bash --noprofile --norc -c 'source ss.bash' && echo "bash: sourced OK"
-          zsh -c 'autoload -Uz compinit; compinit -u; fpath=($PWD $fpath); source ./_scratchsmith' && echo "zsh: sourced OK"
+          # Set fpath BEFORE compinit (it reads fpath when it runs).
+          zsh -c 'fpath=($PWD $fpath); autoload -Uz compinit; compinit -u; source ./_scratchsmith' && echo "zsh: sourced OK"
           fish -c 'source ss.fish' && echo "fish: sourced OK"
 
   ci-required-checks:

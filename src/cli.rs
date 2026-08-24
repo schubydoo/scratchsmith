@@ -2,7 +2,7 @@
 
 use anyhow::{bail, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use clap_complete::{generate, Shell};
+use clap_complete::generate;
 use std::path::PathBuf;
 
 /// Output format for the pack report.
@@ -12,13 +12,33 @@ pub enum Format {
     Json,
 }
 
+/// Shells Scratchsmith generates completion scripts for. Deliberately just the
+/// three we document and exercise in CI, so `--help` lists exactly what is
+/// supported rather than clap_complete's wider (untested) set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum Shell {
+    Bash,
+    Zsh,
+    Fish,
+}
+
+impl Shell {
+    fn generator(self) -> clap_complete::Shell {
+        match self {
+            Shell::Bash => clap_complete::Shell::Bash,
+            Shell::Zsh => clap_complete::Shell::Zsh,
+            Shell::Fish => clap_complete::Shell::Fish,
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "scratchsmith", version, about, long_about = None)]
 // A completion dump needs no subcommand, so the subcommand is optional; an empty
 // invocation still prints help rather than doing nothing.
 #[command(arg_required_else_help = true)]
 pub struct Cli {
-    /// Emit a shell completion script to stdout and exit (bash, zsh, fish, ...).
+    /// Emit a shell completion script to stdout and exit (bash, zsh, fish).
     #[arg(long, value_enum, value_name = "SHELL")]
     pub completions: Option<Shell>,
     #[command(subcommand)]
@@ -115,13 +135,17 @@ pub fn run() -> Result<()> {
 fn write_completions<W: std::io::Write>(shell: Shell, out: &mut W) {
     let mut cmd = Cli::command();
     let name = cmd.get_name().to_string();
-    generate(shell, &mut cmd, name, out);
+    generate(shell.generator(), &mut cmd, name, out);
 }
 
 // Split from `run` so tests drive dispatch directly on a parsed `Cli`, without
 // touching argv or spawning a process.
 fn dispatch(cli: Cli) -> Result<()> {
     if let Some(shell) = cli.completions {
+        // Fail loud rather than silently dropping a subcommand passed alongside.
+        if cli.command.is_some() {
+            bail!("--completions cannot be combined with a subcommand");
+        }
         write_completions(shell, &mut std::io::stdout());
         return Ok(());
     }
@@ -345,9 +369,15 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_handles_completions_without_a_subcommand() {
-        let cli = Cli::try_parse_from(["scratchsmith", "--completions", "fish"]).unwrap();
-        assert!(dispatch(cli).is_ok());
+    fn completions_with_a_subcommand_is_an_error() {
+        // Fail loud instead of silently dropping the subcommand. This also keeps
+        // the dispatch completions branch tested without spraying a script onto
+        // the test's stdout (generation itself is covered by the buffer test).
+        let cli = Cli::try_parse_from(["scratchsmith", "--completions", "fish", "doctor"]).unwrap();
+        let err = dispatch(cli).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("cannot be combined with a subcommand"));
     }
 
     #[test]
@@ -358,7 +388,7 @@ mod tests {
             let script = String::from_utf8(buf).unwrap();
             assert!(
                 script.contains("scratchsmith"),
-                "{shell} completion script missing the binary name"
+                "{shell:?} completion script missing the binary name"
             );
         }
     }
