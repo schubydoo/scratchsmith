@@ -1,5 +1,7 @@
 site_name: Scratchsmith
-site_description: Daemonless supply-chain packager for prebuilt dynamic Linux binaries.
+# Lead the SEO/unfurl meta description with what ships today: it travels detached
+# from the "not daemonless yet" caveat. The visible tagline stays "daemonless".
+site_description: Package a prebuilt dynamic Linux binary into a minimal, non-root FROM scratch OCI image — no Dockerfile, no static linking.
 site_url: https://schubydoo.github.io/scratchsmith/
 site_author: schubydoo
 copyright: MIT
