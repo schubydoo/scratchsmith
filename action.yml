@@ -126,9 +126,11 @@ runs:
         # Verify integrity against the release's signed checksums manifest.
         ( cd "$tmp" && sha256sum --ignore-missing --strict -c checksums.txt )
         tar -xzf "${tmp}/${tarball}" -C "$tmp"
-        bindir="$tmp/scratchsmith-v${ver}-${arch}"
-        chmod +x "${bindir}/scratchsmith"
-        echo "$bindir" >> "$GITHUB_PATH"
+        # Install to a fixed runner path the pack step reads directly. Avoids writing
+        # to GITHUB_PATH (zizmor github-env) and needs no cross-step env sharing.
+        dest="${RUNNER_TEMP}/scratchsmith-bin"
+        mkdir -p "$dest"
+        install -m 0755 "$tmp/scratchsmith-v${ver}-${arch}/scratchsmith" "$dest/scratchsmith"
     - name: Pack
       id: pack
       shell: bash
@@ -171,7 +173,7 @@ runs:
         # Verbatim escape-hatch flags (word-split intentionally).
         # shellcheck disable=SC2206
         [ -n "$IN_ARGS" ] && args+=($IN_ARGS)
-        scratchsmith "${args[@]}" | tee report.json
+        "${RUNNER_TEMP}/scratchsmith-bin/scratchsmith" "${args[@]}" | tee report.json
         report="$(cat report.json)"
         image="$(jq -r '.tag // empty' report.json)"
         rootfs="$(jq -r '.staged_dir // empty' report.json)"
