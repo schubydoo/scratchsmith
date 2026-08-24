@@ -1,17 +1,35 @@
 #!/usr/bin/env bash
-# The scripted session asciinema records. Prints each command behind a prompt,
-# pauses briefly so the cast reads at human speed, then runs it. Kept honest:
+# The scripted session asciinema records. Types each command behind a prompt at
+# human speed, pauses so the output can be read, then runs it. Kept honest:
 # SBOM + strip + smoke + size + a real run — no signing (not shipped yet).
+#
+# Pacing knobs (seconds): CHAR = per-keystroke, PRE = pause after typing before
+# running, POST = pause after the command's output so it can be read. Bump these
+# to slow the cast down; keep record.sh's --idle-time-limit >= POST or the pause
+# is clipped.
 set -euo pipefail
 
 PROMPT='\033[1;32m$\033[0m '
+CHAR=0.055
+PRE=0.7
+POST=2.2
+
+type_cmd() {
+    local line=$1 i
+    printf '%b' "$PROMPT"
+    for ((i = 0; i < ${#line}; i++)); do
+        printf '%s' "${line:i:1}"
+        sleep "$CHAR"
+    done
+    printf '\n'
+}
 
 demo() {
-    printf '%b%s\n' "$PROMPT" "$1"
-    sleep 0.8
+    type_cmd "$1"
+    sleep "$PRE"
     bash -c "$1"
     printf '\n'
-    sleep 1.2
+    sleep "$POST"
 }
 
 demo 'file greet'
