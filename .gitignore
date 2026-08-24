@@ -1,3 +1,7 @@
 /scratch/
 /target/
 /site/
+
+# Python bytecode (scripts/bump_packaging.py)
+__pycache__/
+*.pyc
