@@ -9,11 +9,10 @@ symlinks), stages the glibc pieces nothing else remembers (NSS modules, a workin
 `nsswitch.conf`, minimal `passwd`/`group`), and assembles a **non-root** image with reproducible
 layers.
 
-!!! warning "Status — v0.1, pre-release"
-    The core works end to end, but two honest caveats up front:
+!!! info "Status — v0.1"
+    The core works end to end, and releases are signed and published (see [Install](#install)).
+    One honest caveat up front:
 
-    - **Not yet published.** No `cargo install` / Homebrew / release binaries yet — build from
-      source (below).
     - **Not daemonless *yet*.** Today the finished image is handed to your local Docker daemon via
       `docker load` (or staged to a directory with `--no-build`, which needs no daemon at all).
       The pure-Rust daemonless sink — OCI archive + direct registry push — is the next milestone.
@@ -48,12 +47,28 @@ a hardening report, a non-root image, and no Dockerfile.
 | Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`) | ✅ |
 | Config file (`scratchsmith.toml`), JSON output (`--format json`) | ✅ |
 | Shell completions — `--completions <bash\|zsh\|fish>` | ✅ |
+| **Signed releases** — amd64 + arm64 binaries, cosign-signed checksums + SLSA provenance, signed multi-arch GHCR image | ✅ ([verify](#verifying-releases)) |
 | Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc first; a musl backend is a future goal) |
-| Daemonless OCI archive + registry push, image **signing**, SLSA provenance | ⏳ planned |
+| Daemonless OCI archive + registry push, and signing the image `pack` **produces** | ⏳ planned |
 
 ## Install
 
-Not yet published. Build from source (Rust **1.96+**):
+**Download a release binary** — Linux **amd64** or **arm64** — from the
+[latest release](https://github.com/schubydoo/scratchsmith/releases/latest). Check the signature
+and provenance first (see [Verifying releases](#verifying-releases)):
+
+```sh
+tar -xzf scratchsmith-*-linux-amd64.tar.gz   # or -linux-arm64
+./scratchsmith-*/scratchsmith --version
+```
+
+Or pull the signed **container image**:
+
+```sh
+docker pull ghcr.io/schubydoo/scratchsmith:latest
+```
+
+Or **build from source** (Rust **1.96+**):
 
 ```sh
 git clone https://github.com/schubydoo/scratchsmith
@@ -84,6 +99,29 @@ Add supply-chain output, verify it starts, and shrink it:
 ```sh
 scratchsmith pack --sbom --strip --smoke ./app        # SBOM + stripped + auto smoke-run
 scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate for CI
+```
+
+## Verifying releases
+
+Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
+Replace `<ver>` with the bare version you downloaded — e.g. `0.1.0`, no `v` (the tarball adds the
+`v` prefix; the image tag doesn't).
+
+```sh
+# SLSA provenance — the simplest, ref-agnostic check
+gh attestation verify scratchsmith-v<ver>-linux-amd64.tar.gz --repo schubydoo/scratchsmith
+
+# Checksums signature (one cosign signature covers every tarball through its hash)
+cosign verify-blob checksums.txt \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/schubydoo/scratchsmith/\.github/workflows/knope-release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+sha256sum -c checksums.txt        # then check the tarball hashes
+
+# The signed GHCR image
+cosign verify ghcr.io/schubydoo/scratchsmith:<ver> \
+  --certificate-identity-regexp '^https://github\.com/schubydoo/scratchsmith/\.github/workflows/release\.yml@refs/tags/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 ## How it works
