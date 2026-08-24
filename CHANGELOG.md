@@ -6,6 +6,18 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0:
 breaking changes bump the minor).
+## 0.1.1 (2026-08-24)
+
+### Fixes
+
+#### Docs — install from signed releases, verification steps, and post-launch status ([#25](https://github.com/schubydoo/scratchsmith/pull/25))
+
+The README and docs site now cover installing from the signed release binaries (amd64/arm64) and
+the GHCR image, add a **Verifying releases** section (`cosign` + `gh attestation verify`), and
+correct the pre-release "not published / signing planned" wording now that v0.1 ships signed,
+published releases. The remaining "signing" gap — signing the image `pack` itself produces — is
+called out precisely (it needs the daemonless registry push).
+
 ## 0.1.0 (2026-08-24)
 
 ### Features
