@@ -164,9 +164,11 @@ jobs:
           # `gh pr comment` are load-bearing fallbacks. --max-turns is a review-QUALITY
           # setting (reading a multi-file diff + anchoring findings + one grouped review
           # costs many turns); 150 keeps headroom inside the 30-min job timeout.
+          # --model: Opus 4.8 (maintainer preference; also less API contention than
+          # opus-5, which was erroring these reviews on transient Anthropic faults).
           claude_args: |
             --max-turns 150
-            --model claude-opus-5
+            --model claude-opus-4-8
             --add-dir pr-head
             --add-dir ${{ steps.rules.outputs.dir }}
             --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr review:*),Bash(gh pr comment:*),Bash(gh api:*),mcp__github_inline_comment__create_inline_comment,mcp__github_comment__update_claude_comment,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
