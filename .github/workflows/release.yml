@@ -147,8 +147,12 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${assets[@]}" --clobber
             # knope creates the release, but own the pre-release bit here so a
-            # `-rc`/`-beta` tag is marked even if it was created without it.
-            [ -n "$prerelease" ] && gh release edit "$TAG" --prerelease
+            # `-rc`/`-beta` tag is marked even if it was created without it. Use a
+            # full `if` (not `[ … ] && …`): as the script's last command, a false
+            # `[ -n "" ]` would otherwise become the step's non-zero exit.
+            if [ -n "$prerelease" ]; then
+              gh release edit "$TAG" --prerelease
+            fi
           else
             gh release create "$TAG" "${assets[@]}" --title "$TAG" --generate-notes $prerelease
           fi
