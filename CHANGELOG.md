@@ -6,6 +6,26 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0:
 breaking changes bump the minor).
+## 0.1.2 (2026-08-24)
+
+### Features
+
+#### GitHub Action — `pack` in CI with no shell glue ([#27](https://github.com/schubydoo/scratchsmith/pull/27))
+
+A composite `schubydoo/scratchsmith` action downloads the signed release binary for the runner,
+verifies it against the release checksums, and runs `pack`. Inputs map to the real pack flags —
+`sbom`, `strip`, `user` (non-root by default), `output`, `smoke`, `ca-certs`/`tz`/`init`, `include`,
+plus an `args` escape hatch — and it exposes `image`, `rootfs`, and the full JSON `report` as
+outputs. An optional `push` input tags and pushes the built image (after your own registry login).
+
+```yaml
+- uses: schubydoo/scratchsmith@v0.1.2
+  with:
+    binary: ./dist/app
+    strip: true
+    smoke: true
+```
+
 ## 0.1.1 (2026-08-24)
 
 ### Fixes
