@@ -1,3 +1,8 @@
+# Generated artifacts: the demo SVG is machine-emitted terminal output whose text
+# wraps mid-word across <tspan>s (e.g. "Size" → "Siz"+"e"), which trips the checker.
+[files]
+extend-exclude = ["docs/demo/scratchsmith.svg"]
+
 # Allow-list for crate/tech names that look like typos.
 [default.extend-words]
 flate = "flate" # flate2 (the gzip crate) tokenizes to "flate"
