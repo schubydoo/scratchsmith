@@ -101,6 +101,35 @@ scratchsmith pack --sbom --strip --smoke ./app        # SBOM + stripped + auto s
 scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate for CI
 ```
 
+## GitHub Action
+
+Pack in CI with no shell glue. The composite action downloads the signed release binary for the
+runner, verifies it against the release checksums, and runs `pack`:
+
+```yaml
+- uses: schubydoo/scratchsmith@v0.1.2
+  with:
+    binary: ./dist/app         # your prebuilt dynamic glibc binary
+    sbom: true                 # needs syft on the runner
+    strip: true
+    smoke: true                # fail the job if the packed image can't start
+```
+
+Outputs `image` (the loaded tag), `rootfs` (with `output:`), and the full JSON `report`. To publish
+the built image, log in first and set `push`:
+
+```yaml
+- uses: docker/login-action@v3
+  with: { registry: ghcr.io, username: ${{ github.actor }}, password: ${{ secrets.GITHUB_TOKEN }} }
+- uses: schubydoo/scratchsmith@v0.1.2
+  with:
+    binary: ./dist/app
+    push: ghcr.io/${{ github.repository }}:latest
+```
+
+Pin to a release tag (`@v0.1.2`) or a commit SHA. `version:` overrides which scratchsmith release
+the action runs (defaults to the pinned tag, else `latest`).
+
 ## Verifying releases
 
 Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
