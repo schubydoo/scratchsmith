@@ -55,10 +55,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Pinned at the DECLARED MSRV (Cargo.toml rust-version = 1.96), not stable.
-      # Renovate is told not to bump this by the schubydoo/renovate-config preset
-      # (the `rust` dep is disabled for this file in scratchsmith.json).
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # 1.96.0
+      # The action ref is `# stable` like every other job (same pinned SHA); the
+      # Rust TOOLCHAIN is pinned at the declared MSRV via the `toolchain:` input
+      # below (Cargo.toml rust-version = 1.96). Renovate is told not to bump that
+      # toolchain by the schubydoo/renovate-config preset (`rust` dep off for this
+      # file). The comment must match the SHA, not the toolchain — a `# 1.96.0`
+      # label here points at the stable-branch commit, not the 1.96.0 tag
+      # (zizmor ref-version-mismatch).
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: 1.96.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
