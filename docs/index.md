@@ -104,11 +104,12 @@ scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate f
 ## Verifying releases
 
 Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
-Replace `<ver>` with the release you downloaded.
+Replace `<ver>` with the bare version you downloaded — e.g. `0.1.0`, no `v` (the tarball adds the
+`v` prefix; the image tag doesn't).
 
 ```sh
 # SLSA provenance — the simplest, ref-agnostic check
-gh attestation verify scratchsmith-<ver>-linux-amd64.tar.gz --repo schubydoo/scratchsmith
+gh attestation verify scratchsmith-v<ver>-linux-amd64.tar.gz --repo schubydoo/scratchsmith
 
 # Checksums signature (one cosign signature covers every tarball through its hash)
 cosign verify-blob checksums.txt \
