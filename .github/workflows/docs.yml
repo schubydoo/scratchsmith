@@ -1,0 +1,126 @@
+name: Docs
+
+# Build the MkDocs (Material) site and publish it to GitHub Pages via `mike`,
+# which keeps a version selector on the gh-pages branch:
+#   - every push to main updates the rolling `dev` snapshot (unreleased docs)
+#   - every release tag (vX.Y.Z) publishes an immutable `X.Y` snapshot AND
+#     moves the `latest` alias (the site default) to it, so visitors land on
+#     the newest release: the version they can actually install. `dev` is
+#     opt-in via the selector and carries a version-warning banner.
+# Pull requests only build with --strict (link/config validation), never deploy.
+#
+# NOTE: action refs are pinned to full commit SHAs (repo Actions policy +
+# Scorecard). pip caching is deliberately NOT used (a cache-poisoning vector in
+# a publishing workflow; zizmor). The deploy job pushes via an explicit tokened
+# remote, not persisted checkout credentials (zizmor artipacked). Python deps are
+# hash-pinned: docs/requirements.txt is a uv/pip-compile lockfile installed with
+# --require-hashes, so every transitive package is verified (Scorecard
+# Pinned-Dependencies). Bump via docs/requirements.in + recompile (Renovate).
+#
+# MANUAL ONE-TIME STEP: set the repo's GitHub Pages source to the `gh-pages`
+# branch (Settings → Pages) after the first deploy creates it.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  pull_request:
+    paths:
+      - docs/**
+      - overrides/**
+      - mkdocs.yml
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+    inputs:
+      promote_to_latest:
+        description: "One-time: point `latest`/default at an already-deployed release (X.Y, e.g. 0.1). Leave empty for a normal deploy."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize deploys (they push to gh-pages); do not cancel a push mid-deploy.
+  group: docs-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (strict)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.x"
+      - run: pip install --require-hashes -r docs/requirements.txt
+      - run: mkdocs build --strict
+
+  deploy:
+    name: deploy (mike)
+    needs: build
+    # Never on PRs (fork tokens are read-only anyway); same-repo only; and only
+    # for main or a release tag. Otherwise a manual workflow_dispatch from a
+    # feature branch would fall through and overwrite `latest` with branch docs.
+    if: >-
+      github.event_name != 'pull_request'
+      && github.repository == 'schubydoo/scratchsmith'
+      && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # mike commits/pushes the built site to gh-pages
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # mike needs the gh-pages history to update it
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.x"
+      - run: pip install --require-hashes -r docs/requirements.txt
+      - name: Configure git + push auth
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch origin gh-pages --depth=1 || true
+      - name: Deploy
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          PROMOTE: ${{ github.event.inputs.promote_to_latest }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PROMOTE:-}" ]; then
+            # One-time manual re-point: make an already-deployed release the site
+            # default under the `latest` alias. Use `mike alias` (NOT `mike
+            # deploy`, which would rebuild main's docs into the release dir and
+            # clobber the immutable snapshot). Validate X.Y first.
+            case "$PROMOTE" in
+              [0-9]*.[0-9]*) ;;
+              *) echo "::error::promote_to_latest must be an X.Y version (e.g. 0.1)"; exit 1 ;;
+            esac
+            mike delete --push latest 2>/dev/null || true
+            mike alias --push --update-aliases "$PROMOTE" latest
+            mike set-default --push latest
+          elif [ "$REF_TYPE" = "tag" ]; then
+            # A release vX.Y.Z publishes an immutable "X.Y" snapshot and moves
+            # `latest` (the site default) onto it. Assumes linear releases; a
+            # backport to an old line would wrongly claim `latest` (re-point
+            # manually via promote_to_latest in that case).
+            version="${REF_NAME#v}"
+            mike deploy --push --update-aliases "${version%.*}" latest
+            mike set-default --push latest
+          else
+            # A push to main updates the rolling `dev` snapshot. It deliberately
+            # never touches `latest`/default, so unreleased changes are not what
+            # users see by default; the version-warning banner flags `dev`.
+            mike deploy --push --update-aliases dev
+          fi

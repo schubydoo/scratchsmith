@@ -1,0 +1,76 @@
+site_name: Scratchsmith
+site_description: Daemonless supply-chain packager for prebuilt dynamic Linux binaries.
+site_url: https://schubydoo.github.io/scratchsmith/
+site_author: schubydoo
+copyright: MIT
+
+repo_url: https://github.com/schubydoo/scratchsmith
+repo_name: schubydoo/scratchsmith
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+# A logo/favicon is added once the project mark exists.
+theme:
+  name: material
+  custom_dir: overrides
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.top
+    - navigation.sections
+    - navigation.tracking
+    - toc.follow
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+# Re-listing `search` is required: declaring any plugin disables the implicit default.
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences:
+      custom_fences:
+        # Render ```mermaid fenced blocks client-side (Material bundles mermaid.js).
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+extra:
+  version:
+    # The version selector is driven by mike (see .github/workflows/docs.yml).
+    provider: mike
+    default: latest
+
+nav:
+  - Home: index.md
+  # Governance docs stay canonical on GitHub.
+  - Contributing: https://github.com/schubydoo/scratchsmith/blob/main/CONTRIBUTING.md
+  - Security: https://github.com/schubydoo/scratchsmith/blob/main/SECURITY.md
