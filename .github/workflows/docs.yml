@@ -114,7 +114,9 @@ jobs:
             # (a delete would publish a broken interim state where the default
             # names a `latest` that no longer exists).
             mike alias --push --update-aliases "$PROMOTE" latest
-            mike set-default --push latest
+            # --template carries OG/social meta on the root redirect stub so the
+            # bare site URL unfurls with the card (mike's default stub has none).
+            mike set-default --push --template mike/redirect.html latest
           elif [ "$REF_TYPE" = "tag" ]; then
             # A release vX.Y.Z publishes an immutable "X.Y" snapshot and moves
             # `latest` (the site default) onto it. Assumes linear releases; a
@@ -122,7 +124,9 @@ jobs:
             # manually via promote_to_latest in that case).
             version="${REF_NAME#v}"
             mike deploy --push --update-aliases "${version%.*}" latest
-            mike set-default --push latest
+            # --template carries OG/social meta on the root redirect stub so the
+            # bare site URL unfurls with the card (mike's default stub has none).
+            mike set-default --push --template mike/redirect.html latest
           else
             # A push to main updates the rolling `dev` snapshot. It deliberately
             # never touches `latest`/default, so unreleased changes are not what

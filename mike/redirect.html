@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!--
+    Custom `mike set-default` redirect stub for the site root
+    (https://schubydoo.github.io/scratchsmith/). mike's default template is a bare
+    "Redirecting" page with no metadata, so sharing the root URL previews as
+    "Redirecting" with no image — social scrapers read this stub and do NOT follow
+    the JS/meta redirect to the default version. Mirror the homepage title +
+    social card here so the bare root unfurls correctly. Wired in via docs.yml
+    `mike set-default --template mike/redirect.html`. URLs are absolute and point
+    at the `latest` alias, which resolves to the newest release once one is cut;
+    before the first release the image 404s (only `dev/` exists) while title +
+    description still unfurl — it self-heals on release.
+  -->
+  <title>Scratchsmith — daemonless supply-chain packager for dynamic Linux binaries</title>
+  <meta name="description" content="Package a prebuilt dynamic Linux binary into a minimal, non-root FROM scratch OCI image — no Dockerfile, no static linking.">
+  <link rel="canonical" href="https://schubydoo.github.io/scratchsmith/latest/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Scratchsmith">
+  <meta property="og:title" content="Scratchsmith — daemonless supply-chain packager for dynamic Linux binaries">
+  <meta property="og:description" content="Package a prebuilt dynamic Linux binary into a minimal, non-root FROM scratch OCI image — no Dockerfile, no static linking.">
+  <meta property="og:image" content="https://schubydoo.github.io/scratchsmith/latest/assets/og-card.png">
+  <meta property="og:url" content="https://schubydoo.github.io/scratchsmith/latest/">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Scratchsmith — daemonless supply-chain packager for dynamic Linux binaries">
+  <meta name="twitter:description" content="Package a prebuilt dynamic Linux binary into a minimal, non-root FROM scratch OCI image — no Dockerfile, no static linking.">
+  <meta name="twitter:image" content="https://schubydoo.github.io/scratchsmith/latest/assets/og-card.png">
+  <noscript>
+    <meta http-equiv="refresh" content="1; url={{href}}" />
+  </noscript>
+  <script>
+    window.location.replace(
+      "{{href}}" + window.location.search + window.location.hash
+    );
+  </script>
+</head>
+<body>
+  Redirecting to <a href="{{href}}">{{href}}</a>…
+</body>
+</html>
