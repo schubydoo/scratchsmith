@@ -53,7 +53,13 @@ a hardening report, a non-root image, and no Dockerfile.
 
 ## Install
 
-**Download a release binary** — Linux **amd64** or **arm64** — from the
+**Homebrew** (Linux — scratchsmith packs Linux ELF binaries):
+
+```sh
+brew install schubydoo/scratchsmith/scratchsmith
+```
+
+Or **download a release binary** — Linux **amd64** or **arm64** — from the
 [latest release](https://github.com/schubydoo/scratchsmith/releases/latest). Check the signature
 and provenance first (see [Verifying releases](#verifying-releases)):
 
