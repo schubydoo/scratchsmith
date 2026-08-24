@@ -1,0 +1,149 @@
+name: Packaging manifest bump
+
+# Keep the in-repo Homebrew formula (Formula/scratchsmith.rb) in lockstep with published
+# releases. Homebrew has no auto-update, so without this `brew install` keeps serving
+# whatever version the committed formula pins, frozen until someone bumps it by hand.
+#
+# On every published release we regenerate the formula's version/url/sha256 from the
+# release's cosign-verified checksums.txt (via scripts/bump_packaging.py) and open a PR
+# that auto-merges once CI is green. We DON'T push to main (branch-protected) and knope
+# is deliberately NOT the mechanism — it runs at release-prep time, before the binaries
+# (and therefore the hashes) exist. The `packaging-bump/*` PR merge then fires
+# tap-sync-trigger.yml, which dispatches the tap to mirror the new formula.
+#
+# The formula is absent-safe: bump_packaging.py no-ops if Formula/scratchsmith.rb isn't
+# on main yet, so this can merge ahead of the Homebrew packaging and light it up later.
+#
+# Trust root: checksums.txt is cosign-verified against checksums.txt.sigstore.json
+# (keyless, bound to knope-release.yml) BEFORE the script trusts it.
+on:
+  release:
+    types: [published]
+  # Manual re-run if a release published but this didn't fire. Empty tag = latest.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to sync the formula to (e.g. v0.1.3). Empty = latest."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packaging-bump-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Sync the Homebrew formula to the release
+    # workflow_dispatch is restricted to the default branch so a dispatch from an
+    # arbitrary ref can't run this write-capable job (release events already use main's
+    # workflow file).
+    if: ${{ github.event_name == 'release' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # App token (NOT GITHUB_TOKEN): a PR opened by the default token would not trigger
+      # its CI, and the default token can't push a branch under branch protection.
+      - name: Mint scratchsmith-ci App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.SCRATCHSMITH_CI_CLIENT_ID }}
+          private-key: ${{ secrets.SCRATCHSMITH_CI_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Verify App token was minted
+        if: ${{ steps.app-token.outputs.token == '' }}
+        run: |
+          echo "::error::scratchsmith-ci App token mint produced an empty token; check SCRATCHSMITH_CI_CLIENT_ID / SCRATCHSMITH_CI_APP_PRIVATE_KEY and the App installation."
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Resolve + STRICTLY validate the tag before it reaches a shell. The raw value is
+      # passed via env (never inlined) and must be vMAJOR.MINOR.PATCH, so a malformed or
+      # hostile tag can't inject.
+      - name: Resolve target release tag
+        id: tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "release" ]; then
+            tag="$RELEASE_TAG"
+          elif [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq '.tagName')"
+          fi
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::refusing to act on non-release tag '$tag' (expected vMAJOR.MINOR.PATCH)"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Fetch + verify the release checksums, then regenerate the formula
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          tmp="$(mktemp -d)"
+          curl -fsSL -o "${tmp}/checksums.txt" "${base}/checksums.txt"
+          curl -fsSL -o "${tmp}/checksums.txt.sigstore.json" "${base}/checksums.txt.sigstore.json"
+          # Authenticity before trust: verify the keyless signature over checksums.txt.
+          cosign verify-blob "${tmp}/checksums.txt" \
+            --bundle "${tmp}/checksums.txt.sigstore.json" \
+            --certificate-identity-regexp "^https://github\.com/${GITHUB_REPOSITORY}/\.github/workflows/knope-release\.yml@" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          python3 scripts/bump_packaging.py "$VERSION" "${tmp}/checksums.txt"
+      - name: Open (or update) the auto-merging bump PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Formula/scratchsmith.rb; then
+            echo "Formula already at ${VERSION} — nothing to bump."
+            exit 0
+          fi
+          branch="packaging-bump/${TAG}"
+          case "$branch" in
+            packaging-bump/v[0-9]*) ;;
+            *) echo "::error::refusing to push to unexpected branch '$branch'"; exit 1 ;;
+          esac
+          git config user.name "scratchsmith-ci[bot]"
+          git config user.email "scratchsmith-ci[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add Formula/scratchsmith.rb
+          git commit -m "chore: bump Homebrew formula to ${VERSION}"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${branch}"
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --head "$branch" --json number --jq 'length')"
+          if [ "$existing" = "0" ]; then
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+              --title "chore: bump Homebrew formula to ${VERSION}" \
+              --label no-changelog \
+              --body "Regenerated \`Formula/scratchsmith.rb\` from the cosign-verified \`checksums.txt\` of **${TAG}**. Auto-generated by packaging-bump.yml; its merge triggers the tap sync. Don't hand-edit."
+          else
+            echo "PR already open for $branch — pushed the updated formula to it."
+          fi
+          # Native auto-merge (squash): the deterministic, CI-verified bump lands
+          # hands-free once required checks pass — no manual merge per release. The
+          # ruleset's checks/thread gates still apply; auto-merge only drops the click.
+          # Best-effort: a disabled setting or unresolved thread just leaves it for a
+          # manual merge, so never fail the job.
+          if ! gh pr merge --repo "$GITHUB_REPOSITORY" --auto --squash "$branch"; then
+            echo "::warning::could not enable auto-merge on $branch — merge it manually."
+          fi

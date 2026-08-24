@@ -66,7 +66,13 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 
 ## Install
 
-**Download a release binary** — Linux **amd64** or **arm64** — from the
+**Homebrew** (Linux — scratchsmith packs Linux ELF binaries):
+
+```sh
+brew install schubydoo/scratchsmith/scratchsmith
+```
+
+Or **download a release binary** — Linux **amd64** or **arm64** — from the
 [latest release](https://github.com/schubydoo/scratchsmith/releases/latest). Check the signature
 and provenance first (see [Verifying releases](#verifying-releases)):
 
@@ -222,14 +228,13 @@ Scratchsmith owns the one input the others don't serve: **an arbitrary prebuilt 
 ## Roadmap
 
 Shipped in v0.1: signed release binaries (amd64 + arm64), cosign keyless signing + SLSA build
-provenance, a signed multi-arch GHCR image, a [GitHub Action](#github-action), and a versioned docs
-site. Next:
+provenance, a signed multi-arch GHCR image, a [GitHub Action](#github-action), a Homebrew tap, and a
+versioned docs site. Next:
 
 - **Daemonless output** — pure-Rust OCI archive + direct registry push (drops the Docker
   dependency), which also unlocks signing the image `pack` produces.
-- **Distribution** — a Homebrew tap.
 - **Broader inputs (later)** — a dynamic musl/Alpine backend and cross-arch resolution are
-  on the long-term wishlist. No committed date.
+  on the long-term wishlist. No committed date. (`crates.io` publish is also deferred.)
 
 ## Contributing
 
