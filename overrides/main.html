@@ -19,3 +19,34 @@
   You're reading docs for an unreleased or older version of Scratchsmith.
   <a href="{{ '../' ~ base_url }}"><strong>Go to the latest release →</strong></a>
 {% endblock %}
+
+{# Open Graph / Twitter card meta so shared links unfurl with the social card.
+   mike rewrites config.site_url to the *versioned* base at deploy time, so the
+   image just lives at "<site_url>/assets/og-card.png" — normalise the trailing
+   slash (the configured root keeps it; mike drops it) before appending, or it
+   double-stacks. #}
+{% block extrahead %}
+  {{ super() }}
+  {% set _base = config.site_url[:-1] if config.site_url.endswith('/') else config.site_url %}
+  {% set social_image = _base ~ "/assets/og-card.png" %}
+  {% if page and page.is_homepage %}
+    {% set social_title = _homepage_title %}
+  {% elif page and page.title %}
+    {% set social_title = page.title ~ " · " ~ config.site_name %}
+  {% else %}
+    {% set social_title = config.site_name %}
+  {% endif %}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ config.site_name }}">
+  <meta property="og:title" content="{{ social_title }}">
+  <meta property="og:description" content="{{ config.site_description }}">
+  <meta property="og:image" content="{{ social_image }}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Scratchsmith">
+  {% if page and page.canonical_url %}<meta property="og:url" content="{{ page.canonical_url }}">{% endif %}
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ social_title }}">
+  <meta name="twitter:description" content="{{ config.site_description }}">
+  <meta name="twitter:image" content="{{ social_image }}">
+{% endblock %}
