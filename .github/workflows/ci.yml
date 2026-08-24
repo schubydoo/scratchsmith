@@ -135,11 +135,37 @@ jobs:
       - name: Deny
         run: cargo deny check
 
+  completions:
+    # Generate the shell completion scripts and prove each one sources cleanly
+    # under its own shell (Task 3.6 AC). bash ships on the runner; install zsh/fish.
+    name: shell completions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install zsh and fish
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zsh fish
+      - run: cargo build --release
+      - name: Generate and source completions
+        run: |
+          bin=target/release/scratchsmith
+          "$bin" --completions bash > ss.bash
+          "$bin" --completions zsh  > _scratchsmith
+          "$bin" --completions fish > ss.fish
+          bash --noprofile --norc -c 'source ss.bash' && echo "bash: sourced OK"
+          zsh -c 'autoload -Uz compinit; compinit -u; fpath=($PWD $fpath); source ./_scratchsmith' && echo "zsh: sourced OK"
+          fish -c 'source ss.fish' && echo "fish: sourced OK"
+
   ci-required-checks:
     # The single status branch protection requires. Add new required jobs to needs.
     name: ci required checks passed
     if: always()
-    needs: [lint, msrv, test, coverage, supply-chain]
+    needs: [lint, msrv, test, coverage, supply-chain, completions]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
