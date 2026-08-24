@@ -52,7 +52,7 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 | Symbol strip (`--strip`), size report, smoke-run (`--smoke`) | ✅ |
 | Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`) | ✅ |
 | Config file (`scratchsmith.toml`), JSON output (`--format json`) | ✅ |
-| musl/Alpine binaries | ❌ rejected loudly (glibc only, by design) |
+| Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc first; a musl backend is a future goal) |
 | Daemonless OCI archive + registry push, image **signing**, SLSA provenance | ⏳ planned (see [Roadmap](#roadmap)) |
 
 ## Install
@@ -108,9 +108,12 @@ Scratchsmith owns the one input the others don't serve: **an arbitrary prebuilt 
 
 ## Limitations
 
-- **glibc / host-arch only.** musl/Alpine binaries are detected by their interpreter and
-  **rejected with a clear error** before anything is staged — never a silently broken image.
-  No cross-arch resolution.
+- **glibc / host-arch only (for now).** Dynamic musl/Alpine binaries are detected by their
+  interpreter and **rejected with a clear error** before anything is staged — never a silently
+  broken image. This is a v1 scope choice, not a permanent boundary: musl uses a different loader
+  model and has no NSS, so it needs its own resolver backend (a possible future addition).
+  (A *static* musl binary is a single self-contained file and packs fine today.) No cross-arch
+  resolution yet.
 - **`dlopen` is best-effort.** Libraries loaded at runtime via `dlopen` are invisible to static
   analysis; Scratchsmith *warns* when it sees `dlopen` and lets you force-stage them with
   `--include <lib>`. It is not a blanket "any binary just works" guarantee.
@@ -140,6 +143,8 @@ Distribution and supply-chain identity are v0.1/v0.2 goals, not afterthoughts:
 - **Signing & provenance** — cosign keyless signing and SLSA build provenance on release.
 - **Distribution** — signed release binaries, a GitHub Action, and a Homebrew tap.
 - **Docs** — a versioned documentation site.
+- **Broader inputs (later)** — a dynamic musl/Alpine backend and cross-arch resolution are
+  on the long-term wishlist. No committed date.
 
 ## Contributing
 
