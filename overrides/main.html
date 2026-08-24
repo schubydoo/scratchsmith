@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{# The bare site_name ("Scratchsmith") is short for SERP/social; give the
+   homepage a descriptive title. Subpages keep Material's "<page> - <site_name>". #}
+{%- set _homepage_title = "Scratchsmith — daemonless supply-chain packager for dynamic Linux binaries" -%}
+{% block htmltitle %}
+  {% if page and page.is_homepage %}
+    <title>{{ _homepage_title }}</title>
+  {% else %}
+    {{ super() }}
+  {% endif %}
+{% endblock %}
+
+{# Version-warning banner. Material (via extra.version.provider: mike) renders it
+   on any version that is NOT the `latest` alias — the rolling `dev`/main build or
+   a superseded release — so readers on unreleased docs know they are ahead of what
+   they can install. Wording is direction-neutral. #}
+{% block outdated %}
+  You're reading docs for an unreleased or older version of Scratchsmith.
+  <a href="{{ '../' ~ base_url }}"><strong>Go to the latest release →</strong></a>
+{% endblock %}
