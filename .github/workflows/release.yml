@@ -1,12 +1,23 @@
 name: Release
 
 # On a `v*` tag: build static-musl release binaries for Linux amd64 + arm64
-# (cross-compiled via zig), package each as a .tar.gz, checksum them, and
-# publish a GitHub Release. Task 3.1.
+# (cross-compiled via zig), package each as a .tar.gz, checksum them, keyless-sign
+# the checksums with cosign, attach a SLSA build-provenance attestation, publish a
+# GitHub Release, and push a signed multi-arch FROM scratch image to GHCR.
+# Tasks 3.1, 3.2, 3.3.
 #
-# Scope note: this is deliberately just binaries + checksums. Keyless cosign
-# signing (Task 3.2), SLSA provenance (Task 3.3), a GHCR image, and a Homebrew
-# tap (Task 3.5) slot in here later. crates.io publishing is deferred.
+# Verifying a downloaded release:
+#   cosign verify-blob checksums.txt \
+#     --bundle checksums.txt.sigstore.json \
+#     --certificate-identity-regexp '^https://github\.com/schubydoo/scratchsmith/\.github/workflows/release\.yml@refs/tags/' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+#   sha256sum -c checksums.txt        # then check the tarball hashes
+#   gh attestation verify <tarball> --repo schubydoo/scratchsmith   # SLSA provenance
+#
+# Still to slot in here: a Homebrew tap (Task 3.5, deferred — needs the tap repo).
+# crates.io is deferred. A functional (non-scratch) runnable image is a planned
+# follow-up. A release-artifact SBOM wants a source-based generator (Cargo.lock),
+# not syft over a stripped static binary — tracked separately.
 #
 # knope-release (when enabled) creates the GitHub Release with CHANGELOG notes
 # first; this run then attaches assets to it (create-or-update). A manually
@@ -97,7 +108,7 @@ jobs:
           retention-days: 1
 
   release:
-    name: Checksum + GitHub Release
+    name: Sign + provenance + GitHub Release
     needs: binaries
     # Only publish for a real tag; workflow_dispatch stops after building.
     if: github.ref_type == 'tag'
@@ -105,12 +116,16 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write # create the release + upload assets
+      id-token: write # Sigstore keyless (Fulcio OIDC) + provenance
+      attestations: write # actions/attest-build-provenance
     steps:
       - name: Fetch built tarballs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
-      - name: Assemble + checksum
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Assemble, checksum, and sign
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -124,6 +139,28 @@ jobs:
           [ "$count" -eq 2 ] || { echo "::error::expected 2 tarballs, found ${count}"; exit 1; }
           cd release
           sha256sum scratchsmith-"${TAG}"-* > checksums.txt
+          # Keyless-sign the checksums (GitHub OIDC → Fulcio). One signature over
+          # checksums.txt transitively covers every tarball through its hash.
+          cosign sign-blob --bundle checksums.txt.sigstore.json checksums.txt --yes
+          # Verify what we just signed with the exact command the header documents:
+          # a bundle cosign cannot read would otherwise ship green and only surface
+          # as a user bug report. This tag-only path is the only run that exercises it.
+          cosign verify-blob checksums.txt \
+            --bundle checksums.txt.sigstore.json \
+            --certificate-identity-regexp "^https://github\.com/${GITHUB_REPOSITORY}/\.github/workflows/release\.yml@refs/tags/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      - name: SLSA build provenance
+        id: provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: release/checksums.txt
+      - name: Attach provenance as a release asset
+        env:
+          BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          [ -s "$BUNDLE" ] || { echo "::error::no provenance bundle produced"; exit 1; }
+          cp "$BUNDLE" release/scratchsmith.intoto.jsonl
       # Publish via the runner's built-in gh CLI (zizmor superfluous-actions).
       # Create-or-update: knope-release may have created the Release (with
       # CHANGELOG notes) already, so attach assets; otherwise create it.
@@ -139,6 +176,8 @@ jobs:
           assets=(
             release/scratchsmith-"${TAG}"-*.tar.gz
             release/checksums.txt
+            release/checksums.txt.sigstore.json
+            release/scratchsmith.intoto.jsonl
           )
           # A tag with a hyphen (v1.0.0-rc.1, -beta …) is a SemVer pre-release:
           # mark it so it does not become the repo's "Latest release".
@@ -156,3 +195,99 @@ jobs:
           else
             gh release create "$TAG" "${assets[@]}" --title "$TAG" --generate-notes $prerelease
           fi
+
+  image:
+    name: Signed multi-arch image → GHCR
+    needs: binaries
+    # Only on a real tag (not the workflow_dispatch dry-run).
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write # push to GHCR (registry provenance/SBOM go here via BuildKit)
+      id-token: write # cosign keyless
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch built tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+      - name: Lay out dist/ for the Dockerfile
+        # The FROM scratch image consumes just the two static binaries; the
+        # Dockerfile selects dist/${TARGETARCH}/scratchsmith. Extract each from
+        # its release tarball.
+        run: |
+          set -euo pipefail
+          mkdir -p dist/amd64 dist/arm64 /tmp/x
+          tar -xzf artifacts/dist-linux-amd64/scratchsmith-*-linux-amd64.tar.gz -C /tmp/x
+          tar -xzf artifacts/dist-linux-arm64/scratchsmith-*-linux-arm64.tar.gz -C /tmp/x
+          cp /tmp/x/scratchsmith-*-linux-amd64/scratchsmith dist/amd64/scratchsmith
+          cp /tmp/x/scratchsmith-*-linux-arm64/scratchsmith dist/arm64/scratchsmith
+          chmod +x dist/amd64/scratchsmith dist/arm64/scratchsmith
+          # Assert each binary is the arch its path claims — a tarball/glob mix-up
+          # would otherwise sign and publish a wrong-arch image. arm64 can't be run
+          # here without emulation, so this is its only gate.
+          file dist/amd64/scratchsmith | grep -q 'x86-64' || { echo "::error::amd64 binary is not x86-64"; exit 1; }
+          file dist/arm64/scratchsmith | grep -q 'aarch64' || { echo "::error::arm64 binary is not aarch64"; exit 1; }
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # flavor.latest defaults to `auto`: :latest is emitted for a stable
+          # semver tag and suppressed for a pre-release, so no explicit raw rule.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - name: Smoke-run the amd64 image before publishing
+        # Build the amd64 leg locally (load, no push) and actually run the binary,
+        # so a broken image can't be pushed, tagged :latest, and signed. buildx
+        # caches the layers, so the multi-arch build below reuses them.
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: scratchsmith:smoke
+      - name: Run the smoke image
+        run: |
+          set -euo pipefail
+          docker run --rm scratchsmith:smoke --version
+          docker run --rm scratchsmith:smoke doctor >/dev/null
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          # No RUN in the Dockerfile (COPY-only), so multi-arch needs no QEMU.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true # SLSA provenance attestation in the registry
+          sbom: true
+      - name: Sign and verify the image (keyless)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}"
+          # --recursive also signs each per-platform manifest, not just the index,
+          # so a consumer pinning a per-arch digest can still verify.
+          cosign sign --yes --recursive "$ref"
+          # Prove the signature is verifiable now, not via a later bug report.
+          cosign verify "$ref" \
+            --certificate-identity-regexp "^https://github\.com/${GITHUB_REPOSITORY}/\.github/workflows/release\.yml@refs/tags/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null

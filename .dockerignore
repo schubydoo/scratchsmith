@@ -1,0 +1,5 @@
+# The release image only needs the prebuilt binaries laid out under dist/ by the
+# release workflow. Keep everything else out of the build context.
+*
+!Dockerfile
+!dist
