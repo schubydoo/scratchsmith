@@ -1,0 +1,158 @@
+name: Release
+
+# On a `v*` tag: build static-musl release binaries for Linux amd64 + arm64
+# (cross-compiled via zig), package each as a .tar.gz, checksum them, and
+# publish a GitHub Release. Task 3.1.
+#
+# Scope note: this is deliberately just binaries + checksums. Keyless cosign
+# signing (Task 3.2), SLSA provenance (Task 3.3), a GHCR image, and a Homebrew
+# tap (Task 3.5) slot in here later. crates.io publishing is deferred.
+#
+# knope-release (when enabled) creates the GitHub Release with CHANGELOG notes
+# first; this run then attaches assets to it (create-or-update). A manually
+# pushed tag with knope off still works — this run creates the Release itself.
+#
+# workflow_dispatch builds both arches without publishing, so the cross-compile
+# can be smoke-tested off a branch before a real tag is cut.
+#
+# NOTE: action refs are pinned to full commit SHAs (repo Actions policy +
+# Scorecard Pinned-Dependencies); Renovate keeps them current. No Actions cache
+# in this artifact-publishing workflow (cache-poisoning vector; zizmor).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Releases must not cancel each other: a half-published release is worse than
+  # two serialized runs.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  binaries:
+    name: Build ${{ matrix.name }} binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # One target's failure must not cancel the others: a release run should
+      # show every arch's result.
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            name: linux-amd64
+          - target: aarch64-unknown-linux-musl
+            name: linux-arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          targets: ${{ matrix.target }}
+      # zig is the cross linker for both musl targets. mlugg/setup-zig is the
+      # maintained successor to goto-bus-stop/setup-zig.
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.13.0
+          use-cache: false
+      # Pinned prebuilt binary (not `cargo install`, which resolves to whatever
+      # is newest at run time): cargo-zigbuild tracks zig's breaking CLI, so a
+      # skew would only surface at tag time. Renovate bumps the pin in a PR.
+      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
+        with:
+          tool: cargo-zigbuild@0.23.0
+      - name: Build (static musl via zig)
+        run: cargo zigbuild --release --target ${{ matrix.target }} --bin scratchsmith
+      - name: Package tarball
+        env:
+          NAME: ${{ matrix.name }}
+          TARGET: ${{ matrix.target }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # On a tag REF_NAME is the tag (v0.1.0); on workflow_dispatch it is the
+          # branch, which just labels the dry-run artifact. Slashes in a branch
+          # name (ci/release-pipeline) must not become path separators or split
+          # the artifact glob — flatten them.
+          tag="${REF_NAME//\//-}"
+          pkg="scratchsmith-${tag}-${NAME}"
+          mkdir -p "dist/${pkg}"
+          cp "target/${TARGET}/release/scratchsmith" "dist/${pkg}/scratchsmith"
+          cp LICENSE README.md "dist/${pkg}/"
+          tar -C dist -czf "dist/${pkg}.tar.gz" "${pkg}"
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-${{ matrix.name }}
+          path: dist/scratchsmith-*-${{ matrix.name }}.tar.gz
+          # Fail loudly on a name mismatch instead of uploading nothing and
+          # letting the release publish a subset of arches.
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Checksum + GitHub Release
+    needs: binaries
+    # Only publish for a real tag; workflow_dispatch stops after building.
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the release + upload assets
+    steps:
+      - name: Fetch built tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+      - name: Assemble + checksum
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          # download-artifact laid each tarball under artifacts/dist-<name>/.
+          find artifacts -name 'scratchsmith-*.tar.gz' -exec cp {} release/ \;
+          # Guard against a half-published release: the matrix ships two arches,
+          # so anything else means an upload went missing upstream.
+          count=$(find release -name 'scratchsmith-*.tar.gz' | wc -l)
+          [ "$count" -eq 2 ] || { echo "::error::expected 2 tarballs, found ${count}"; exit 1; }
+          cd release
+          sha256sum scratchsmith-"${TAG}"-* > checksums.txt
+      # Publish via the runner's built-in gh CLI (zizmor superfluous-actions).
+      # Create-or-update: knope-release may have created the Release (with
+      # CHANGELOG notes) already, so attach assets; otherwise create it.
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Intentional glob expansion into the array (file paths we control).
+          # shellcheck disable=SC2206
+          assets=(
+            release/scratchsmith-"${TAG}"-*.tar.gz
+            release/checksums.txt
+          )
+          # A tag with a hyphen (v1.0.0-rc.1, -beta …) is a SemVer pre-release:
+          # mark it so it does not become the repo's "Latest release".
+          prerelease=""
+          case "$TAG" in *-*) prerelease="--prerelease" ;; esac
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+            # knope creates the release, but own the pre-release bit here so a
+            # `-rc`/`-beta` tag is marked even if it was created without it. Use a
+            # full `if` (not `[ … ] && …`): as the script's last command, a false
+            # `[ -n "" ]` would otherwise become the step's non-zero exit.
+            if [ -n "$prerelease" ]; then
+              gh release edit "$TAG" --prerelease
+            fi
+          else
+            gh release create "$TAG" "${assets[@]}" --title "$TAG" --generate-notes $prerelease
+          fi
