@@ -42,7 +42,10 @@ permissions:
 
 concurrency:
   # Serialize deploys (they push to gh-pages); do not cancel a push mid-deploy.
-  group: docs-${{ github.ref }}
+  # PRs key on their own ref; every deploying ref (main→dev, a release tag, a
+  # dispatch) shares ONE group, so the main-push dev deploy and the tag-push
+  # release deploy that a release fires back-to-back can't race on gh-pages.
+  group: docs-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
   cancel-in-progress: false
 
 jobs:
@@ -107,7 +110,9 @@ jobs:
               [0-9]*.[0-9]*) ;;
               *) echo "::error::promote_to_latest must be an X.Y version (e.g. 0.1)"; exit 1 ;;
             esac
-            mike delete --push latest 2>/dev/null || true
+            # `--update-aliases` re-points an existing `latest`; no delete first
+            # (a delete would publish a broken interim state where the default
+            # names a `latest` that no longer exists).
             mike alias --push --update-aliases "$PROMOTE" latest
             mike set-default --push latest
           elif [ "$REF_TYPE" = "tag" ]; then

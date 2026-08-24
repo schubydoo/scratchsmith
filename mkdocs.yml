@@ -10,6 +10,12 @@ edit_uri: edit/main/docs/
 
 docs_dir: docs
 
+# The docs toolchain lockfile lives under docs/ for the workflow's `paths:`
+# filter, but it's build tooling, not site content — keep it out of the build.
+exclude_docs: |
+  requirements.in
+  requirements.txt
+
 # A logo/favicon is added once the project mark exists.
 theme:
   name: material
