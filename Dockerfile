@@ -7,8 +7,8 @@
 # push is a future milestone. Note that `scratchsmith pack` needs docker,
 # ldconfig, syft, and strip at runtime, none of which exist inside a scratch
 # image — so `pack` will not work here, but `--version`, `lint`, `doctor`, and
-# `--completions` do. A fuller, runnable image is tracked at
-# https://github.com/schubydoo/scratchsmith/issues/12
+# `--completions` do. A fuller, runnable image (toolchain base + a mounted Docker
+# socket, so `pack` works) is a planned follow-up.
 #
 # The release workflow lays out dist/<arch>/scratchsmith before building. To
 # build locally:

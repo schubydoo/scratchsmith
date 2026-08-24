@@ -15,8 +15,8 @@ name: Release
 #   gh attestation verify <tarball> --repo schubydoo/scratchsmith   # SLSA provenance
 #
 # Still to slot in here: a Homebrew tap (Task 3.5, deferred — needs the tap repo).
-# crates.io is deferred. A functional (non-scratch) runnable image is tracked at
-# issue 12. A release-artifact SBOM wants a source-based generator (Cargo.lock),
+# crates.io is deferred. A functional (non-scratch) runnable image is a planned
+# follow-up. A release-artifact SBOM wants a source-based generator (Cargo.lock),
 # not syft over a stripped static binary — tracked separately.
 #
 # knope-release (when enabled) creates the GitHub Release with CHANGELOG notes
