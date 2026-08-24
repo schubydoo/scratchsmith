@@ -47,6 +47,7 @@ a hardening report, a non-root image, and no Dockerfile.
 | Symbol strip (`--strip`), size report, smoke-run (`--smoke`) | ✅ |
 | Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`) | ✅ |
 | Config file (`scratchsmith.toml`), JSON output (`--format json`) | ✅ |
+| Shell completions — `--completions <bash\|zsh\|fish>` | ✅ |
 | Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc first; a musl backend is a future goal) |
 | Daemonless OCI archive + registry push, image **signing**, SLSA provenance | ⏳ planned |
 
