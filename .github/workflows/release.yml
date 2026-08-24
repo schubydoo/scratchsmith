@@ -44,8 +44,10 @@ concurrency:
 jobs:
   image:
     name: Signed multi-arch image → GHCR
-    # Only meaningful for a tag with a published release to source binaries from.
-    if: github.ref_type == 'tag'
+    # Run on a tag push, or a workflow_dispatch — but a dispatch from a branch has
+    # no release to source binaries from, so the guard step below fails it loud
+    # (skipping the job would report a misleading green "success").
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -53,6 +55,15 @@ jobs:
       packages: write # push to GHCR (registry provenance/SBOM go here via BuildKit)
       id-token: write # cosign keyless
     steps:
+      # Fail loud on a branch dispatch (the default in the "Run workflow" picker):
+      # this job sources binaries from a published release, which only exists for a
+      # tag. Silently skipping would look green while doing nothing — the opposite of
+      # this project's "fail loud, never silently" invariant.
+      - name: Require a tag ref
+        if: github.ref_type != 'tag'
+        run: |
+          echo "::error::Dispatch Release FROM A TAG — the 'Use workflow from' picker lists tags. Running it from a branch has no published release to pack into the image."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
