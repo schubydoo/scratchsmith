@@ -8,8 +8,12 @@
 #
 # The two halves live in .github/workflows/knope-{prepare,release}.yml and are
 # gated OFF behind the `KNOPE_ENABLED` repo variable until the flow is proven.
-# knope only ORCHESTRATES (version PR + changelog + tag/GitHub Release); the signed
-# build (a later Sprint-3 release.yml) runs on the pushed `v*` tag.
+# knope-prepare opens the version/changelog PR; knope-release BUILDS + cosign-signs
+# the release tarballs and stages them into dist/release-assets/ BEFORE `knope
+# release` runs. With `assets` set (below), that step creates the GitHub Release as
+# a DRAFT, uploads every asset, then un-drafts (publishes) — the git tag is created
+# only at publish, so the release locks IMMUTABLE with its assets already attached.
+# The pushed tag then triggers release.yml (the signed multi-arch GHCR image).
 #
 # Pre-1.0: knope maps a breaking change on a 0.x line to a MINOR bump, never to 1.0.
 # To cut 0.x → 1.0.0 deliberately, dispatch prepare-release with override_version.
@@ -22,6 +26,17 @@ versioned_files = [
   { path = "Cargo.toml", regex = '(?m)^version = "(?<version>\d+\.\d+\.\d+)"' },
 ]
 changelog = "CHANGELOG.md"
+
+# The signed release tarballs + checksums + SLSA provenance are built and staged
+# into dist/release-assets/ by knope-release.yml BEFORE `knope release` runs. With
+# `assets` set, the Release step creates the GitHub Release as a DRAFT, uploads
+# every file under this glob, and only THEN publishes (creating the tag) — so the
+# release is immutable WITH its assets. A fail-closed gate in knope-release.yml
+# asserts the full signed set is present before knope runs, so a missing arch aborts
+# before any publish instead of shipping a partial release. knope errors only on a
+# globbed file that vanished, not on one that was never built — the gate is what
+# guarantees completeness.
+assets = "dist/release-assets/*"
 
 extra_changelog_sections = [
   { name = "Security", types = ["security"] },

@@ -1,34 +1,32 @@
 name: Release
 
-# On a `v*` tag: build static-musl release binaries for Linux amd64 + arm64
-# (cross-compiled via zig), package each as a .tar.gz, checksum them, keyless-sign
-# the checksums with cosign, attach a SLSA build-provenance attestation, publish a
-# GitHub Release, and push a signed multi-arch FROM scratch image to GHCR.
-# Tasks 3.1, 3.2, 3.3.
+# On a `v*` tag: build and push a signed multi-arch FROM scratch image to GHCR.
+# The static binaries it packs come from the release that knope-release.yml just
+# published — the image contains the exact signed, immutable release artifacts,
+# not a fresh rebuild.
 #
-# Verifying a downloaded release:
-#   cosign verify-blob checksums.txt \
-#     --bundle checksums.txt.sigstore.json \
+# The release tarballs + checksums + cosign signature + SLSA provenance are built,
+# signed, staged, and PUBLISHED by knope-release.yml (which runs BEFORE the tag
+# exists, so the GitHub Release locks immutable with its assets). knope creates the
+# tag at publish as the scratchsmith-ci App; that tag push triggers this workflow.
+#
+# Verifying the GHCR image (identity is THIS workflow on the tag ref):
+#   cosign verify ghcr.io/schubydoo/scratchsmith:<version> \
 #     --certificate-identity-regexp '^https://github\.com/schubydoo/scratchsmith/\.github/workflows/release\.yml@refs/tags/' \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
-#   sha256sum -c checksums.txt        # then check the tarball hashes
-#   gh attestation verify <tarball> --repo schubydoo/scratchsmith   # SLSA provenance
+# Verifying a downloaded release TARBALL is documented in knope-release.yml.
 #
-# Still to slot in here: a Homebrew tap (Task 3.5, deferred — needs the tap repo).
+# Still to slot in: a Homebrew tap (Task 3.5, deferred — needs the tap repo).
 # crates.io is deferred. A functional (non-scratch) runnable image is a planned
-# follow-up. A release-artifact SBOM wants a source-based generator (Cargo.lock),
-# not syft over a stripped static binary — tracked separately.
+# follow-up.
 #
-# knope-release (when enabled) creates the GitHub Release with CHANGELOG notes
-# first; this run then attaches assets to it (create-or-update). A manually
-# pushed tag with knope off still works — this run creates the Release itself.
-#
-# workflow_dispatch builds both arches without publishing, so the cross-compile
-# can be smoke-tested off a branch before a real tag is cut.
+# workflow_dispatch is a manual fallback to (re)build the image for an existing
+# release — dispatch it FROM THE TAG (the "Use workflow from" picker lists tags),
+# so github.ref_name is the tag whose assets are downloaded.
 #
 # NOTE: action refs are pinned to full commit SHAs (repo Actions policy +
-# Scorecard Pinned-Dependencies); Renovate keeps them current. No Actions cache
-# in this artifact-publishing workflow (cache-poisoning vector; zizmor).
+# Scorecard Pinned-Dependencies); Renovate keeps them current. No Actions cache in
+# this artifact-publishing workflow (cache-poisoning vector; zizmor).
 
 on:
   push:
@@ -39,191 +37,45 @@ permissions:
   contents: read
 
 concurrency:
-  # Releases must not cancel each other: a half-published release is worse than
-  # two serialized runs.
+  # Image pushes must not cancel each other.
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  binaries:
-    name: Build ${{ matrix.name }} binary
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      # One target's failure must not cancel the others: a release run should
-      # show every arch's result.
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-musl
-            name: linux-amd64
-          - target: aarch64-unknown-linux-musl
-            name: linux-arm64
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-        with:
-          targets: ${{ matrix.target }}
-      # zig is the cross linker for both musl targets. mlugg/setup-zig is the
-      # maintained successor to goto-bus-stop/setup-zig.
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
-        with:
-          version: 0.13.0
-          use-cache: false
-      # Pinned prebuilt binary (not `cargo install`, which resolves to whatever
-      # is newest at run time): cargo-zigbuild tracks zig's breaking CLI, so a
-      # skew would only surface at tag time. Renovate bumps the pin in a PR.
-      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
-        with:
-          tool: cargo-zigbuild@0.23.0
-      - name: Build (static musl via zig)
-        run: cargo zigbuild --release --target ${{ matrix.target }} --bin scratchsmith
-      - name: Package tarball
-        env:
-          NAME: ${{ matrix.name }}
-          TARGET: ${{ matrix.target }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          # On a tag REF_NAME is the tag (v0.1.0); on workflow_dispatch it is the
-          # branch, which just labels the dry-run artifact. Slashes in a branch
-          # name (ci/release-pipeline) must not become path separators or split
-          # the artifact glob — flatten them.
-          tag="${REF_NAME//\//-}"
-          pkg="scratchsmith-${tag}-${NAME}"
-          mkdir -p "dist/${pkg}"
-          cp "target/${TARGET}/release/scratchsmith" "dist/${pkg}/scratchsmith"
-          cp LICENSE README.md "dist/${pkg}/"
-          tar -C dist -czf "dist/${pkg}.tar.gz" "${pkg}"
-      - name: Upload tarball artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dist-${{ matrix.name }}
-          path: dist/scratchsmith-*-${{ matrix.name }}.tar.gz
-          # Fail loudly on a name mismatch instead of uploading nothing and
-          # letting the release publish a subset of arches.
-          if-no-files-found: error
-          retention-days: 1
-
-  release:
-    name: Sign + provenance + GitHub Release
-    needs: binaries
-    # Only publish for a real tag; workflow_dispatch stops after building.
-    if: github.ref_type == 'tag'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write # create the release + upload assets
-      id-token: write # Sigstore keyless (Fulcio OIDC) + provenance
-      attestations: write # actions/attest-build-provenance
-    steps:
-      - name: Fetch built tarballs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          path: artifacts
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-      - name: Assemble, checksum, and sign
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          mkdir -p release
-          # download-artifact laid each tarball under artifacts/dist-<name>/.
-          find artifacts -name 'scratchsmith-*.tar.gz' -exec cp {} release/ \;
-          # Guard against a half-published release: the matrix ships two arches,
-          # so anything else means an upload went missing upstream.
-          count=$(find release -name 'scratchsmith-*.tar.gz' | wc -l)
-          [ "$count" -eq 2 ] || { echo "::error::expected 2 tarballs, found ${count}"; exit 1; }
-          cd release
-          sha256sum scratchsmith-"${TAG}"-* > checksums.txt
-          # Keyless-sign the checksums (GitHub OIDC → Fulcio). One signature over
-          # checksums.txt transitively covers every tarball through its hash.
-          cosign sign-blob --bundle checksums.txt.sigstore.json checksums.txt --yes
-          # Verify what we just signed with the exact command the header documents:
-          # a bundle cosign cannot read would otherwise ship green and only surface
-          # as a user bug report. This tag-only path is the only run that exercises it.
-          cosign verify-blob checksums.txt \
-            --bundle checksums.txt.sigstore.json \
-            --certificate-identity-regexp "^https://github\.com/${GITHUB_REPOSITORY}/\.github/workflows/release\.yml@refs/tags/" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com
-      - name: SLSA build provenance
-        id: provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-checksums: release/checksums.txt
-      - name: Attach provenance as a release asset
-        env:
-          BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
-        run: |
-          set -euo pipefail
-          [ -s "$BUNDLE" ] || { echo "::error::no provenance bundle produced"; exit 1; }
-          cp "$BUNDLE" release/scratchsmith.intoto.jsonl
-      # Publish via the runner's built-in gh CLI (zizmor superfluous-actions).
-      # Create-or-update: knope-release may have created the Release (with
-      # CHANGELOG notes) already, so attach assets; otherwise create it.
-      - name: Publish GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          # Intentional glob expansion into the array (file paths we control).
-          # shellcheck disable=SC2206
-          assets=(
-            release/scratchsmith-"${TAG}"-*.tar.gz
-            release/checksums.txt
-            release/checksums.txt.sigstore.json
-            release/scratchsmith.intoto.jsonl
-          )
-          # A tag with a hyphen (v1.0.0-rc.1, -beta …) is a SemVer pre-release:
-          # mark it so it does not become the repo's "Latest release".
-          prerelease=""
-          case "$TAG" in *-*) prerelease="--prerelease" ;; esac
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${assets[@]}" --clobber
-            # knope creates the release, but own the pre-release bit here so a
-            # `-rc`/`-beta` tag is marked even if it was created without it. Use a
-            # full `if` (not `[ … ] && …`): as the script's last command, a false
-            # `[ -n "" ]` would otherwise become the step's non-zero exit.
-            if [ -n "$prerelease" ]; then
-              gh release edit "$TAG" --prerelease
-            fi
-          else
-            gh release create "$TAG" "${assets[@]}" --title "$TAG" --generate-notes $prerelease
-          fi
-
   image:
     name: Signed multi-arch image → GHCR
-    needs: binaries
-    # Only on a real tag (not the workflow_dispatch dry-run).
+    # Only meaningful for a tag with a published release to source binaries from.
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: read
+      contents: read # download the published release assets
       packages: write # push to GHCR (registry provenance/SBOM go here via BuildKit)
       id-token: write # cosign keyless
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Fetch built tarballs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          path: artifacts
+      - name: Download the published release tarballs
+        # Source the binaries from the release knope-release.yml published for this
+        # tag, so the image packs the exact signed artifacts users download.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          gh release download "$TAG" --pattern 'scratchsmith-*.tar.gz' --dir artifacts
       - name: Lay out dist/ for the Dockerfile
         # The FROM scratch image consumes just the two static binaries; the
-        # Dockerfile selects dist/${TARGETARCH}/scratchsmith. Extract each from
-        # its release tarball.
+        # Dockerfile selects dist/${TARGETARCH}/scratchsmith. Extract each from its
+        # release tarball.
         run: |
           set -euo pipefail
           mkdir -p dist/amd64 dist/arm64 /tmp/x
-          tar -xzf artifacts/dist-linux-amd64/scratchsmith-*-linux-amd64.tar.gz -C /tmp/x
-          tar -xzf artifacts/dist-linux-arm64/scratchsmith-*-linux-arm64.tar.gz -C /tmp/x
+          tar -xzf artifacts/scratchsmith-*-linux-amd64.tar.gz -C /tmp/x
+          tar -xzf artifacts/scratchsmith-*-linux-arm64.tar.gz -C /tmp/x
           cp /tmp/x/scratchsmith-*-linux-amd64/scratchsmith dist/amd64/scratchsmith
           cp /tmp/x/scratchsmith-*-linux-arm64/scratchsmith dist/arm64/scratchsmith
           chmod +x dist/amd64/scratchsmith dist/arm64/scratchsmith
