@@ -52,6 +52,7 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 | Symbol strip (`--strip`), size report, smoke-run (`--smoke`) | ✅ |
 | Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`) | ✅ |
 | Config file (`scratchsmith.toml`), JSON output (`--format json`) | ✅ |
+| Shell completions — `--completions <bash\|zsh\|fish>` | ✅ |
 | Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc first; a musl backend is a future goal) |
 | Daemonless OCI archive + registry push, image **signing**, SLSA provenance | ⏳ planned (see [Roadmap](#roadmap)) |
 
@@ -68,6 +69,14 @@ cargo build --release
 
 Run `scratchsmith doctor` to see which optional external tools (syft, strip, tini, …) are
 present.
+
+**Shell completions.** Generate a script for your shell and drop it where the shell looks:
+
+```sh
+scratchsmith --completions bash | sudo tee /etc/bash_completion.d/scratchsmith
+scratchsmith --completions zsh  > ~/.zfunc/_scratchsmith    # ensure ~/.zfunc is on $fpath
+scratchsmith --completions fish > ~/.config/fish/completions/scratchsmith.fish
+```
 
 ## Quick start
 

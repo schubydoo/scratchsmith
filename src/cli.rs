@@ -1,7 +1,8 @@
 //! Command-line surface and dispatch.
 
 use anyhow::{bail, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::generate;
 use std::path::PathBuf;
 
 /// Output format for the pack report.
@@ -11,11 +12,37 @@ pub enum Format {
     Json,
 }
 
+/// Shells Scratchsmith generates completion scripts for. Deliberately just the
+/// three we document and exercise in CI, so `--help` lists exactly what is
+/// supported rather than clap_complete's wider (untested) set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum Shell {
+    Bash,
+    Zsh,
+    Fish,
+}
+
+impl Shell {
+    fn generator(self) -> clap_complete::Shell {
+        match self {
+            Shell::Bash => clap_complete::Shell::Bash,
+            Shell::Zsh => clap_complete::Shell::Zsh,
+            Shell::Fish => clap_complete::Shell::Fish,
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "scratchsmith", version, about, long_about = None)]
+// A completion dump needs no subcommand, so the subcommand is optional; an empty
+// invocation still prints help rather than doing nothing.
+#[command(arg_required_else_help = true)]
 pub struct Cli {
+    /// Emit a shell completion script to stdout and exit (bash, zsh, fish).
+    #[arg(long, value_enum, value_name = "SHELL")]
+    pub completions: Option<Shell>,
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -103,10 +130,31 @@ pub fn run() -> Result<()> {
     dispatch(Cli::parse())
 }
 
+// Write a shell completion script for `shell` to `out`. Split out so tests can
+// capture the output into a buffer instead of stdout.
+fn write_completions<W: std::io::Write>(shell: Shell, out: &mut W) {
+    let mut cmd = Cli::command();
+    let name = cmd.get_name().to_string();
+    generate(shell.generator(), &mut cmd, name, out);
+}
+
 // Split from `run` so tests drive dispatch directly on a parsed `Cli`, without
 // touching argv or spawning a process.
 fn dispatch(cli: Cli) -> Result<()> {
-    match cli.command {
+    if let Some(shell) = cli.completions {
+        // Fail loud rather than silently dropping a subcommand passed alongside.
+        if cli.command.is_some() {
+            bail!("--completions cannot be combined with a subcommand");
+        }
+        write_completions(shell, &mut std::io::stdout());
+        return Ok(());
+    }
+    // `arg_required_else_help` prints help for an empty invocation before we get
+    // here; any remaining `None` means flags were given without a subcommand.
+    let Some(command) = cli.command else {
+        bail!("no command given; run with --help to see available commands");
+    };
+    match command {
         Command::Pack {
             binary,
             config,
@@ -195,7 +243,7 @@ mod tests {
     fn pack_parses_binary_path_and_smoke_flag() {
         let cli = Cli::try_parse_from(["scratchsmith", "pack", "--smoke", "/bin/ls"]).unwrap();
         match cli.command {
-            Command::Pack { binary, smoke, .. } => {
+            Some(Command::Pack { binary, smoke, .. }) => {
                 assert_eq!(binary, Some(PathBuf::from("/bin/ls")));
                 assert!(smoke);
             }
@@ -208,9 +256,9 @@ mod tests {
         let cli =
             Cli::try_parse_from(["scratchsmith", "pack", "-n", "-o", "out", "/bin/ls"]).unwrap();
         match cli.command {
-            Command::Pack {
+            Some(Command::Pack {
                 no_build, output, ..
-            } => {
+            }) => {
                 assert!(no_build);
                 assert_eq!(output, Some(PathBuf::from("out")));
             }
@@ -244,7 +292,7 @@ mod tests {
     fn lint_parses_binary_path() {
         let cli = Cli::try_parse_from(["scratchsmith", "lint", "/bin/ls"]).unwrap();
         match cli.command {
-            Command::Lint { binary, .. } => assert_eq!(binary, PathBuf::from("/bin/ls")),
+            Some(Command::Lint { binary, .. }) => assert_eq!(binary, PathBuf::from("/bin/ls")),
             other => panic!("expected Lint, got {other:?}"),
         }
     }
@@ -252,7 +300,7 @@ mod tests {
     #[test]
     fn doctor_parses_with_no_args() {
         let cli = Cli::try_parse_from(["scratchsmith", "doctor"]).unwrap();
-        assert!(matches!(cli.command, Command::Doctor));
+        assert!(matches!(cli.command, Some(Command::Doctor)));
     }
 
     #[test]
@@ -311,5 +359,37 @@ mod tests {
     fn doctor_runs_and_succeeds() {
         let cli = Cli::try_parse_from(["scratchsmith", "doctor"]).unwrap();
         assert!(dispatch(cli).is_ok(), "doctor always exits 0");
+    }
+
+    #[test]
+    fn completions_flag_parses_without_a_subcommand() {
+        let cli = Cli::try_parse_from(["scratchsmith", "--completions", "zsh"]).unwrap();
+        assert_eq!(cli.completions, Some(Shell::Zsh));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn completions_with_a_subcommand_is_an_error() {
+        // Fail loud instead of silently dropping the subcommand. This also keeps
+        // the dispatch completions branch tested without spraying a script onto
+        // the test's stdout (generation itself is covered by the buffer test).
+        let cli = Cli::try_parse_from(["scratchsmith", "--completions", "fish", "doctor"]).unwrap();
+        let err = dispatch(cli).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("cannot be combined with a subcommand"));
+    }
+
+    #[test]
+    fn completions_emit_a_script_for_each_supported_shell() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let mut buf = Vec::new();
+            write_completions(shell, &mut buf);
+            let script = String::from_utf8(buf).unwrap();
+            assert!(
+                script.contains("scratchsmith"),
+                "{shell:?} completion script missing the binary name"
+            );
+        }
     }
 }

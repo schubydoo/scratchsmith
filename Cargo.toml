@@ -22,6 +22,7 @@ walkdir = "2.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "1.0"
+clap_complete = "4.6.9"
 
 [profile.release]
 # Ship a small single binary — the size claim is part of the pitch (TAD 8.1).
