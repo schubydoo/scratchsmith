@@ -18,10 +18,12 @@ exclude_docs: |
   requirements.in
   requirements.txt
 
-# A logo/favicon is added once the project mark exists.
 theme:
   name: material
   custom_dir: overrides
+  # White mark reads on the indigo header; favicon adapts to the browser theme.
+  logo: assets/logo-mark-white.svg
+  favicon: assets/favicon.svg
   icon:
     repo: fontawesome/brands/github
   features:

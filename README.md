@@ -1,4 +1,9 @@
-# Scratchsmith
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-full-white.svg">
+    <img alt="Scratchsmith" src="docs/assets/logo-full-black.svg" width="440">
+  </picture>
+</p>
 
 [![CI](https://github.com/schubydoo/scratchsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/schubydoo/scratchsmith/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/schubydoo/scratchsmith/branch/main/graph/badge.svg)](https://codecov.io/gh/schubydoo/scratchsmith)
