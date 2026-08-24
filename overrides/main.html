@@ -2,7 +2,7 @@
 
 {# The bare site_name ("Scratchsmith") is short for SERP/social; give the
    homepage a descriptive title. Subpages keep Material's "<page> - <site_name>". #}
-{%- set _homepage_title = "Scratchsmith — daemonless supply-chain packager for dynamic Linux binaries" -%}
+{%- set _homepage_title = "Scratchsmith — daemonless supply-chain packager" -%}
 {% block htmltitle %}
   {% if page and page.is_homepage %}
     <title>{{ _homepage_title }}</title>
