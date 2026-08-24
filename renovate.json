@@ -2,5 +2,13 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "local>schubydoo/renovate-config:scratchsmith"
+  ],
+  "packageRules": [
+    {
+      "description": "The MSRV job pins the declared minimum Rust (Cargo.toml rust-version); it must stay put so CI keeps proving that MSRV builds. Do not track stable here.",
+      "matchDepNames": ["rust"],
+      "matchFileNames": [".github/workflows/ci.yml"],
+      "enabled": false
+    }
   ]
 }
