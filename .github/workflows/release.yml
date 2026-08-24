@@ -37,6 +37,7 @@ jobs:
   binaries:
     name: Build ${{ matrix.name }} binary
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       # One target's failure must not cancel the others: a release run should
       # show every arch's result.
@@ -60,8 +61,12 @@ jobs:
         with:
           version: 0.13.0
           use-cache: false
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked
+      # Pinned prebuilt binary (not `cargo install`, which resolves to whatever
+      # is newest at run time): cargo-zigbuild tracks zig's breaking CLI, so a
+      # skew would only surface at tag time. Renovate bumps the pin in a PR.
+      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
+        with:
+          tool: cargo-zigbuild@0.23.0
       - name: Build (static musl via zig)
         run: cargo zigbuild --release --target ${{ matrix.target }} --bin scratchsmith
       - name: Package tarball
@@ -72,8 +77,10 @@ jobs:
         run: |
           set -euo pipefail
           # On a tag REF_NAME is the tag (v0.1.0); on workflow_dispatch it is the
-          # branch, which just labels the dry-run artifact.
-          tag="$REF_NAME"
+          # branch, which just labels the dry-run artifact. Slashes in a branch
+          # name (ci/release-pipeline) must not become path separators or split
+          # the artifact glob — flatten them.
+          tag="${REF_NAME//\//-}"
           pkg="scratchsmith-${tag}-${NAME}"
           mkdir -p "dist/${pkg}"
           cp "target/${TARGET}/release/scratchsmith" "dist/${pkg}/scratchsmith"
@@ -84,6 +91,9 @@ jobs:
         with:
           name: dist-${{ matrix.name }}
           path: dist/scratchsmith-*-${{ matrix.name }}.tar.gz
+          # Fail loudly on a name mismatch instead of uploading nothing and
+          # letting the release publish a subset of arches.
+          if-no-files-found: error
           retention-days: 1
 
   release:
@@ -92,6 +102,7 @@ jobs:
     # Only publish for a real tag; workflow_dispatch stops after building.
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write # create the release + upload assets
     steps:
@@ -107,6 +118,10 @@ jobs:
           mkdir -p release
           # download-artifact laid each tarball under artifacts/dist-<name>/.
           find artifacts -name 'scratchsmith-*.tar.gz' -exec cp {} release/ \;
+          # Guard against a half-published release: the matrix ships two arches,
+          # so anything else means an upload went missing upstream.
+          count=$(find release -name 'scratchsmith-*.tar.gz' | wc -l)
+          [ "$count" -eq 2 ] || { echo "::error::expected 2 tarballs, found ${count}"; exit 1; }
           cd release
           sha256sum scratchsmith-"${TAG}"-* > checksums.txt
       # Publish via the runner's built-in gh CLI (zizmor superfluous-actions).
@@ -131,6 +146,9 @@ jobs:
           case "$TAG" in *-*) prerelease="--prerelease" ;; esac
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${assets[@]}" --clobber
+            # knope creates the release, but own the pre-release bit here so a
+            # `-rc`/`-beta` tag is marked even if it was created without it.
+            [ -n "$prerelease" ] && gh release edit "$TAG" --prerelease
           else
             gh release create "$TAG" "${assets[@]}" --title "$TAG" --generate-notes $prerelease
           fi
