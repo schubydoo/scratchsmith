@@ -36,3 +36,8 @@ demo 'file greet'
 demo 'scratchsmith pack --sbom --strip --smoke ./greet'
 demo "docker image ls scratchsmith/greet:packed --format 'table {{.Repository}}:{{.Tag}}\t{{.Size}}'"
 demo 'docker run --rm scratchsmith/greet:packed'
+
+# Hold on the final frame — a fresh prompt plus a long pause — so the run output
+# (the whole payoff) stays readable before the SVG loops back to the start.
+printf '%b' "$PROMPT"
+sleep 4

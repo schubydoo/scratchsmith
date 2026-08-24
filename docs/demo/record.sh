@@ -22,7 +22,7 @@ docker image rm scratchsmith/greet:packed >/dev/null 2>&1 || true
 
 cast="$work/demo.cast"
 ( cd "$work" && PATH="$work:$PATH" \
-    asciinema rec --overwrite --idle-time-limit 2.5 --cols 92 --rows 22 \
+    asciinema rec --overwrite --idle-time-limit 4.5 --cols 92 --rows 22 \
       --command "bash play.sh" "$cast" )
 
 svg-term --in "$cast" --out "$here/scratchsmith.svg" --window --width 92 --height 22
