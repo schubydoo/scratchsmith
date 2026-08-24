@@ -39,5 +39,8 @@ demo 'docker run --rm scratchsmith/greet:packed'
 
 # Hold on the final frame — a fresh prompt plus a long pause — so the run output
 # (the whole payoff) stays readable before the SVG loops back to the start.
+# asciinema timestamps terminal OUTPUT, not sleeps, so the pause must be bracketed
+# by writes or the cast simply ends at the prompt and the hold never lands.
 printf '%b' "$PROMPT"
 sleep 4
+printf ' \b'
