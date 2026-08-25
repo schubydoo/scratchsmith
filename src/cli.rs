@@ -208,13 +208,13 @@ fn dispatch(cli: Cli) -> Result<()> {
                 },
             };
 
-            let report = if no_build {
+            let sink = if no_build {
                 // clap guarantees output is present when no_build is set.
-                let dir = output.expect("--no-build requires --output");
-                crate::pack::stage_only(&binary, &dir, &opts)?
+                crate::pack::Sink::Rootfs(output.expect("--no-build requires --output"))
             } else {
-                crate::pack::run(&binary, &opts)?
+                crate::pack::Sink::DockerLoad
             };
+            let report = crate::pack::pack(&binary, &opts, sink)?;
 
             match format {
                 Format::Text => println!("{}", report.to_text()),

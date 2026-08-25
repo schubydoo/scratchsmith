@@ -7,7 +7,7 @@ use crate::stager::{self, RuntimeExtras, SizeReport, StagedTree};
 use crate::supplychain::{self, SbomRequest};
 use anyhow::{bail, Result};
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// How long to let a smoke-run's entrypoint run before treating it as "started".
 const SMOKE_TIMEOUT_SECS: u32 = 15;
@@ -119,6 +119,25 @@ pub struct PackOptions {
     /// Extra libraries (sonames or paths) to force-stage, e.g. dlopen'd plugins.
     pub includes: Vec<String>,
     pub image: ImageConfig,
+}
+
+/// Where a pack delivers its result. Every sink shares the resolve → stage pipeline and
+/// differs only in delivery, so adding one (the daemonless OCI archive / registry push
+/// are the next two) is a new variant + a `pack` arm, not a new top-level entry point.
+pub enum Sink {
+    /// Stage the rootfs into this directory and build no image (`--no-build --output`).
+    Rootfs(PathBuf),
+    /// Build the image and load it into the local Docker daemon (the default sink).
+    DockerLoad,
+}
+
+/// Pack `binary` and deliver it via `sink` — the single entry point the CLI dispatches
+/// to. `Rootfs` stops after staging; the image sinks build the scratch image and deliver.
+pub fn pack(binary: &Path, opts: &PackOptions, sink: Sink) -> Result<PackReport> {
+    match sink {
+        Sink::Rootfs(dir) => stage_only(binary, &dir, opts),
+        Sink::DockerLoad => run(binary, opts),
+    }
 }
 
 /// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
