@@ -6,7 +6,7 @@ use crate::report::PackReport;
 use crate::resolver::{self, Sysroot};
 use crate::stager::{self, RuntimeExtras, SizeReport, StagedTree};
 use crate::supplychain::{self, SbomRequest};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
 /// How long to let a smoke-run's entrypoint run before treating it as "started".
@@ -74,6 +74,8 @@ pub struct PackOptions {
     /// Extra libraries (sonames or paths) to force-stage, e.g. dlopen'd plugins.
     pub includes: Vec<String>,
     pub image: ImageConfig,
+    /// Sign the pushed image with cosign (and attest the SBOM, if any). `--push` only.
+    pub sign: bool,
 }
 
 /// Where a pack delivers its result. Every sink shares the resolve → stage pipeline and
@@ -116,6 +118,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
         warnings,
         smoke_ok: None,
         sbom,
+        signed: None,
     })
 }
 
@@ -199,6 +202,7 @@ pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
         warnings: s.warnings,
         smoke_ok,
         sbom: s.sbom,
+        signed: None,
     })
 }
 
@@ -220,6 +224,7 @@ fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackR
         warnings: s.warnings,
         smoke_ok: None,
         sbom: s.sbom,
+        signed: None,
     })
 }
 
@@ -231,7 +236,16 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackRep
         bail!("--smoke needs a running image, so it isn't supported with --push; pull the pushed image and run it separately, or drop --smoke");
     }
     let s = stage_for_image(binary, opts)?;
-    crate::registry::push_to_registry(&s.tree, reference, &s.cfg)?;
+    // The push returns the pushed image's digest when the registry reports one; a plain push
+    // never fails on a missing digest — only signing, which needs it, does.
+    let digest_ref = crate::registry::push_to_registry(&s.tree, reference, &s.cfg)?;
+    let signed = if opts.sign {
+        let dref = digest_ref
+            .context("cannot sign: the registry did not return a digest for the pushed image")?;
+        Some(sign_pushed(&dref, opts)?)
+    } else {
+        None
+    };
     Ok(PackReport {
         tag: None,
         archive: None,
@@ -242,7 +256,19 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackRep
         warnings: s.warnings,
         smoke_ok: None,
         sbom: s.sbom,
+        signed,
     })
+}
+
+// cosign-sign the pushed image by digest, and — if an SBOM was generated — attach it as a
+// signed attestation. Signing by digest (not tag) pins the exact image just pushed. Returns
+// the signed digest reference for the report.
+fn sign_pushed(digest_ref: &str, opts: &PackOptions) -> Result<String> {
+    supplychain::cosign_sign(digest_ref)?;
+    if let Some(req) = &opts.sbom {
+        supplychain::cosign_attest(digest_ref, &req.path, req.format.cosign_predicate_type())?;
+    }
+    Ok(digest_ref.to_string())
 }
 
 // Wrap the entrypoint so tini is pid 1: [tini, --, <original entrypoint...>].

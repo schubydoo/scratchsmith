@@ -65,7 +65,7 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 | Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc first; a musl backend is a future goal) |
 | **Daemonless OCI archive** — `--oci-archive <file>` (no daemon; skopeo/buildah/registry-ready) | ✅ |
 | **Daemonless registry push** — `--push <ref>` (no daemon; uses your docker credentials) | ✅ |
-| Signing the image `pack` **produces** | ⏳ planned (see [Roadmap](#roadmap)) |
+| **Signing the image `pack` produces** — `--push --sign` (cosign keyless, by digest) | ✅ |
 
 ## Install
 
@@ -138,6 +138,13 @@ so `docker login` once (for GitHub's `ghcr.io`, a token with `write:packages`):
 ```sh
 echo "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GH_USERNAME --password-stdin
 scratchsmith pack --push ghcr.io/you/app:latest ./app
+```
+
+Add `--sign` to cosign-sign the pushed image by digest (keyless), and `--sbom --sign` to attach
+the SBOM as a signed attestation:
+
+```sh
+scratchsmith pack --push ghcr.io/you/app:latest --sbom --sign ./app
 ```
 
 Add supply-chain output, verify it starts, and shrink it:
@@ -229,9 +236,10 @@ Scratchsmith owns the one input the others don't serve: **an arbitrary prebuilt 
 - **`docker load` is the *default* sink.** The default hands the image to a local Docker daemon
   for convenience; go daemon-free with `--push <ref>` (straight to a registry), `--oci-archive
   <file>` (an OCI archive), or `--no-build --output` (a rootfs).
-- **`pack` doesn't sign the image it *produces* — yet.** Release *artifacts* are cosign-signed
-  and carry SLSA provenance ([Verifying releases](#verifying-releases)), but signing the scratch
-  image `pack` builds needs a registry push (the daemonless sink) and isn't wired to a flag yet.
+- **Signing the image `pack` produces needs `--push`.** `pack --push --sign` cosign-signs the
+  pushed image by digest (keyless), and `--sbom --sign` attaches the SBOM as a signed
+  attestation; both only apply to the registry-push sink, since cosign signs a registry image.
+  Release *artifacts* are separately cosign-signed with SLSA provenance ([Verifying releases](#verifying-releases)).
 
 ## How it works
 
@@ -248,10 +256,10 @@ Scratchsmith owns the one input the others don't serve: **an arbitrary prebuilt 
 
 Shipped in v0.1: signed release binaries (amd64 + arm64), cosign keyless signing + SLSA build
 provenance, a signed multi-arch GHCR image, a [GitHub Action](#github-action), a Homebrew tap, a
-versioned docs site, and **daemonless output** — `--oci-archive` and `--push` (pure-Rust OCI
-archive + direct registry push, no Docker daemon). Next:
+versioned docs site, **daemonless output** — `--oci-archive` and `--push` (pure-Rust OCI
+archive + direct registry push, no Docker daemon) — and **image signing** (`--push --sign`,
+cosign keyless, plus SBOM attestation). Next:
 
-- **Sign the image `pack` produces** — now that `--push` gives a registry digest to sign.
 - **Broader inputs (later)** — a dynamic musl/Alpine backend and cross-arch resolution are
   on the long-term wishlist. No committed date. (`crates.io` publish is also deferred.)
 
