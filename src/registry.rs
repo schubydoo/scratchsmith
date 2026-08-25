@@ -16,8 +16,13 @@ use oci_client::{Client, Reference};
 /// (`~/.docker/config.json`, incl. credential helpers); a localhost registry is treated as
 /// plain-HTTP (matching Docker's insecure-localhost default), which also lets CI test
 /// against a local `registry:2`. Returns the pushed image's by-digest reference
-/// (`registry/repo@sha256:…`), which `--sign` signs.
-pub fn push_to_registry(staged: &StagedTree, reference: &str, cfg: &ImageConfig) -> Result<String> {
+/// (`registry/repo@sha256:…`) when the registry reports a digest — `Some` for `--sign` to
+/// sign, `None` when the response carries no digest (a plain push still succeeds).
+pub fn push_to_registry(
+    staged: &StagedTree,
+    reference: &str,
+    cfg: &ImageConfig,
+) -> Result<Option<String>> {
     let built = image::build_image(staged, cfg)?;
     let reference: Reference = reference
         .parse()
@@ -51,22 +56,23 @@ pub fn push_to_registry(staged: &StagedTree, reference: &str, cfg: &ImageConfig)
             .push(&reference, &layers, config, &auth, None)
             .await
             .with_context(|| format!("pushing to {reference}"))?;
-        digest_ref_from(&reference, &pushed.manifest_url)
+        Ok::<_, anyhow::Error>(digest_ref_from(&reference, &pushed.manifest_url))
     })?;
     Ok(digest_ref)
 }
 
 // Build a by-digest reference (`registry/repo@sha256:…`) from the push response's manifest
 // URL, which ends in the pushed manifest's digest. cosign signs by digest, so this is what
-// `--sign` targets — precise and immune to a tag being moved after the push.
-fn digest_ref_from(reference: &Reference, manifest_url: &str) -> Result<String> {
+// `--sign` targets — precise and immune to a tag being moved after the push. `None` when the
+// URL carries no digest: the push still succeeded, so this must not fail a plain push (only
+// `--sign`, which needs the digest, errors — in the caller).
+fn digest_ref_from(reference: &Reference, manifest_url: &str) -> Option<String> {
     let digest = manifest_url
         .rsplit("/manifests/")
         .next()
         .and_then(|tail| tail.split(['?', '#']).next())
-        .filter(|d| d.starts_with("sha256:"))
-        .with_context(|| format!("no digest in the push response manifest URL {manifest_url:?}"))?;
-    Ok(format!(
+        .filter(|d| d.starts_with("sha256:"))?;
+    Some(format!(
         "{}/{}@{}",
         reference.registry(),
         reference.repository(),
@@ -284,8 +290,8 @@ mod tests {
     fn digest_ref_from_builds_a_by_digest_reference() {
         let r: Reference = "ghcr.io/you/app:latest".parse().unwrap();
         assert_eq!(
-            digest_ref_from(&r, "https://ghcr.io/v2/you/app/manifests/sha256:abc123").unwrap(),
-            "ghcr.io/you/app@sha256:abc123"
+            digest_ref_from(&r, "https://ghcr.io/v2/you/app/manifests/sha256:abc123").as_deref(),
+            Some("ghcr.io/you/app@sha256:abc123")
         );
         // A namespace/query suffix on the URL is trimmed.
         assert_eq!(
@@ -293,11 +299,14 @@ mod tests {
                 &r,
                 "https://ghcr.io/v2/you/app/manifests/sha256:def?ns=ghcr.io"
             )
-            .unwrap(),
-            "ghcr.io/you/app@sha256:def"
+            .as_deref(),
+            Some("ghcr.io/you/app@sha256:def")
         );
-        // A URL without a digest is an error, not a bogus reference.
-        assert!(digest_ref_from(&r, "https://ghcr.io/v2/you/app/manifests/latest").is_err());
+        // A URL without a digest yields None (a plain push must not fail on it).
+        assert_eq!(
+            digest_ref_from(&r, "https://ghcr.io/v2/you/app/manifests/latest"),
+            None
+        );
     }
 
     #[test]

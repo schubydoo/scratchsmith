@@ -6,7 +6,7 @@ use crate::report::PackReport;
 use crate::resolver::{self, Sysroot};
 use crate::stager::{self, RuntimeExtras, SizeReport, StagedTree};
 use crate::supplychain::{self, SbomRequest};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
 /// How long to let a smoke-run's entrypoint run before treating it as "started".
@@ -236,11 +236,16 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackRep
         bail!("--smoke needs a running image, so it isn't supported with --push; pull the pushed image and run it separately, or drop --smoke");
     }
     let s = stage_for_image(binary, opts)?;
+    // The push returns the pushed image's digest when the registry reports one; a plain push
+    // never fails on a missing digest — only signing, which needs it, does.
     let digest_ref = crate::registry::push_to_registry(&s.tree, reference, &s.cfg)?;
-    let signed = opts
-        .sign
-        .then(|| sign_pushed(&digest_ref, opts))
-        .transpose()?;
+    let signed = if opts.sign {
+        let dref = digest_ref
+            .context("cannot sign: the registry did not return a digest for the pushed image")?;
+        Some(sign_pushed(&dref, opts)?)
+    } else {
+        None
+    };
     Ok(PackReport {
         tag: None,
         archive: None,
