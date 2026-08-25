@@ -125,7 +125,9 @@ fuzz_target!(|scn: Scenario| {
     // Optionally give the binary a real, resolvable loader.
     if scn.place_interp {
         root_facts.interpreter = Some(INTERP.to_string());
-        let _ = touch(&root.join("lib64/ld-fuzz.so.2")); // reroot(INTERP) lands here
+        // Place the file where reroot(root, INTERP) will look, derived from INTERP so the two
+        // can't drift: reroot strips the leading '/' and joins under the sysroot.
+        let _ = touch(&root.join(INTERP.trim_start_matches('/')));
     }
 
     let mut infos: HashMap<PathBuf, ElfInfo> = HashMap::new();
