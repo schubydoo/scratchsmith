@@ -20,6 +20,8 @@ pub struct PackReport {
     pub tag: Option<String>,
     /// Path of the OCI archive when `--oci-archive` was used (daemonless).
     pub archive: Option<String>,
+    /// The pushed image reference when `--push` was used (daemonless).
+    pub pushed: Option<String>,
     /// Staging directory when `-n -o` was used instead of building an image.
     pub staged_dir: Option<String>,
     /// Entrypoint path inside the image.
@@ -59,6 +61,9 @@ impl PackReport {
         }
         if let Some(archive) = &self.archive {
             out.push_str(&format!("wrote OCI archive {archive}\n"));
+        }
+        if let Some(reference) = &self.pushed {
+            out.push_str(&format!("pushed {reference}\n"));
         }
         if let Some(dir) = &self.staged_dir {
             out.push_str(&format!("staged to {dir}\n"));
@@ -136,6 +141,8 @@ pub enum Sink {
     DockerLoad,
     /// Write a daemonless OCI-archive tarball to this path (`--oci-archive`).
     OciArchive(PathBuf),
+    /// Push the image straight to this registry reference, daemonless (`--push`).
+    Push(String),
 }
 
 /// Pack `binary` and deliver it via `sink` — the single entry point the CLI dispatches
@@ -145,6 +152,7 @@ pub fn pack(binary: &Path, opts: &PackOptions, sink: Sink) -> Result<PackReport>
         Sink::Rootfs(dir) => stage_only(binary, &dir, opts),
         Sink::DockerLoad => run(binary, opts),
         Sink::OciArchive(out) => to_oci_archive(binary, opts, &out),
+        Sink::Push(reference) => to_push(binary, opts, &reference),
     }
 }
 
@@ -156,6 +164,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
     Ok(PackReport {
         tag: None,
         archive: None,
+        pushed: None,
         staged_dir: Some(tree.root.display().to_string()),
         entrypoint: tree.entrypoint.display().to_string(),
         size,
@@ -238,6 +247,7 @@ pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
     Ok(PackReport {
         tag: Some(s.tag),
         archive: None,
+        pushed: None,
         staged_dir: None,
         entrypoint: s.tree.entrypoint.display().to_string(),
         size: s.size,
@@ -258,6 +268,29 @@ fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackR
     Ok(PackReport {
         tag: None,
         archive: Some(out.display().to_string()),
+        pushed: None,
+        staged_dir: None,
+        entrypoint: s.tree.entrypoint.display().to_string(),
+        size: s.size,
+        warnings: s.warnings,
+        smoke_ok: None,
+        sbom: s.sbom,
+    })
+}
+
+/// Pack `binary` and push it straight to a registry reference (Task 5.2) — no Docker
+/// daemon. Credentials come from the local Docker config; blobs the registry already has
+/// are skipped.
+fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackReport> {
+    if opts.smoke {
+        bail!("--smoke needs a running image, so it isn't supported with --push; pull the pushed image and run it separately, or drop --smoke");
+    }
+    let s = stage_for_image(binary, opts)?;
+    image::push_to_registry(&s.tree, reference, &s.cfg)?;
+    Ok(PackReport {
+        tag: None,
+        archive: None,
+        pushed: Some(reference.to_string()),
         staged_dir: None,
         entrypoint: s.tree.entrypoint.display().to_string(),
         size: s.size,
@@ -309,6 +342,7 @@ mod tests {
         PackReport {
             tag: Some("scratchsmith/app:packed".into()),
             archive: None,
+            pushed: None,
             staged_dir: None,
             entrypoint: "/opt/app".into(),
             size: SizeReport {
@@ -342,5 +376,26 @@ mod tests {
         assert!(text.contains("loaded image scratchsmith/app:packed"));
         assert!(text.contains("smoke-run ok"));
         assert!(text.contains("200 -> 123"));
+    }
+
+    #[test]
+    fn text_report_renders_a_pushed_reference() {
+        let report = PackReport {
+            tag: None,
+            archive: None,
+            pushed: Some("ghcr.io/you/app:latest".into()),
+            staged_dir: None,
+            entrypoint: "/opt/app".into(),
+            size: SizeReport {
+                entries: vec![],
+                total_before: 10,
+                total_after: 10,
+                stripped: false,
+            },
+            warnings: vec![],
+            smoke_ok: None,
+            sbom: None,
+        };
+        assert!(report.to_text().contains("pushed ghcr.io/you/app:latest"));
     }
 }

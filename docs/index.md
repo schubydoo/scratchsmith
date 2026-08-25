@@ -13,10 +13,10 @@ layers.
     The core works end to end, and releases are signed and published (see [Install](#install)).
     One honest caveat up front:
 
-    - **Not daemonless *by default* yet.** The default sink hands the image to your local Docker
-      daemon via `docker load` (or stages a rootfs with `--no-build`, no daemon), while
-      `--oci-archive` writes a daemonless OCI image today. **Direct registry push** — the fully
-      daemonless default — is the next milestone; until it lands the default still uses `docker load`.
+    - **Daemonless is here.** `--push` uploads the image straight to a registry and `--oci-archive`
+      writes an OCI archive — both with no Docker daemon. The default sink still uses `docker load`
+      (or `--no-build` for a rootfs) for local convenience; reach for `--push` / `--oci-archive` to
+      take the daemon fully out of the loop.
 
 ## Why not just static-link + `FROM scratch`?
 
@@ -50,7 +50,8 @@ a hardening report, a non-root image, and no Dockerfile.
 | **Signed releases** — amd64 + arm64 binaries, cosign-signed checksums + SLSA provenance, signed multi-arch GHCR image | ✅ ([verify](#verifying-releases)) |
 | Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc first; a musl backend is a future goal) |
 | **Daemonless OCI archive** — `--oci-archive <file>` (no daemon; skopeo/buildah/registry-ready) | ✅ |
-| Direct registry push, and signing the image `pack` **produces** | ⏳ planned |
+| **Daemonless registry push** — `--push <ref>` (no daemon; uses your docker credentials) | ✅ |
+| Signing the image `pack` **produces** | ⏳ planned |
 
 ## Install
 
@@ -105,6 +106,14 @@ Or write a **daemonless OCI archive** (skopeo/buildah/registry-ready — no Dock
 
 ```sh
 scratchsmith pack --oci-archive ./app.oci.tar ./app
+```
+
+Or **push straight to a registry** — no Docker daemon. Credentials come from your docker config,
+so `docker login` once (for GitHub's `ghcr.io`, a token with `write:packages`):
+
+```sh
+echo "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GH_USERNAME --password-stdin
+scratchsmith pack --push ghcr.io/you/app:latest ./app
 ```
 
 Add supply-chain output, verify it starts, and shrink it:
