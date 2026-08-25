@@ -47,6 +47,20 @@ fn find_tini_exists() -> bool {
     .any(|p| Path::new(p).exists())
 }
 
+// A small dynamic-glibc system binary for the docker/registry tests that don't need to
+// dogfood scratchsmith itself. Packing the 40 MB debug binary dominates their runtime;
+// `id` is tiny, dynamically linked against glibc, exercises the NSS staging, and prints a
+// checkable `uid=`. Returns None when absent so callers skip gracefully (parity with the
+// getent/tini optional-tool tests) rather than panicking on a minimal host. The one dogfood
+// test (packs_a_binary_that_runs_in_docker) still packs scratchsmith to prove the real
+// binary works.
+fn small_fixture() -> Option<&'static Path> {
+    ["/usr/bin/id", "/bin/id"]
+        .into_iter()
+        .map(Path::new)
+        .find(|p| p.exists())
+}
+
 #[test]
 fn sbom_is_generated_or_fails_with_a_clear_error() {
     // The -n -o path needs no Docker. Whether syft is present or not, --sbom must
@@ -233,7 +247,10 @@ fn image_config_is_reflected_in_docker_inspect() {
         return;
     }
     let _g = docker_lock();
-    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
     let cfg = ImageConfig {
         entrypoint: vec![],
         cmd: vec!["--version".into()],
@@ -274,14 +291,20 @@ fn config_file_applies_and_cli_overrides_it() {
         return;
     }
     let _g = docker_lock();
-    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let bin = env!("CARGO_BIN_EXE_scratchsmith"); // the CLI to invoke
+    let Some(fixture) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let packed = fixture.to_str().unwrap(); // the (small) binary to pack
+    let tag = "scratchsmith/id:packed"; // derived from the packed binary's name
     let tmp = tempfile::tempdir().unwrap();
     let toml = tmp.path().join("scratchsmith.toml");
     std::fs::write(&toml, "env = [\"CFGONLY=1\"]\nuser = \"1234:1234\"\n").unwrap();
 
     // Config only: values come from the file.
     let ok = Command::new(bin)
-        .args(["pack", "--config", toml.to_str().unwrap(), bin])
+        .args(["pack", "--config", toml.to_str().unwrap(), packed])
         .status()
         .unwrap();
     assert!(ok.success());
@@ -297,10 +320,10 @@ fn config_file_applies_and_cli_overrides_it() {
             .unwrap();
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
-    let out = user("scratchsmith/scratchsmith:packed");
+    let out = user(tag);
     assert!(out.contains("1234:1234"), "config user not applied: {out}");
     assert!(out.contains("CFGONLY=1"), "config env not applied: {out}");
-    rmi("scratchsmith/scratchsmith:packed");
+    rmi(tag);
 
     // CLI --user overrides the config value.
     Command::new(bin)
@@ -310,16 +333,16 @@ fn config_file_applies_and_cli_overrides_it() {
             toml.to_str().unwrap(),
             "--user",
             "9999:9999",
-            bin,
+            packed,
         ])
         .status()
         .unwrap();
-    let out = user("scratchsmith/scratchsmith:packed");
+    let out = user(tag);
     assert!(
         out.contains("9999:9999"),
         "CLI should override config user: {out}"
     );
-    rmi("scratchsmith/scratchsmith:packed");
+    rmi(tag);
 }
 
 #[test]
@@ -329,23 +352,23 @@ fn smoke_run_passes_for_a_plain_binary() {
         return;
     }
     let _g = docker_lock();
-    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
     let tag = scratchsmith::pack::run(bin, &PackOptions::default())
         .expect("pack")
         .tag
         .unwrap();
 
-    let outcome = smoke_run(&tag, &["--version"], 15).expect("smoke run");
+    // `id` with no args prints `uid=…` — proves the smoke-run mechanism starts the binary.
+    let outcome = smoke_run(&tag, &[], 15).expect("smoke run");
     assert!(
         !outcome.loader_failed(),
         "loader failed: {}",
         outcome.stderr
     );
-    assert!(
-        outcome.stdout.contains("scratchsmith"),
-        "got: {}",
-        outcome.stdout
-    );
+    assert!(outcome.stdout.contains("uid="), "got: {}", outcome.stdout);
     rmi(&tag);
 }
 
@@ -388,7 +411,10 @@ fn smoke_run_proves_nss_lookups_work_in_image() {
 
 #[test]
 fn oci_archive_sink_writes_daemonless() {
-    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("img.oci.tar");
     let report = scratchsmith::pack::pack(
@@ -446,7 +472,10 @@ fn docker_load_sink_via_pack() {
         return;
     }
     let _g = docker_lock();
-    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
     let tag = scratchsmith::pack::pack(
         bin,
         &PackOptions::default(),
@@ -510,7 +539,11 @@ fn push_to_local_registry_is_pullable_and_runnable() {
         std::thread::sleep(std::time::Duration::from_millis(300));
     }
 
-    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    // pack the small fixture, not the 40 MB debug binary
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
     let reference = "localhost:5099/scratchsmith/test:v1";
     let report = scratchsmith::pack::pack(
         bin,
@@ -531,7 +564,7 @@ fn push_to_local_registry_is_pullable_and_runnable() {
 
     // The `--push` flag path through the CLI (a distinct tag on the same registry).
     let cli_ref = "localhost:5099/scratchsmith/test:cli";
-    let cli = Command::new(bin)
+    let cli = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
         .args(["pack", "--push", cli_ref, bin.to_str().unwrap()])
         .output()
         .unwrap();
@@ -553,11 +586,11 @@ fn push_to_local_registry_is_pullable_and_runnable() {
         String::from_utf8_lossy(&pull.stderr)
     );
     let run = Command::new("docker")
-        .args(["run", "--rm", reference, "--version"])
+        .args(["run", "--rm", reference])
         .output()
         .unwrap();
     assert!(run.status.success(), "run failed: {run:?}");
-    assert!(String::from_utf8_lossy(&run.stdout).contains("scratchsmith"));
+    assert!(String::from_utf8_lossy(&run.stdout).contains("uid="));
 
     let _ = Command::new("docker")
         .args(["rm", "-f", "ss-test-reg"])
