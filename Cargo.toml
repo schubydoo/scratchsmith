@@ -33,7 +33,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "j
 
 [dev-dependencies]
 # Deterministic mock registry for the identity-token exchange test (no live network).
-wiremock = "0.6"
+wiremock = "=0.6.5"
 
 [profile.release]
 # Ship a small single binary — the size claim is part of the pitch (TAD 8.1).
