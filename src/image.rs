@@ -1,6 +1,6 @@
-//! Assemble the staged rootfs into a container image. Task 1.6 targets the local
-//! Docker daemon via a docker-archive tarball (the POC output sink); pure-Rust OCI
-//! archive output and registry push come in Sprint 5. Reproducible layers are 2.9.
+//! Assemble the staged rootfs into a container image. Sinks: the local Docker daemon
+//! via a docker-archive tarball (Task 1.6), and a daemonless **OCI archive** (Task 5.1).
+//! Registry push (5.2) is next. Layers are reproducible (2.9).
 
 use crate::stager::StagedTree;
 use anyhow::{bail, Context, Result};
@@ -27,30 +27,104 @@ pub struct ImageConfig {
 
 /// Assemble `staged` into an image and load it into the local Docker daemon as `tag`.
 pub fn load_into_docker(staged: &StagedTree, tag: &str, cfg: &ImageConfig) -> Result<()> {
+    let built = build_image(staged, cfg)?;
     let work = tempfile::tempdir().context("temp dir for image archive")?;
     let archive = work.path().join("image.tar");
-    build_docker_archive(staged, tag, cfg, &archive)?;
+    write_docker_archive(&built, tag, &archive)?;
     docker_load(&archive)?;
     Ok(())
 }
 
-// A docker-archive is a tar of: the image config, the single rootfs layer, and a
-// manifest.json tying them together. `docker load` reads exactly this shape.
-fn build_docker_archive(
+/// Write an **OCI image-layout** tarball (`oci-layout` + `index.json` + `blobs/sha256/*`)
+/// with no Docker daemon — Task 5.1. `docker load` and `skopeo copy oci-archive:…` both
+/// read this shape. The blobs (layer, config) are the exact same bytes the docker sink
+/// uses, so the manifest digest is identical across sinks.
+pub fn write_oci_archive(
     staged: &StagedTree,
     tag: &str,
     cfg: &ImageConfig,
     out: &Path,
 ) -> Result<()> {
-    let layer = build_layer(&staged.root)?;
+    let built = build_image(staged, cfg)?;
 
+    let manifest = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": OCI_MANIFEST,
+        "config": descriptor(OCI_CONFIG, &built.config_digest, built.config_bytes.len()),
+        "layers": [descriptor(OCI_LAYER_GZIP, &built.layer.digest, built.layer.gzip.len())],
+    });
+    let manifest_bytes = serde_json::to_vec(&manifest)?;
+    let manifest_digest = hex(Sha256::digest(&manifest_bytes));
+
+    let mut manifest_desc = descriptor(OCI_MANIFEST, &manifest_digest, manifest_bytes.len());
+    // The ref name lets `docker load` / `skopeo` tag the imported image.
+    manifest_desc["annotations"] = serde_json::json!({ "org.opencontainers.image.ref.name": tag });
+    let index = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": OCI_INDEX,
+        "manifests": [manifest_desc],
+    });
+
+    let mut ar = tar::Builder::new(std::fs::File::create(out)?);
+    append_bytes(&mut ar, "oci-layout", br#"{"imageLayoutVersion":"1.0.0"}"#)?;
+    append_bytes(&mut ar, "index.json", &serde_json::to_vec(&index)?)?;
+    append_bytes(
+        &mut ar,
+        &blob_path(&built.config_digest),
+        &built.config_bytes,
+    )?;
+    append_bytes(&mut ar, &blob_path(&built.layer.digest), &built.layer.gzip)?;
+    append_bytes(&mut ar, &blob_path(&manifest_digest), &manifest_bytes)?;
+    ar.finish().context("finishing OCI archive")?;
+    Ok(())
+}
+
+const OCI_MANIFEST: &str = "application/vnd.oci.image.manifest.v1+json";
+const OCI_INDEX: &str = "application/vnd.oci.image.index.v1+json";
+const OCI_CONFIG: &str = "application/vnd.oci.image.config.v1+json";
+const OCI_LAYER_GZIP: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
+
+// An OCI content descriptor: mediaType + sha256 digest + size, referencing a blob.
+fn descriptor(media_type: &str, digest_hex: &str, size: usize) -> serde_json::Value {
+    serde_json::json!({
+        "mediaType": media_type,
+        "digest": format!("sha256:{digest_hex}"),
+        "size": size,
+    })
+}
+
+fn blob_path(digest_hex: &str) -> String {
+    format!("blobs/sha256/{digest_hex}")
+}
+
+/// The reusable pieces of a built image — the layer plus the config blob — shared by
+/// every sink (docker-archive, OCI archive, later registry push). Building it once keeps
+/// the digests byte-identical across sinks.
+struct BuiltImage {
+    layer: Layer,
+    config_bytes: Vec<u8>,
+    config_digest: String,
+}
+
+fn build_image(staged: &StagedTree, cfg: &ImageConfig) -> Result<BuiltImage> {
+    let layer = build_layer(&staged.root)?;
     let config = image_config(&staged.entrypoint, &layer.diff_id, cfg);
     let config_bytes = serde_json::to_vec(&config)?;
-    let config_name = format!("{}.json", hex(Sha256::digest(&config_bytes)));
+    let config_digest = hex(Sha256::digest(&config_bytes));
+    Ok(BuiltImage {
+        layer,
+        config_bytes,
+        config_digest,
+    })
+}
 
+// A docker-archive is a tar of: the image config, the single rootfs layer, and a
+// manifest.json tying them together. `docker load` reads exactly this shape.
+fn write_docker_archive(built: &BuiltImage, tag: &str, out: &Path) -> Result<()> {
+    let config_name = format!("{}.json", built.config_digest);
     // The layer file is referenced by its gzip digest; the config records the
     // uncompressed diff_id. docker sniffs the gzip so the .tar name is fine.
-    let layer_name = format!("{}/layer.tar", layer.digest);
+    let layer_name = format!("{}/layer.tar", built.layer.digest);
     let manifest = serde_json::json!([{
         "Config": config_name,
         "RepoTags": [tag],
@@ -59,8 +133,8 @@ fn build_docker_archive(
     let manifest_bytes = serde_json::to_vec(&manifest)?;
 
     let mut ar = tar::Builder::new(std::fs::File::create(out)?);
-    append_bytes(&mut ar, &config_name, &config_bytes)?;
-    append_bytes(&mut ar, &layer_name, &layer.gzip)?;
+    append_bytes(&mut ar, &config_name, &built.config_bytes)?;
+    append_bytes(&mut ar, &layer_name, &built.layer.gzip)?;
     append_bytes(&mut ar, "manifest.json", &manifest_bytes)?;
     ar.finish().context("finishing image archive")?;
     Ok(())
@@ -308,6 +382,88 @@ mod tests {
         assert_eq!(a.diff_id, b.diff_id, "diff_id must be stable");
         assert_eq!(a.digest, b.digest, "layer digest must be stable");
         assert_eq!(a.gzip, b.gzip, "gzip bytes must be identical");
+    }
+
+    #[test]
+    fn oci_archive_is_a_well_formed_layout() {
+        use std::collections::HashMap;
+        use std::io::Read;
+
+        let tmp = tiny_rootfs();
+        let staged = StagedTree {
+            root: tmp.path().join("root"),
+            entrypoint: "/app".into(),
+        };
+        let out = tmp.path().join("img.tar");
+        write_oci_archive(
+            &staged,
+            "scratchsmith/app:packed",
+            &ImageConfig::default(),
+            &out,
+        )
+        .unwrap();
+
+        // Read the archive back: collect the blobs (asserting each is content-addressed)
+        // plus the layout + index.
+        let mut blobs: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut has_layout = false;
+        let mut index_bytes = Vec::new();
+        let mut ar = tar::Archive::new(std::fs::File::open(&out).unwrap());
+        for entry in ar.entries().unwrap() {
+            let mut e = entry.unwrap();
+            let path = e.path().unwrap().to_string_lossy().into_owned();
+            let mut buf = Vec::new();
+            e.read_to_end(&mut buf).unwrap();
+            if path == "oci-layout" {
+                has_layout = true;
+            } else if path == "index.json" {
+                index_bytes = buf;
+            } else if let Some(digest) = path.strip_prefix("blobs/sha256/") {
+                assert_eq!(
+                    hex(Sha256::digest(&buf)),
+                    digest,
+                    "blob {path} is not content-addressed"
+                );
+                blobs.insert(digest.to_string(), buf);
+            } else {
+                panic!("unexpected archive entry: {path}");
+            }
+        }
+        assert!(has_layout, "missing oci-layout");
+
+        let index: serde_json::Value = serde_json::from_slice(&index_bytes).unwrap();
+        assert_eq!(index["mediaType"], OCI_INDEX);
+        let mdesc = &index["manifests"][0];
+        assert_eq!(mdesc["mediaType"], OCI_MANIFEST);
+        assert_eq!(
+            mdesc["annotations"]["org.opencontainers.image.ref.name"],
+            "scratchsmith/app:packed"
+        );
+
+        // The index points to a manifest blob that exists and references a present
+        // config + layer, with descriptor sizes matching the actual blob lengths.
+        let strip = |d: &serde_json::Value| {
+            d.as_str()
+                .unwrap()
+                .strip_prefix("sha256:")
+                .unwrap()
+                .to_string()
+        };
+        let manifest: serde_json::Value =
+            serde_json::from_slice(blobs.get(&strip(&mdesc["digest"])).expect("manifest blob"))
+                .unwrap();
+        let cdig = strip(&manifest["config"]["digest"]);
+        let ldig = strip(&manifest["layers"][0]["digest"]);
+        assert_eq!(manifest["config"]["mediaType"], OCI_CONFIG);
+        assert_eq!(manifest["layers"][0]["mediaType"], OCI_LAYER_GZIP);
+        assert_eq!(
+            manifest["config"]["size"].as_u64().unwrap() as usize,
+            blobs.get(&cdig).expect("config blob").len()
+        );
+        assert_eq!(
+            manifest["layers"][0]["size"].as_u64().unwrap() as usize,
+            blobs.get(&ldig).expect("layer blob").len()
+        );
     }
 
     #[test]

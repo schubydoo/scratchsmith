@@ -16,8 +16,10 @@ const SMOKE_TIMEOUT_SECS: u32 = 15;
 /// the JSON can gate CI.
 #[derive(Debug, Clone, Serialize)]
 pub struct PackReport {
-    /// Image tag when an image was built.
+    /// Image tag when an image was built (loaded into Docker).
     pub tag: Option<String>,
+    /// Path of the OCI archive when `--oci-archive` was used (daemonless).
+    pub archive: Option<String>,
     /// Staging directory when `-n -o` was used instead of building an image.
     pub staged_dir: Option<String>,
     /// Entrypoint path inside the image.
@@ -54,6 +56,9 @@ impl PackReport {
         out.push_str(&format!("{}\n", self.size));
         if let Some(tag) = &self.tag {
             out.push_str(&format!("loaded image {tag}\n"));
+        }
+        if let Some(archive) = &self.archive {
+            out.push_str(&format!("wrote OCI archive {archive}\n"));
         }
         if let Some(dir) = &self.staged_dir {
             out.push_str(&format!("staged to {dir}\n"));
@@ -129,6 +134,8 @@ pub enum Sink {
     Rootfs(PathBuf),
     /// Build the image and load it into the local Docker daemon (the default sink).
     DockerLoad,
+    /// Write a daemonless OCI-archive tarball to this path (`--oci-archive`).
+    OciArchive(PathBuf),
 }
 
 /// Pack `binary` and deliver it via `sink` — the single entry point the CLI dispatches
@@ -137,6 +144,7 @@ pub fn pack(binary: &Path, opts: &PackOptions, sink: Sink) -> Result<PackReport>
     match sink {
         Sink::Rootfs(dir) => stage_only(binary, &dir, opts),
         Sink::DockerLoad => run(binary, opts),
+        Sink::OciArchive(out) => to_oci_archive(binary, opts, &out),
     }
 }
 
@@ -147,6 +155,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
     let sbom = maybe_sbom(out_dir, opts.sbom.as_ref())?;
     Ok(PackReport {
         tag: None,
+        archive: None,
         staged_dir: Some(tree.root.display().to_string()),
         entrypoint: tree.entrypoint.display().to_string(),
         size,
@@ -156,10 +165,20 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
     })
 }
 
-/// Pack `binary` into a scratch image loaded in the local Docker daemon. With
-/// `opts.smoke`, run the image once afterwards and fail if the dynamic loader could
-/// not start it — the guard against a silently broken image.
-pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
+// The shared prep for every image sink: resolve → stage → runtime extras → SBOM →
+// effective image config (tini wrap, root warning) → tag. The temp dir is held in the
+// return value so the staged rootfs outlives the delivery step.
+struct StagedImage {
+    _work: tempfile::TempDir,
+    tree: StagedTree,
+    cfg: ImageConfig,
+    tag: String,
+    size: SizeReport,
+    warnings: Vec<String>,
+    sbom: Option<String>,
+}
+
+fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
     let work = tempfile::tempdir()?;
     let dest = work.path().join("rootfs");
     let (tree, size, warnings) = build_rootfs(binary, &dest, opts.strip, &opts.includes)?;
@@ -186,11 +205,27 @@ pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
     }
 
     let tag = image_tag(binary);
-    image::load_into_docker(&tree, &tag, &cfg)?;
+    Ok(StagedImage {
+        _work: work,
+        tree,
+        cfg,
+        tag,
+        size,
+        warnings,
+        sbom,
+    })
+}
+
+/// Pack `binary` into a scratch image loaded in the local Docker daemon. With
+/// `opts.smoke`, run the image once afterwards and fail if the dynamic loader could
+/// not start it — the guard against a silently broken image.
+pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
+    let s = stage_for_image(binary, opts)?;
+    image::load_into_docker(&s.tree, &s.tag, &s.cfg)?;
 
     let mut smoke_ok = None;
     if opts.smoke {
-        let outcome = image::smoke_run(&tag, &[], SMOKE_TIMEOUT_SECS)?;
+        let outcome = image::smoke_run(&s.tag, &[], SMOKE_TIMEOUT_SECS)?;
         if outcome.loader_failed() {
             bail!(
                 "smoke-run failed: the image could not start the binary.\n{}",
@@ -201,13 +236,34 @@ pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
     }
 
     Ok(PackReport {
-        tag: Some(tag),
+        tag: Some(s.tag),
+        archive: None,
         staged_dir: None,
-        entrypoint: tree.entrypoint.display().to_string(),
-        size,
-        warnings,
+        entrypoint: s.tree.entrypoint.display().to_string(),
+        size: s.size,
+        warnings: s.warnings,
         smoke_ok,
-        sbom,
+        sbom: s.sbom,
+    })
+}
+
+/// Pack `binary` into a daemonless OCI-archive tarball at `out` (Task 5.1). No Docker
+/// daemon is contacted; `docker load` / `skopeo copy oci-archive:<out>` accept the result.
+fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackReport> {
+    if opts.smoke {
+        bail!("--smoke needs a running image, so it isn't supported with --oci-archive; load the archive (docker load / skopeo) and run it separately, or drop --smoke");
+    }
+    let s = stage_for_image(binary, opts)?;
+    image::write_oci_archive(&s.tree, &s.tag, &s.cfg, out)?;
+    Ok(PackReport {
+        tag: None,
+        archive: Some(out.display().to_string()),
+        staged_dir: None,
+        entrypoint: s.tree.entrypoint.display().to_string(),
+        size: s.size,
+        warnings: s.warnings,
+        smoke_ok: None,
+        sbom: s.sbom,
     })
 }
 
@@ -252,6 +308,7 @@ mod tests {
     fn sample_report() -> PackReport {
         PackReport {
             tag: Some("scratchsmith/app:packed".into()),
+            archive: None,
             staged_dir: None,
             entrypoint: "/opt/app".into(),
             size: SizeReport {
