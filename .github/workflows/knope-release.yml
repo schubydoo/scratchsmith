@@ -85,7 +85,7 @@ jobs:
           use-cache: false
       # Pinned prebuilt (not `cargo install`): cargo-zigbuild tracks zig's breaking
       # CLI, so a skew would only surface at release time. Renovate bumps the pin.
-      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
+      - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
         with:
           tool: cargo-zigbuild@0.23.0
       - name: Build (static musl via zig)
