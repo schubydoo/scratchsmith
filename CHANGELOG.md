@@ -6,6 +6,18 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0:
 breaking changes bump the minor).
+## 0.2.0 (2026-08-25)
+
+### Features
+
+#### The daemonless & supply-chain features, under their intended version ([#46](https://github.com/schubydoo/scratchsmith/pull/46))
+
+The daemonless output (`--oci-archive`, `--push`), Docker identity-token authentication, and
+image signing (`--push --sign`) are the substance of this release. They first shipped in 0.1.4,
+which was cut in error under a patch version; 0.2.0 re-releases the identical code under the
+minor version those features warrant. **No code changed between 0.1.4 and 0.2.0** — pin to
+0.2.0 (or later).
+
 ## 0.1.4 (2026-08-25)
 
 ### Features
