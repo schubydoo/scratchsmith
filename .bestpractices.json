@@ -135,7 +135,7 @@
   "dynamic_analysis_status": "Unmet",
   "dynamic_analysis_justification": "No fuzzing or sanitizer-based dynamic analysis is set up yet. The codebase is memory-safe Rust and exercised by integration tests that run the real binary (including a smoke-run and a static-musl link assertion), but continuous fuzzing (e.g. cargo-fuzz / ClusterFuzzLite) is a candidate follow-up. Dynamic analysis is a SHOULD, not a MUST, at the passing level.",
   "dynamic_analysis_unsafe_status": "Met",
-  "dynamic_analysis_unsafe_justification": "Scratchsmith is written in Rust, a memory-safe language, and uses no `unsafe` in its core paths, so the memory-safety defect classes this criterion targets are prevented at compile time rather than needing a sanitizer.",
+  "dynamic_analysis_unsafe_justification": "Scratchsmith is written in Rust, a memory-safe language, and uses no `unsafe` anywhere in its source, so the memory-safety defect classes this criterion targets are prevented at compile time rather than needing a sanitizer. (OpenSSF designates N/A as the canonical answer for memory-safe-language projects; Met is used here only because bestpractices.dev does not offer N/A for this criterion.)",
   "dynamic_analysis_enable_assertions_status": "Unmet",
   "dynamic_analysis_enable_assertions_justification": "No fuzzing/dynamic-analysis configuration is set up yet, so there is none in which to enable assertions. A candidate follow-up (cargo-fuzz / ClusterFuzzLite) would run with debug assertions enabled.",
   "dynamic_analysis_fixed_status": "Met",
