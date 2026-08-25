@@ -466,6 +466,31 @@ fn rootfs_sink_stages_without_an_image() {
 }
 
 #[test]
+fn root_user_warns_but_still_packs() {
+    // `--user 0` prints a warning (the non-root default is recommended) but must not
+    // fail. The daemonless OCI-archive sink exercises the pack path with no Docker.
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let opts = PackOptions {
+        image: ImageConfig {
+            user: Some("0".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let report = scratchsmith::pack::pack(
+        bin,
+        &opts,
+        scratchsmith::pack::Sink::OciArchive(tmp.path().join("img.tar")),
+    )
+    .expect("pack with a root user should still succeed");
+    assert!(report.archive.is_some());
+}
+
+#[test]
 fn docker_load_sink_via_pack() {
     if !docker_available() {
         eprintln!("skipping: no Docker daemon");

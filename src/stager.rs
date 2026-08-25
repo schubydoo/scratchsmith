@@ -562,4 +562,34 @@ mod tests {
         assert!(dest.join("etc/passwd").exists());
         assert!(report.warnings.iter().any(|w| w.contains("libnss_files")));
     }
+
+    #[test]
+    fn size_report_renders_entries_stripped_and_plain() {
+        let stripped = SizeReport {
+            entries: vec![SizeEntry {
+                path: "/lib/x.so".into(),
+                before: 100,
+                after: 40,
+            }],
+            total_before: 100,
+            total_after: 40,
+            stripped: true,
+        };
+        let text = stripped.to_string();
+        assert!(text.contains("100"), "before size missing: {text}");
+        assert!(text.contains("/lib/x.so"), "path missing: {text}");
+        assert!(text.contains("saved"), "savings summary missing: {text}");
+
+        let plain = SizeReport {
+            entries: vec![SizeEntry {
+                path: "/lib/x.so".into(),
+                before: 40,
+                after: 40,
+            }],
+            total_before: 40,
+            total_after: 40,
+            stripped: false,
+        };
+        assert!(plain.to_string().contains("/lib/x.so"));
+    }
 }
