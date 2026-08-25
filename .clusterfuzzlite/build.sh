@@ -45,8 +45,17 @@ clang -Wl,--enable-new-dtags,-rpath,'$ORIGIN/lib' -o "$seed_dir/elf-runpath-orig
 clang -shared -fPIC -Wl,-soname,libseed.so.1     -o "$seed_dir/elf-shared.so"      "$seed_dir/s.c" # ET_DYN + soname
 clang -static-pie                                -o "$seed_dir/elf-static-pie"     "$seed_dir/s.c" # static PIE: no INTERP
 rm -f "$seed_dir/s.c"
+# The set is identical for every target, so zip once and copy. rm -f first because zip appends
+# to an existing archive, keeping the step idempotent if $OUT is ever reused.
+seed_zip=""
 for f in fuzz/fuzz_targets/*.rs; do
-  target="$(basename "${f%.*}")"
-  ( cd "$seed_dir" && zip -q -r "$OUT/${target}_seed_corpus.zip" . )
+  dest="$OUT/$(basename "${f%.*}")_seed_corpus.zip"
+  if [ -z "$seed_zip" ]; then
+    rm -f "$dest"
+    ( cd "$seed_dir" && zip -q -r "$dest" . )
+    seed_zip="$dest"
+  else
+    cp "$seed_zip" "$dest"
+  fi
 done
 rm -rf "$seed_dir"
