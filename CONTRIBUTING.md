@@ -104,9 +104,10 @@ and a one-line summary. **Pre-1.0**, a `major` (breaking) change maps to a *mino
 Internal-only PRs (CI, refactor, tests, non-user-facing docs) need no fragment — apply
 the **`no-changelog`** label instead. Never hand-edit `CHANGELOG.md`; it is generated.
 
-> During initial bring-up the automated release flow is **gated off** behind the
-> `KNOPE_ENABLED` repo variable, and the changeset check is **advisory** (non-blocking).
-> Add fragments anyway — they're the source of truth once releases are switched on.
+> Releases are **live** (the `KNOPE_ENABLED` flow is on): a merged fragment is picked up by
+> the `chore: prepare release …` PR and ships when that PR merges. The changeset check itself
+> is **advisory** (a non-blocking sticky-comment nudge), but add a fragment anyway — fragments
+> are the source of truth for the version bump and `CHANGELOG.md`.
 
 [knope]: https://knope.tech
 
