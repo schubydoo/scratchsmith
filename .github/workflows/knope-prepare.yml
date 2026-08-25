@@ -68,11 +68,18 @@ jobs:
           # downgrade — a release PR an override dispatch pinned with the `release-pinned`
           # label. Skip push-triggered runs while that label is present; any dispatch proceeds.
           if [ "$has" = "true" ] && [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            pinned=$(gh pr list --repo "$GITHUB_REPOSITORY" --head release --state open \
-              --json labels --jq 'any(.[].labels[]; .name=="release-pinned")' 2>/dev/null || echo false)
-            if [ "$pinned" = "true" ]; then
+            # Fail CLOSED: if the label can't be determined (API hiccup), skip rather than risk
+            # downgrading a pinned release. A false skip just defers the refresh to the next
+            # push/dispatch; a false proceed silently downgrades (the v0.1.4 incident).
+            if pinned=$(gh pr list --repo "$GITHUB_REPOSITORY" --head release --state open \
+                 --json labels --jq 'any(.[].labels[]; .name=="release-pinned")' 2>/dev/null); then
+              if [ "$pinned" = "true" ]; then
+                has=false
+                echo "::notice::Release PR is pinned (release-pinned); leaving it untouched. Re-dispatch knope-prepare (with override_version) to change it."
+              fi
+            else
               has=false
-              echo "::notice::Release PR is pinned (release-pinned); leaving it untouched. Re-dispatch knope-prepare (with override_version) to change it."
+              echo "::warning::couldn't query the release PR's pin state; skipping this push-triggered prepare (fail-closed) so a pinned release can't be downgraded. Re-dispatch knope-prepare to refresh."
             fi
           fi
           echo "has=$has" >> "$GITHUB_OUTPUT"
@@ -126,12 +133,23 @@ jobs:
             knope prepare-release --verbose --override-version "$OVERRIDE"
             # Pin the release PR so a later push to main can't downgrade it (the v0.1.4
             # incident). The label is only ADDED (defined already in the repo), so the App
-            # token needs just pull-requests: write.
-            pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head release --state open \
-              --json number --jq '.[0].number' 2>/dev/null || echo "")
-            if [ -n "$pr" ]; then
-              gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --add-label release-pinned \
-                || echo "::warning::could not pin release PR #$pr with the release-pinned label"
+            # token needs just pull-requests: write. Fail LOUD if the pin doesn't stick — an
+            # unpinned override PR is exactly what the guard exists to prevent. Retry the PR
+            # lookup: knope has just opened/updated it and API visibility can lag.
+            pr=""
+            for _ in 1 2 3 4 5; do
+              pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head release --state open \
+                --json number --jq '.[0].number' 2>/dev/null || echo "")
+              [ -n "$pr" ] && break
+              sleep 3
+            done
+            if [ -z "$pr" ]; then
+              echo "::error::override prepared but no open release PR was found to pin; a later push could downgrade it. Re-dispatch or add the release-pinned label by hand."
+              exit 1
+            fi
+            if ! gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --add-label release-pinned; then
+              echo "::error::failed to add the release-pinned label to PR #$pr; a later push could downgrade this override release. Add it by hand, then it is protected."
+              exit 1
             fi
           else
             knope prepare-release --verbose
