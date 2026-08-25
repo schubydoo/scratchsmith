@@ -204,8 +204,14 @@ jobs:
         run: |
           bin=target/x86_64-unknown-linux-musl/debug/scratchsmith
           file "$bin"
-          file "$bin" | grep -q 'statically linked' \
-            || { echo "::error::musl build is not statically linked — a dependency likely pulled a dynamic TLS/crypto backend. Keep TLS on rustls + aws-lc-rs."; exit 1; }
+          # Key on the invariant itself, not file(1)'s wording: a static binary has no
+          # PT_INTERP (no dynamic loader). This holds for both classic ET_EXEC static and
+          # static-PIE, which `file` prints as "static-pie linked" — a substring match on
+          # "statically linked" would false-fail there.
+          if readelf -l "$bin" | grep -q 'INTERP'; then
+            echo "::error::musl build has a PT_INTERP segment (a dynamic loader) — not statically linked. A dependency likely pulled a dynamic TLS/crypto backend; keep TLS on rustls + aws-lc-rs."
+            exit 1
+          fi
 
   ci-required-checks:
     # The single status branch protection requires. Add new required jobs to needs.
