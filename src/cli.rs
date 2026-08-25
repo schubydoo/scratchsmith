@@ -66,6 +66,9 @@ pub enum Command {
         /// Directory to stage into (with --no-build).
         #[arg(short = 'o', long, value_name = "DIR", requires = "no_build")]
         output: Option<PathBuf>,
+        /// Write a daemonless OCI-archive tarball instead of loading into Docker.
+        #[arg(long, value_name = "FILE", conflicts_with = "no_build")]
+        oci_archive: Option<PathBuf>,
         /// Image entrypoint (defaults to the packed binary's path).
         #[arg(long, value_name = "PATH")]
         entrypoint: Option<String>,
@@ -161,6 +164,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             smoke,
             no_build,
             output,
+            oci_archive,
             entrypoint,
             cmd,
             env,
@@ -208,7 +212,9 @@ fn dispatch(cli: Cli) -> Result<()> {
                 },
             };
 
-            let sink = if no_build {
+            let sink = if let Some(file) = oci_archive {
+                crate::pack::Sink::OciArchive(file)
+            } else if no_build {
                 // clap guarantees output is present when no_build is set.
                 crate::pack::Sink::Rootfs(output.expect("--no-build requires --output"))
             } else {
