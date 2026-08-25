@@ -151,10 +151,13 @@ async fn exchange_identity_token(
     }
     let parsed: TokenResponse = serde_json::from_str(&body)
         .with_context(|| format!("decoding the token response from {realm}"))?;
+    // Prefer a non-empty `access_token`, else a non-empty `token` — filter each candidate
+    // before the fallback so an empty `access_token` can't mask a usable `token`.
+    let non_empty = |t: String| Some(t).filter(|t| !t.is_empty());
     parsed
         .access_token
-        .or(parsed.token)
-        .filter(|t| !t.is_empty())
+        .and_then(non_empty)
+        .or_else(|| parsed.token.and_then(non_empty))
         .with_context(|| format!("token endpoint {realm} returned no access_token"))
 }
 
@@ -361,6 +364,18 @@ mod tests {
         )
         .expect("exchange should accept a `token` field");
         assert_eq!(bearer(auth), "hub-token");
+    }
+
+    #[test]
+    fn identity_token_exchange_prefers_a_nonempty_token_over_an_empty_access_token() {
+        let auth = resolve_via_mock(
+            Some(r#"Bearer realm="{realm}",service="mock""#),
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "access_token": "", "token": "real" })),
+            "owner/img",
+        )
+        .expect("an empty access_token must fall through to a usable token");
+        assert_eq!(bearer(auth), "real");
     }
 
     #[test]
