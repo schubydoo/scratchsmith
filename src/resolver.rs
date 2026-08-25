@@ -664,4 +664,79 @@ mod tests {
         let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
         assert_eq!(res.missing, vec!["libghost.so".to_string()]);
     }
+
+    #[test]
+    fn platform_maps_the_machine() {
+        let mut e = info(None, &[]);
+        e.machine = goblin::elf::header::EM_AARCH64;
+        assert_eq!(e.platform(), "aarch64");
+        e.machine = goblin::elf::header::EM_X86_64;
+        assert_eq!(e.platform(), "x86_64");
+        e.machine = 0xffff; // anything else → empty, rather than guessing wrong
+        assert_eq!(e.platform(), "");
+    }
+
+    #[test]
+    fn reroot_handles_sysroot_and_relative_paths() {
+        // Root "/" leaves the path unchanged.
+        assert_eq!(
+            reroot(Path::new("/"), Path::new("/usr/lib/x")),
+            PathBuf::from("/usr/lib/x")
+        );
+        // A path already under the sysroot is not double-rooted.
+        assert_eq!(
+            reroot(Path::new("/sr"), Path::new("/sr/lib/x")),
+            PathBuf::from("/sr/lib/x")
+        );
+        // A normal absolute path is joined under the sysroot.
+        assert_eq!(
+            reroot(Path::new("/sr"), Path::new("/lib/x")),
+            PathBuf::from("/sr/lib/x")
+        );
+        // A relative path (no leading "/") is returned as-is (the strip_prefix Err arm).
+        assert_eq!(
+            reroot(Path::new("/sr"), Path::new("rel/x")),
+            PathBuf::from("rel/x")
+        );
+    }
+
+    #[test]
+    fn find_lib_resolves_slash_sonames_and_search_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let libdir = tmp.path().join("lib");
+        std::fs::create_dir_all(&libdir).unwrap();
+        let lib = libdir.join("libx.so.1");
+        touch(&lib);
+
+        // Bare soname found by scanning the search dirs.
+        assert_eq!(
+            find_lib(
+                "libx.so.1",
+                std::slice::from_ref(&libdir),
+                Path::new("/"),
+                Path::new("/")
+            ),
+            Some(lib.clone())
+        );
+        // A missing bare soname is None.
+        assert_eq!(
+            find_lib(
+                "libmissing.so",
+                std::slice::from_ref(&libdir),
+                Path::new("/"),
+                Path::new("/")
+            ),
+            None
+        );
+        // A slash-soname with an absolute path is rerooted (root "/" → unchanged).
+        assert_eq!(
+            find_lib(lib.to_str().unwrap(), &[], Path::new("/"), Path::new("/")),
+            Some(lib.clone())
+        );
+        // A slash-soname with a relative path resolves against origin_dir.
+        assert_eq!(
+            find_lib("./libx.so.1", &[], &libdir, Path::new("/")),
+            Some(libdir.join("./libx.so.1"))
+        );
+    }
 }

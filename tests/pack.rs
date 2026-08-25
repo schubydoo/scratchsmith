@@ -466,6 +466,41 @@ fn rootfs_sink_stages_without_an_image() {
 }
 
 #[test]
+fn root_user_warns_but_still_packs() {
+    // `--user 0` prints a warning (the non-root default is recommended) but must not
+    // fail. Run via the CLI so we can assert the warning on stderr (it's an eprintln!,
+    // not a report field); the daemonless OCI-archive sink needs no Docker.
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let archive = tmp.path().join("img.tar");
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args([
+            "pack",
+            "--user",
+            "0",
+            "--oci-archive",
+            archive.to_str().unwrap(),
+            bin.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "pack should succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(archive.exists(), "archive not written");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("runs the image as root"),
+        "root warning missing from stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn docker_load_sink_via_pack() {
     if !docker_available() {
         eprintln!("skipping: no Docker daemon");
