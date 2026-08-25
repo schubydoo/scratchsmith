@@ -9,6 +9,10 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+# resolve_graph builds a structured dependency graph over a throwaway sysroot.
+arbitrary = { version = "1", features = ["derive"] }
+tempfile = "3"
+anyhow = "1"
 
 [dependencies.scratchsmith]
 path = ".."
@@ -26,6 +30,13 @@ bench = false
 [[bin]]
 name = "analyze_hardening"
 path = "fuzz_targets/analyze_hardening.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "resolve_graph"
+path = "fuzz_targets/resolve_graph.rs"
 test = false
 doc = false
 bench = false
