@@ -26,6 +26,14 @@ clap_complete = "4.6.9"
 oci-client = "0.17.0"
 docker_credential = "1.4.0"
 tokio = { version = "1.53.1", features = ["rt", "net", "time", "io-util"] }
+# Identity-token exchange needs a direct HTTP client. Match oci-client's exact TLS feature
+# (`reqwest/rustls` = aws-lc-rs + platform-verifier) so Cargo reuses the one compiled reqwest
+# and no second TLS stack is linked — keeps the musl-static build working.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form"] }
+
+[dev-dependencies]
+# Deterministic mock registry for the identity-token exchange test (no live network).
+wiremock = "0.6"
 
 [profile.release]
 # Ship a small single binary — the size claim is part of the pitch (TAD 8.1).
