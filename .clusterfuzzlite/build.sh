@@ -29,3 +29,24 @@ for f in fuzz/fuzz_targets/*.rs; do
   target="$(basename "${f%.*}")"
   cp "$FUZZ_TARGET_OUTPUT_DIR/$target" "$OUT/"
 done
+
+# Seed corpus: bootstrap the fuzzers with valid ELFs so mutation reaches resolver's dependency
+# branches (interpreter, RPATH/RUNPATH/$ORIGIN, sonames) and lint's hardening branches — code that
+# random bytes never hit (parse_elf_info sat at ~10% before this). Generated here from the image,
+# never committed. Compiled with bare `clang` (NOT $CC/$CFLAGS) so the seeds stay small, clean ELFs
+# rather than sanitizer-instrumented ones. Both targets take arbitrary ELF bytes, so they share the
+# set. Consumed as OSS-Fuzz/ClusterFuzzLite `<target>_seed_corpus.zip`.
+seed_dir="$(mktemp -d)"
+cp /usr/bin/id "$seed_dir/real-id" # real dynamic exec: interpreter + DT_NEEDED + versioned sonames
+printf 'int main(void){return 0;}\n' > "$seed_dir/s.c"
+clang -Wl,--disable-new-dtags,-rpath,/opt/lib    -o "$seed_dir/elf-rpath"          "$seed_dir/s.c" # RPATH
+# shellcheck disable=SC2016 # $ORIGIN is a literal ELF rpath token, not a shell expansion
+clang -Wl,--enable-new-dtags,-rpath,'$ORIGIN/lib' -o "$seed_dir/elf-runpath-origin" "$seed_dir/s.c" # RUNPATH + $ORIGIN
+clang -shared -fPIC -Wl,-soname,libseed.so.1     -o "$seed_dir/elf-shared.so"      "$seed_dir/s.c" # ET_DYN + soname
+clang -static-pie                                -o "$seed_dir/elf-static-pie"     "$seed_dir/s.c" # static PIE: no INTERP
+rm -f "$seed_dir/s.c"
+for f in fuzz/fuzz_targets/*.rs; do
+  target="$(basename "${f%.*}")"
+  ( cd "$seed_dir" && zip -q -r "$OUT/${target}_seed_corpus.zip" . )
+done
+rm -rf "$seed_dir"
