@@ -123,4 +123,25 @@ mod tests {
         };
         assert!(report.to_text().contains("pushed ghcr.io/you/app:latest"));
     }
+
+    #[test]
+    fn text_report_renders_a_staged_dir() {
+        let report = PackReport {
+            tag: None,
+            archive: None,
+            pushed: None,
+            staged_dir: Some("/out/rootfs".into()),
+            entrypoint: "/opt/app".into(),
+            size: SizeReport {
+                entries: vec![],
+                total_before: 1,
+                total_after: 1,
+                stripped: false,
+            },
+            warnings: vec![],
+            smoke_ok: None,
+            sbom: None,
+        };
+        assert!(report.to_text().contains("staged to /out/rootfs"));
+    }
 }
