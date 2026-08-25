@@ -23,7 +23,7 @@ reproducible layers.
   <img src="docs/demo/scratchsmith.svg" alt="Scratchsmith packing a dynamic glibc binary into a 2.5 MB FROM scratch image with an SBOM and a smoke-run, then running it" width="720">
 </p>
 
-> **Status — v0.1.** The core works end to end (see [What works today](#what-works-today)), and
+> **Status — v0.2.** The core works end to end (see [What works today](#what-works-today)), and
 > releases are [signed and published](#install). One note on the tagline:
 > - **Daemonless is here.** `--push` uploads the image straight to a registry and `--oci-archive`
 >   writes an OCI archive — both with **no Docker daemon**. The *default* sink still hands the image
@@ -160,7 +160,7 @@ Pack in CI with no shell glue. The composite action downloads the signed release
 runner, verifies it against the release checksums, and runs `pack`:
 
 ```yaml
-- uses: schubydoo/scratchsmith@v0.1.2
+- uses: schubydoo/scratchsmith@v0.2.0
   with:
     binary: ./dist/app         # your prebuilt dynamic glibc binary
     sbom: true                 # needs syft on the runner
@@ -174,20 +174,20 @@ the built image, log in first and set `push`:
 ```yaml
 - uses: docker/login-action@v3
   with: { registry: ghcr.io, username: ${{ github.actor }}, password: ${{ secrets.GITHUB_TOKEN }} }
-- uses: schubydoo/scratchsmith@v0.1.2
+- uses: schubydoo/scratchsmith@v0.2.0
   with:
     binary: ./dist/app
     push: ghcr.io/${{ github.repository }}:latest
 ```
 
-Pin to a release tag (`@v0.1.2`) or a commit SHA — the same supply-chain hygiene the tool itself
+Pin to a release tag (`@v0.2.0`) or a commit SHA — the same supply-chain hygiene the tool itself
 practices. `version:` overrides which scratchsmith release the action runs (defaults to the pinned
 tag, else `latest`).
 
 ## Verifying releases
 
 Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
-Replace `<ver>` with the bare version you downloaded — e.g. `0.1.0`, no `v` (the tarball adds the
+Replace `<ver>` with the bare version you downloaded — e.g. `0.2.0`, no `v` (the tarball adds the
 `v` prefix; the image tag doesn't).
 
 ```sh
@@ -254,7 +254,7 @@ Scratchsmith owns the one input the others don't serve: **an arbitrary prebuilt 
 
 ## Roadmap
 
-Shipped in v0.1: signed release binaries (amd64 + arm64), cosign keyless signing + SLSA build
+Shipped so far: signed release binaries (amd64 + arm64), cosign keyless signing + SLSA build
 provenance, a signed multi-arch GHCR image, a [GitHub Action](#github-action), a Homebrew tap, a
 versioned docs site, **daemonless output** — `--oci-archive` and `--push` (pure-Rust OCI
 archive + direct registry push, no Docker daemon) — and **image signing** (`--push --sign`,

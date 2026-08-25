@@ -9,7 +9,7 @@ symlinks), stages the glibc pieces nothing else remembers (NSS modules, a workin
 `nsswitch.conf`, minimal `passwd`/`group`), and assembles a **non-root** image with reproducible
 layers.
 
-!!! info "Status — v0.1"
+!!! info "Status — v0.2"
     The core works end to end, and releases are signed and published (see [Install](#install)).
     One honest caveat up front:
 
@@ -129,7 +129,7 @@ Pack in CI with no shell glue. The composite action downloads the signed release
 runner, verifies it against the release checksums, and runs `pack`:
 
 ```yaml
-- uses: schubydoo/scratchsmith@v0.1.2
+- uses: schubydoo/scratchsmith@v0.2.0
   with:
     binary: ./dist/app         # your prebuilt dynamic glibc binary
     sbom: true                 # needs syft on the runner
@@ -143,19 +143,19 @@ the built image, log in first and set `push`:
 ```yaml
 - uses: docker/login-action@v3
   with: { registry: ghcr.io, username: ${{ github.actor }}, password: ${{ secrets.GITHUB_TOKEN }} }
-- uses: schubydoo/scratchsmith@v0.1.2
+- uses: schubydoo/scratchsmith@v0.2.0
   with:
     binary: ./dist/app
     push: ghcr.io/${{ github.repository }}:latest
 ```
 
-Pin to a release tag (`@v0.1.2`) or a commit SHA. `version:` overrides which scratchsmith release
+Pin to a release tag (`@v0.2.0`) or a commit SHA. `version:` overrides which scratchsmith release
 the action runs (defaults to the pinned tag, else `latest`).
 
 ## Verifying releases
 
 Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
-Replace `<ver>` with the bare version you downloaded — e.g. `0.1.0`, no `v` (the tarball adds the
+Replace `<ver>` with the bare version you downloaded — e.g. `0.2.0`, no `v` (the tarball adds the
 `v` prefix; the image tag doesn't).
 
 ```sh
