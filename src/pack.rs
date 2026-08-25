@@ -377,4 +377,25 @@ mod tests {
         assert!(text.contains("smoke-run ok"));
         assert!(text.contains("200 -> 123"));
     }
+
+    #[test]
+    fn text_report_renders_a_pushed_reference() {
+        let report = PackReport {
+            tag: None,
+            archive: None,
+            pushed: Some("ghcr.io/you/app:latest".into()),
+            staged_dir: None,
+            entrypoint: "/opt/app".into(),
+            size: SizeReport {
+                entries: vec![],
+                total_before: 10,
+                total_after: 10,
+                stripped: false,
+            },
+            warnings: vec![],
+            smoke_ok: None,
+            sbom: None,
+        };
+        assert!(report.to_text().contains("pushed ghcr.io/you/app:latest"));
+    }
 }

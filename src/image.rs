@@ -96,14 +96,9 @@ pub fn push_to_registry(staged: &StagedTree, reference: &str, cfg: &ImageConfig)
         .with_context(|| format!("invalid image reference {reference:?}"))?;
 
     let registry = reference.registry();
-    let auth = docker_auth(registry);
-    let protocol = if is_local_registry(registry) {
-        ClientProtocol::HttpsExcept(vec![registry.to_string()])
-    } else {
-        ClientProtocol::Https
-    };
+    let auth = auth_from_credential(docker_credential::get_credential(registry).ok(), registry);
     let client = Client::new(ClientConfig {
-        protocol,
+        protocol: registry_protocol(registry),
         ..Default::default()
     });
 
@@ -123,17 +118,20 @@ pub fn push_to_registry(staged: &StagedTree, reference: &str, cfg: &ImageConfig)
     Ok(())
 }
 
-// Resolve registry credentials from the local Docker config (incl. credential helpers).
-// UsernamePassword covers the common case — token-auth registries (GHCR, Docker Hub) do
-// the OAuth exchange from these Basic creds. An identity-token credential isn't wired yet
-// (auth hardening), so warn rather than silently look anonymous; anything else (no creds)
-// is genuinely anonymous.
-fn docker_auth(registry: &str) -> RegistryAuth {
-    match docker_credential::get_credential(registry) {
-        Ok(docker_credential::DockerCredential::UsernamePassword(user, pass)) => {
+// Map a Docker-config credential to a registry auth. UsernamePassword covers the common
+// case — token-auth registries (GHCR, Docker Hub) do the OAuth exchange from these Basic
+// creds. An identity-token credential isn't wired yet (auth hardening), so warn rather than
+// silently look anonymous; no credential is genuinely anonymous. Split out as a pure
+// function (credential in → auth out) so every arm is unit-testable without real creds.
+fn auth_from_credential(
+    cred: Option<docker_credential::DockerCredential>,
+    registry: &str,
+) -> RegistryAuth {
+    match cred {
+        Some(docker_credential::DockerCredential::UsernamePassword(user, pass)) => {
             RegistryAuth::Basic(user, pass)
         }
-        Ok(docker_credential::DockerCredential::IdentityToken(_)) => {
+        Some(docker_credential::DockerCredential::IdentityToken(_)) => {
             eprintln!(
                 "warning: found an identity-token credential for {registry}, which scratchsmith \
                  doesn't use yet — trying anonymous. If the push needs auth, log in with a \
@@ -141,13 +139,22 @@ fn docker_auth(registry: &str) -> RegistryAuth {
             );
             RegistryAuth::Anonymous
         }
-        Err(_) => RegistryAuth::Anonymous,
+        None => RegistryAuth::Anonymous,
     }
 }
 
-// Is this registry a localhost one (→ plain-HTTP, matching Docker's insecure-localhost
-// default)? Handles `host[:port]` and bracketed IPv6 (`[::1]:5000`); the colons inside a
-// bare IPv6 address mean we can't just split on ':'.
+// Plain-HTTP for a localhost registry (matching Docker's insecure-localhost default),
+// HTTPS otherwise.
+fn registry_protocol(registry: &str) -> ClientProtocol {
+    if is_local_registry(registry) {
+        ClientProtocol::HttpsExcept(vec![registry.to_string()])
+    } else {
+        ClientProtocol::Https
+    }
+}
+
+// Is this registry a localhost one? Handles `host[:port]` and bracketed IPv6
+// (`[::1]:5000`); the colons inside a bare IPv6 address mean we can't just split on ':'.
 fn is_local_registry(registry: &str) -> bool {
     let host = registry
         .strip_prefix('[')
@@ -553,6 +560,36 @@ mod tests {
         assert!(is_local_registry("[::1]:5000"), "bracketed IPv6 localhost");
         assert!(!is_local_registry("ghcr.io"));
         assert!(!is_local_registry("registry.example.com:5000"));
+    }
+
+    #[test]
+    fn registry_protocol_is_http_only_for_localhost() {
+        assert!(matches!(
+            registry_protocol("ghcr.io"),
+            ClientProtocol::Https
+        ));
+        assert!(matches!(
+            registry_protocol("localhost:5000"),
+            ClientProtocol::HttpsExcept(_)
+        ));
+    }
+
+    #[test]
+    fn auth_from_credential_maps_each_variant() {
+        use docker_credential::DockerCredential::{IdentityToken, UsernamePassword};
+        assert!(matches!(
+            auth_from_credential(Some(UsernamePassword("u".into(), "p".into())), "ghcr.io"),
+            RegistryAuth::Basic(_, _)
+        ));
+        // Identity-token creds aren't wired yet → anonymous (with a warning).
+        assert!(matches!(
+            auth_from_credential(Some(IdentityToken("t".into())), "ghcr.io"),
+            RegistryAuth::Anonymous
+        ));
+        assert!(matches!(
+            auth_from_credential(None, "ghcr.io"),
+            RegistryAuth::Anonymous
+        ));
     }
 
     #[test]

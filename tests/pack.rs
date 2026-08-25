@@ -529,6 +529,19 @@ fn push_to_local_registry_is_pullable_and_runnable() {
     )
     .expect("re-push should succeed (blobs already present)");
 
+    // The `--push` flag path through the CLI (a distinct tag on the same registry).
+    let cli_ref = "localhost:5099/scratchsmith/test:cli";
+    let cli = Command::new(bin)
+        .args(["pack", "--push", cli_ref, bin.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        cli.status.success(),
+        "cli --push failed: {}",
+        String::from_utf8_lossy(&cli.stderr)
+    );
+    assert!(String::from_utf8_lossy(&cli.stdout).contains("pushed"));
+
     // The pushed image pulls and runs.
     let pull = Command::new("docker")
         .args(["pull", reference])
