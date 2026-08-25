@@ -8,9 +8,11 @@ name: Push auth smoke (live GHCR)
 #
 # workflow_dispatch ONLY: a push creates a package in this account's GHCR namespace, so it must
 # never run unattended. It targets a dedicated throwaway package (`<repo>-authtest`) with a
-# FIXED tag, so each run overwrites the previous manifest rather than piling up tags on the
-# real `scratchsmith` package. GITHUB_TOKEN cannot delete package versions, so there is no
-# auto-cleanup — that separate, clearly-named package is the containment.
+# FIXED tag, kept separate from the real `scratchsmith` package. GITHUB_TOKEN can neither delete
+# a package nor reliably make it private, so the final step self-cleans by deleting the whole
+# throwaway package using a separate PAT secret, GHCR_CLEANUP_TOKEN (a fine-grained/classic PAT
+# with delete:packages). Without that secret the cleanup step warns and skips, and the package
+# must be deleted by hand.
 
 on:
   workflow_dispatch:
@@ -62,3 +64,23 @@ jobs:
           set -euo pipefail
           docker pull "$PUSH_REF"
           docker run --rm "$PUSH_REF"
+      # Delete the throwaway package so it doesn't linger (public) in the namespace. Runs even
+      # if an earlier step failed. GITHUB_TOKEN can't delete packages, so this uses a separate
+      # PAT secret; without it, warn and skip rather than fail the run.
+      - name: Delete the throwaway package
+        if: always()
+        env:
+          CLEANUP_TOKEN: ${{ secrets.GHCR_CLEANUP_TOKEN }}
+          PACKAGE: ${{ github.event.repository.name }}-authtest
+        run: |
+          set -euo pipefail
+          if [ -z "${CLEANUP_TOKEN:-}" ]; then
+            echo "::warning::GHCR_CLEANUP_TOKEN not set — leaving package '$PACKAGE'. Delete it by hand, or add the secret (a PAT with delete:packages) so future runs self-clean."
+            exit 0
+          fi
+          # One dedicated package for this test, so delete the whole thing (not a single version).
+          if GH_TOKEN="$CLEANUP_TOKEN" gh api --method DELETE "/user/packages/container/$PACKAGE"; then
+            echo "Deleted throwaway package '$PACKAGE'."
+          else
+            echo "::warning::Could not delete '$PACKAGE' (already gone, or the token lacks delete:packages)."
+          fi
