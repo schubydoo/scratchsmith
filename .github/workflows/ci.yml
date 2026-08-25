@@ -172,11 +172,52 @@ jobs:
           zsh -c 'fpath=($PWD $fpath); autoload -Uz compinit; compinit -u; source ./_scratchsmith' && echo "zsh: sourced OK"
           fish -c 'source ss.fish' && echo "fish: sourced OK"
 
+  musl:
+    # Gate the shipped artifact's invariant on EVERY PR, not just at release: the
+    # binary must link fully static against musl. The release builds it via zig, but
+    # nothing else did — so a dependency bump that pulls OpenSSL/native-tls (breaking
+    # the static link) used to pass PR CI and only fail at release. TLS must stay on
+    # rustls + aws-lc-rs. amd64 is enough to catch a link/TLS regression (same crates
+    # + features as arm64); the release still builds both arches.
+    name: build (static musl)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.13.0
+          use-cache: false
+      - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+        with:
+          tool: cargo-zigbuild@0.23.0
+      # Debug build: the point is the link, not optimization — reuse the warm cache
+      # instead of the slow LTO release profile (this is on the required-checks path).
+      - name: Build (static musl via zig)
+        run: cargo zigbuild --target x86_64-unknown-linux-musl --bin scratchsmith
+      - name: Assert the binary is fully static
+        run: |
+          bin=target/x86_64-unknown-linux-musl/debug/scratchsmith
+          file "$bin"
+          # Key on the invariant itself, not file(1)'s wording: a static binary has no
+          # PT_INTERP (no dynamic loader). This holds for both classic ET_EXEC static and
+          # static-PIE, which `file` prints as "static-pie linked" — a substring match on
+          # "statically linked" would false-fail there.
+          if readelf -l "$bin" | grep -q 'INTERP'; then
+            echo "::error::musl build has a PT_INTERP segment (a dynamic loader) — not statically linked. A dependency likely pulled a dynamic TLS/crypto backend; keep TLS on rustls + aws-lc-rs."
+            exit 1
+          fi
+
   ci-required-checks:
     # The single status branch protection requires. Add new required jobs to needs.
     name: ci required checks passed
     if: always()
-    needs: [lint, msrv, test, coverage, supply-chain, completions]
+    needs: [lint, msrv, test, coverage, supply-chain, completions, musl]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
