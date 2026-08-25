@@ -175,6 +175,44 @@ mod tests {
     }
 
     #[test]
+    fn each_gate_flags_its_own_weakness() {
+        // A binary weak on NX/canary/fortify with only partial RELRO: every matching gate fires.
+        let weak = Hardening {
+            pie: true,
+            relro: Relro::Partial,
+            nx: false,
+            canary: false,
+            fortify: false,
+        };
+        let gates = [
+            Gate::NoNx,
+            Gate::NoCanary,
+            Gate::NoFortify,
+            Gate::PartialRelro,
+        ];
+        assert_eq!(weak.violations(&gates), gates.to_vec());
+        // A strong binary violates none of them.
+        assert!(strong().violations(&gates).is_empty());
+    }
+
+    #[test]
+    fn display_renders_partial_relro_and_flags() {
+        let partial = Hardening {
+            pie: false,
+            relro: Relro::Partial,
+            nx: true,
+            canary: false,
+            fortify: true,
+        };
+        let out = partial.to_string();
+        assert!(out.contains("RELRO:   partial"), "{out}");
+        assert!(out.contains("PIE:     no"), "{out}");
+        assert!(out.contains("NX:      yes"), "{out}");
+        assert!(out.contains("Canary:  no"), "{out}");
+        assert!(out.contains("Fortify: yes"), "{out}");
+    }
+
+    #[test]
     fn gates_flag_only_real_weaknesses() {
         let weak = Hardening {
             pie: false,
