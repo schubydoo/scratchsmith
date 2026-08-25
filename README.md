@@ -5,10 +5,13 @@
   </picture>
 </p>
 
-[![CI](https://github.com/schubydoo/scratchsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/schubydoo/scratchsmith/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/schubydoo/scratchsmith/branch/main/graph/badge.svg)](https://codecov.io/gh/schubydoo/scratchsmith)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-![MSRV](https://img.shields.io/badge/MSRV-1.96-blue)
+<p align="center">
+  <a href="https://github.com/schubydoo/scratchsmith/actions/workflows/ci.yml"><img src="https://github.com/schubydoo/scratchsmith/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://codecov.io/gh/schubydoo/scratchsmith"><img src="https://codecov.io/gh/schubydoo/scratchsmith/branch/main/graph/badge.svg" alt="codecov"></a>
+  <a href="https://www.bestpractices.dev/projects/14238"><img src="https://www.bestpractices.dev/projects/14238/badge" alt="OpenSSF Best Practices"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://blog.rust-lang.org/2026/05/28/Rust-1.96.0/"><img src="https://img.shields.io/badge/MSRV-1.96-blue" alt="MSRV 1.96"></a>
+</p>
 
 **The daemonless supply-chain packager for prebuilt dynamic Linux binaries.**
 
