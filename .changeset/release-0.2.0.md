@@ -2,7 +2,7 @@
 default: minor
 ---
 
-#### 0.2.0 — the daemonless & supply-chain features, under their intended version
+#### The daemonless & supply-chain features, under their intended version
 
 The daemonless output (`--oci-archive`, `--push`), Docker identity-token authentication, and
 image signing (`--push --sign`) are the substance of this release. They first shipped in 0.1.4,
