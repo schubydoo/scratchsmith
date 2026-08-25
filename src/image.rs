@@ -116,29 +116,45 @@ pub fn push_to_registry(staged: &StagedTree, reference: &str, cfg: &ImageConfig)
         .enable_all()
         .build()
         .context("tokio runtime for registry push")?;
-    let response = rt
-        .block_on(client.push(&reference, &layers, config, &auth, None))
+    // The pack report is the single user-facing line (like the other sinks); don't
+    // print here too.
+    rt.block_on(client.push(&reference, &layers, config, &auth, None))
         .with_context(|| format!("pushing to {reference}"))?;
-    eprintln!("pushed {}", response.manifest_url);
     Ok(())
 }
 
 // Resolve registry credentials from the local Docker config (incl. credential helpers).
 // UsernamePassword covers the common case — token-auth registries (GHCR, Docker Hub) do
-// the OAuth exchange from these Basic creds. Everything else falls back to anonymous
-// (public pulls / pushes); richer identity-token handling is a follow-up (auth hardening).
+// the OAuth exchange from these Basic creds. An identity-token credential isn't wired yet
+// (auth hardening), so warn rather than silently look anonymous; anything else (no creds)
+// is genuinely anonymous.
 fn docker_auth(registry: &str) -> RegistryAuth {
     match docker_credential::get_credential(registry) {
         Ok(docker_credential::DockerCredential::UsernamePassword(user, pass)) => {
             RegistryAuth::Basic(user, pass)
         }
-        _ => RegistryAuth::Anonymous,
+        Ok(docker_credential::DockerCredential::IdentityToken(_)) => {
+            eprintln!(
+                "warning: found an identity-token credential for {registry}, which scratchsmith \
+                 doesn't use yet — trying anonymous. If the push needs auth, log in with a \
+                 username/password (docker login --password-stdin)."
+            );
+            RegistryAuth::Anonymous
+        }
+        Err(_) => RegistryAuth::Anonymous,
     }
 }
 
+// Is this registry a localhost one (→ plain-HTTP, matching Docker's insecure-localhost
+// default)? Handles `host[:port]` and bracketed IPv6 (`[::1]:5000`); the colons inside a
+// bare IPv6 address mean we can't just split on ':'.
 fn is_local_registry(registry: &str) -> bool {
-    let host = registry.split(':').next().unwrap_or(registry);
-    host == "localhost" || host == "127.0.0.1" || host == "::1"
+    let host = registry
+        .strip_prefix('[')
+        .and_then(|rest| rest.split(']').next()) // [::1]:5000 -> ::1
+        .or_else(|| registry.rsplit_once(':').map(|(h, _)| h)) // host:port -> host
+        .unwrap_or(registry);
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
 const OCI_MANIFEST: &str = "application/vnd.oci.image.manifest.v1+json";
@@ -532,7 +548,9 @@ mod tests {
     fn local_registry_detection() {
         assert!(is_local_registry("localhost:5000"));
         assert!(is_local_registry("127.0.0.1:5099"));
+        assert!(is_local_registry("127.0.0.1"));
         assert!(is_local_registry("localhost"));
+        assert!(is_local_registry("[::1]:5000"), "bracketed IPv6 localhost");
         assert!(!is_local_registry("ghcr.io"));
         assert!(!is_local_registry("registry.example.com:5000"));
     }
