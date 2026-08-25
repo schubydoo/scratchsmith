@@ -70,6 +70,14 @@ component_management:
       name: pack (orchestration)
       paths:
         - src/pack.rs
+    - component_id: registry
+      name: registry (daemonless push)
+      paths:
+        - src/registry.rs
+    - component_id: report
+      name: report (text/json output)
+      paths:
+        - src/report.rs
     - component_id: lint
       name: lint (ELF hardening)
       paths:
