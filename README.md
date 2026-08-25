@@ -24,12 +24,12 @@ reproducible layers.
 </p>
 
 > **Status — v0.1.** The core works end to end (see [What works today](#what-works-today)), and
-> releases are [signed and published](#install). One honest caveat up front:
-> - **Not daemonless *yet*.** Today the finished image is handed to your local Docker daemon via
->   `docker load` (or staged to a directory with `--no-build`, which needs no daemon at all), and
->   `--oci-archive` writes a daemonless OCI image today. The last step — **direct registry push**,
->   the fully daemonless default — is the next milestone; until it lands the *default* sink still
->   uses `docker load`, so "daemonless by default" is the goal, not yet a shipped fact.
+> releases are [signed and published](#install). One note on the tagline:
+> - **Daemonless is here.** `--push` uploads the image straight to a registry and `--oci-archive`
+>   writes an OCI archive — both with **no Docker daemon**. The *default* sink still hands the image
+>   to your local Docker daemon via `docker load` (or `--no-build` for a daemon-free rootfs) because
+>   it's the handiest thing for local dev; reach for `--push` / `--oci-archive` when you want the
+>   daemon fully out of the loop.
 
 ## Why not just static-link + `FROM scratch`?
 
@@ -64,7 +64,8 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 | **Signed releases** — amd64 + arm64 binaries, cosign-signed checksums + SLSA provenance, signed multi-arch GHCR image | ✅ ([verify](#verifying-releases)) |
 | Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc first; a musl backend is a future goal) |
 | **Daemonless OCI archive** — `--oci-archive <file>` (no daemon; skopeo/buildah/registry-ready) | ✅ |
-| Direct registry push, and signing the image `pack` **produces** | ⏳ planned (see [Roadmap](#roadmap)) |
+| **Daemonless registry push** — `--push <ref>` (no daemon; uses your docker credentials) | ✅ |
+| Signing the image `pack` **produces** | ⏳ planned (see [Roadmap](#roadmap)) |
 
 ## Install
 
@@ -129,6 +130,14 @@ Docker daemon):
 
 ```sh
 scratchsmith pack --oci-archive ./app.oci.tar ./app
+```
+
+Or **push straight to a registry** — no Docker daemon. Credentials come from your docker config,
+so `docker login` once (for GitHub's `ghcr.io`, a token with `write:packages`):
+
+```sh
+echo "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GH_USERNAME --password-stdin
+scratchsmith pack --push ghcr.io/you/app:latest ./app
 ```
 
 Add supply-chain output, verify it starts, and shrink it:
@@ -197,7 +206,7 @@ Every tool here builds smaller/safer images; they differ mainly in **what you fe
 
 | | Input | No Dockerfile | Prebuilt **dynamic glibc** binaries | Built-in SBOM + hardening | Daemonless build |
 |---|---|---|---|---|---|
-| **Scratchsmith** | a prebuilt dynamic ELF binary | ✅ | ✅ *(the whole point)* | ✅ SBOM + ELF hardening lint | ⚠️ staging yes (`--no-build`); image load uses `docker load` today |
+| **Scratchsmith** | a prebuilt dynamic ELF binary | ✅ | ✅ *(the whole point)* | ✅ SBOM + ELF hardening lint | ✅ `--push` / `--oci-archive` (the *default* sink uses `docker load`) |
 | Static + `FROM scratch` | source you can static-link | ✅ (`COPY`) | ❌ must be static | ❌ | ✅ |
 | Docker multi-stage | a Dockerfile + source | ❌ | ✅ (you hand-craft it) | ❌ | ❌ needs daemon / BuildKit |
 | [apko](https://github.com/chainguard-dev/apko) | apk packages | ✅ | ❌ needs apk packaging | ✅ | ✅ |
@@ -217,9 +226,9 @@ Scratchsmith owns the one input the others don't serve: **an arbitrary prebuilt 
 - **`dlopen` is best-effort.** Libraries loaded at runtime via `dlopen` are invisible to static
   analysis; Scratchsmith *warns* when it sees `dlopen` and lets you force-stage them with
   `--include <lib>`. It is not a blanket "any binary just works" guarantee.
-- **`docker load` sink (for now).** Building the *image* currently needs a Docker daemon; use
-  `--no-build --output` for a daemon-free rootfs, or `--oci-archive <file>` for a daemonless OCI
-  image. Direct registry push (the fully daemonless *default*) is next.
+- **`docker load` is the *default* sink.** The default hands the image to a local Docker daemon
+  for convenience; go daemon-free with `--push <ref>` (straight to a registry), `--oci-archive
+  <file>` (an OCI archive), or `--no-build --output` (a rootfs).
 - **`pack` doesn't sign the image it *produces* — yet.** Release *artifacts* are cosign-signed
   and carry SLSA provenance ([Verifying releases](#verifying-releases)), but signing the scratch
   image `pack` builds needs a registry push (the daemonless sink) and isn't wired to a flag yet.
@@ -238,12 +247,11 @@ Scratchsmith owns the one input the others don't serve: **an arbitrary prebuilt 
 ## Roadmap
 
 Shipped in v0.1: signed release binaries (amd64 + arm64), cosign keyless signing + SLSA build
-provenance, a signed multi-arch GHCR image, a [GitHub Action](#github-action), a Homebrew tap, and a
-versioned docs site. Next:
+provenance, a signed multi-arch GHCR image, a [GitHub Action](#github-action), a Homebrew tap, a
+versioned docs site, and **daemonless output** — `--oci-archive` and `--push` (pure-Rust OCI
+archive + direct registry push, no Docker daemon). Next:
 
-- **Daemonless output** — the pure-Rust OCI archive ships (`--oci-archive`); **direct registry
-  push** is next, dropping the Docker dependency for the default sink and unlocking signing the
-  image `pack` produces.
+- **Sign the image `pack` produces** — now that `--push` gives a registry digest to sign.
 - **Broader inputs (later)** — a dynamic musl/Alpine backend and cross-arch resolution are
   on the long-term wishlist. No committed date. (`crates.io` publish is also deferred.)
 

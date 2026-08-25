@@ -457,3 +457,99 @@ fn docker_load_sink_via_pack() {
     .expect("an image tag");
     rmi(&tag);
 }
+
+#[test]
+fn smoke_with_push_is_rejected() {
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let opts = PackOptions {
+        smoke: true,
+        ..Default::default()
+    };
+    let err = scratchsmith::pack::pack(
+        bin,
+        &opts,
+        scratchsmith::pack::Sink::Push("localhost:5000/x:v1".into()),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("smoke"), "got: {err}");
+}
+
+#[test]
+fn push_to_local_registry_is_pullable_and_runnable() {
+    if !docker_available() {
+        eprintln!("skipping: no Docker daemon");
+        return;
+    }
+    let _g = docker_lock();
+    // A throwaway registry:2 for a real push → pull round-trip. The push path itself
+    // contacts no Docker daemon; docker is only used here to run the registry + verify.
+    let _ = Command::new("docker")
+        .args(["rm", "-f", "ss-test-reg"])
+        .output();
+    let up = Command::new("docker")
+        .args([
+            "run",
+            "-d",
+            "--name",
+            "ss-test-reg",
+            "-p",
+            "5099:5000",
+            "registry:2",
+        ])
+        .output()
+        .unwrap();
+    if !up.status.success() {
+        eprintln!("skipping: could not start registry:2");
+        return;
+    }
+    // Wait for the registry port to accept connections.
+    for _ in 0..40 {
+        if std::net::TcpStream::connect("127.0.0.1:5099").is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let reference = "localhost:5099/scratchsmith/test:v1";
+    let report = scratchsmith::pack::pack(
+        bin,
+        &PackOptions::default(),
+        scratchsmith::pack::Sink::Push(reference.into()),
+    )
+    .expect("push should succeed");
+    assert_eq!(report.pushed.as_deref(), Some(reference));
+    assert!(report.tag.is_none() && report.archive.is_none());
+
+    // HEAD-skip: pushing the identical image again reuses the blobs and still succeeds.
+    scratchsmith::pack::pack(
+        bin,
+        &PackOptions::default(),
+        scratchsmith::pack::Sink::Push(reference.into()),
+    )
+    .expect("re-push should succeed (blobs already present)");
+
+    // The pushed image pulls and runs.
+    let pull = Command::new("docker")
+        .args(["pull", reference])
+        .output()
+        .unwrap();
+    assert!(
+        pull.status.success(),
+        "pull failed: {}",
+        String::from_utf8_lossy(&pull.stderr)
+    );
+    let run = Command::new("docker")
+        .args(["run", "--rm", reference, "--version"])
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "run failed: {run:?}");
+    assert!(String::from_utf8_lossy(&run.stdout).contains("scratchsmith"));
+
+    let _ = Command::new("docker")
+        .args(["rm", "-f", "ss-test-reg"])
+        .output();
+    let _ = Command::new("docker")
+        .args(["rmi", "-f", reference])
+        .output();
+}

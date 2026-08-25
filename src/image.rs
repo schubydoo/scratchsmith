@@ -4,6 +4,9 @@
 
 use crate::stager::StagedTree;
 use anyhow::{bail, Context, Result};
+use oci_client::client::{ClientConfig, ClientProtocol, Config as OciConfig, ImageLayer};
+use oci_client::secrets::RegistryAuth;
+use oci_client::{Client, Reference};
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::Path;
@@ -78,6 +81,64 @@ pub fn write_oci_archive(
     append_bytes(&mut ar, &blob_path(&manifest_digest), &manifest_bytes)?;
     ar.finish().context("finishing OCI archive")?;
     Ok(())
+}
+
+/// Push the assembled image straight to a registry (Task 5.2) — **no Docker daemon**.
+/// The config + layer blobs and the manifest go up over HTTPS; oci-client HEAD-skips any
+/// blob the registry already has. Credentials come from the local Docker config
+/// (`~/.docker/config.json`, incl. credential helpers); a localhost registry is treated as
+/// plain-HTTP (matching Docker's insecure-localhost default), which also lets CI test
+/// against a local `registry:2`.
+pub fn push_to_registry(staged: &StagedTree, reference: &str, cfg: &ImageConfig) -> Result<()> {
+    let built = build_image(staged, cfg)?;
+    let reference: Reference = reference
+        .parse()
+        .with_context(|| format!("invalid image reference {reference:?}"))?;
+
+    let registry = reference.registry();
+    let auth = docker_auth(registry);
+    let protocol = if is_local_registry(registry) {
+        ClientProtocol::HttpsExcept(vec![registry.to_string()])
+    } else {
+        ClientProtocol::Https
+    };
+    let client = Client::new(ClientConfig {
+        protocol,
+        ..Default::default()
+    });
+
+    let layers = vec![ImageLayer::oci_v1_gzip(built.layer.gzip, None)];
+    let config = OciConfig::oci_v1(built.config_bytes, None);
+
+    // oci-client is async; run one scoped current-thread runtime for the push rather than
+    // making the whole CLI async.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("tokio runtime for registry push")?;
+    let response = rt
+        .block_on(client.push(&reference, &layers, config, &auth, None))
+        .with_context(|| format!("pushing to {reference}"))?;
+    eprintln!("pushed {}", response.manifest_url);
+    Ok(())
+}
+
+// Resolve registry credentials from the local Docker config (incl. credential helpers).
+// UsernamePassword covers the common case — token-auth registries (GHCR, Docker Hub) do
+// the OAuth exchange from these Basic creds. Everything else falls back to anonymous
+// (public pulls / pushes); richer identity-token handling is a follow-up (auth hardening).
+fn docker_auth(registry: &str) -> RegistryAuth {
+    match docker_credential::get_credential(registry) {
+        Ok(docker_credential::DockerCredential::UsernamePassword(user, pass)) => {
+            RegistryAuth::Basic(user, pass)
+        }
+        _ => RegistryAuth::Anonymous,
+    }
+}
+
+fn is_local_registry(registry: &str) -> bool {
+    let host = registry.split(':').next().unwrap_or(registry);
+    host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 const OCI_MANIFEST: &str = "application/vnd.oci.image.manifest.v1+json";
@@ -465,6 +526,15 @@ mod tests {
             manifest["layers"][0]["size"].as_u64().unwrap() as usize,
             blobs.get(&ldig).expect("layer blob").len()
         );
+    }
+
+    #[test]
+    fn local_registry_detection() {
+        assert!(is_local_registry("localhost:5000"));
+        assert!(is_local_registry("127.0.0.1:5099"));
+        assert!(is_local_registry("localhost"));
+        assert!(!is_local_registry("ghcr.io"));
+        assert!(!is_local_registry("registry.example.com:5000"));
     }
 
     #[test]

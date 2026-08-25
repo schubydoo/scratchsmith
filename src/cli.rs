@@ -69,6 +69,9 @@ pub enum Command {
         /// Write a daemonless OCI-archive tarball instead of loading into Docker.
         #[arg(long, value_name = "FILE", conflicts_with = "no_build")]
         oci_archive: Option<PathBuf>,
+        /// Push the image straight to a registry reference, daemonless (uses your docker login).
+        #[arg(long, value_name = "REF", conflicts_with_all = ["no_build", "oci_archive"])]
+        push: Option<String>,
         /// Image entrypoint (defaults to the packed binary's path).
         #[arg(long, value_name = "PATH")]
         entrypoint: Option<String>,
@@ -165,6 +168,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             no_build,
             output,
             oci_archive,
+            push,
             entrypoint,
             cmd,
             env,
@@ -212,7 +216,9 @@ fn dispatch(cli: Cli) -> Result<()> {
                 },
             };
 
-            let sink = if let Some(file) = oci_archive {
+            let sink = if let Some(reference) = push {
+                crate::pack::Sink::Push(reference)
+            } else if let Some(file) = oci_archive {
                 crate::pack::Sink::OciArchive(file)
             } else if no_build {
                 // clap guarantees output is present when no_build is set.
