@@ -219,6 +219,16 @@ mod tests {
     }
 
     #[test]
+    fn hardening_from_bytes_parses_an_elf_and_rejects_junk() {
+        // Junk bytes never panic; they return None (this is the fuzzed entry point).
+        assert!(hardening_from_bytes(b"definitely not an ELF").is_none());
+        // A real dynamic ELF from the host exercises the Some path.
+        if let Ok(bytes) = std::fs::read("/bin/sh") {
+            assert!(hardening_from_bytes(&bytes).is_some());
+        }
+    }
+
+    #[test]
     fn gates_flag_only_real_weaknesses() {
         let weak = Hardening {
             pie: false,
