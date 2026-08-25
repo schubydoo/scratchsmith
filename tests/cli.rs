@@ -72,3 +72,25 @@ fn lint_reports_hardening_for_a_real_binary() {
         assert!(stdout.contains(field), "missing {field} in: {stdout}");
     }
 }
+
+#[test]
+fn pack_oci_archive_writes_the_file() {
+    // Exercises the `--oci-archive` sink through the CLI (daemonless — no Docker needed).
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("cli.oci.tar");
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let output = run(&["pack", "--oci-archive", out.to_str().unwrap(), bin]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        std::fs::metadata(&out)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false),
+        "archive not written"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("wrote OCI archive"), "got: {stdout}");
+}

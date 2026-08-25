@@ -13,10 +13,10 @@ layers.
     The core works end to end, and releases are signed and published (see [Install](#install)).
     One honest caveat up front:
 
-    - **Not daemonless *yet*.** Today the finished image is handed to your local Docker daemon via
-      `docker load` (or staged to a directory with `--no-build`, which needs no daemon at all).
-      The pure-Rust daemonless sink — OCI archive + direct registry push — is the next milestone.
-      Until it lands, the "daemonless" in the tagline is the design goal, not a shipped fact.
+    - **Not daemonless *by default* yet.** The default sink hands the image to your local Docker
+      daemon via `docker load` (or stages a rootfs with `--no-build`, no daemon), while
+      `--oci-archive` writes a daemonless OCI image today. **Direct registry push** — the fully
+      daemonless default — is the next milestone; until it lands the default still uses `docker load`.
 
 ## Why not just static-link + `FROM scratch`?
 
@@ -49,7 +49,8 @@ a hardening report, a non-root image, and no Dockerfile.
 | Shell completions — `--completions <bash\|zsh\|fish>` | ✅ |
 | **Signed releases** — amd64 + arm64 binaries, cosign-signed checksums + SLSA provenance, signed multi-arch GHCR image | ✅ ([verify](#verifying-releases)) |
 | Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc first; a musl backend is a future goal) |
-| Daemonless OCI archive + registry push, and signing the image `pack` **produces** | ⏳ planned |
+| **Daemonless OCI archive** — `--oci-archive <file>` (no daemon; skopeo/buildah/registry-ready) | ✅ |
+| Direct registry push, and signing the image `pack` **produces** | ⏳ planned |
 
 ## Install
 
@@ -98,6 +99,12 @@ Inspect the rootfs without building an image — **no Docker daemon needed**:
 
 ```sh
 scratchsmith pack --no-build --output ./rootfs ./app
+```
+
+Or write a **daemonless OCI archive** (skopeo/buildah/registry-ready — no Docker daemon):
+
+```sh
+scratchsmith pack --oci-archive ./app.oci.tar ./app
 ```
 
 Add supply-chain output, verify it starts, and shrink it:

@@ -383,3 +383,77 @@ fn smoke_run_proves_nss_lookups_work_in_image() {
     );
     rmi(&tag);
 }
+
+// --- Sink dispatch (Task 5.1). The OCI-archive and rootfs sinks need no Docker daemon. ---
+
+#[test]
+fn oci_archive_sink_writes_daemonless() {
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("img.oci.tar");
+    let report = scratchsmith::pack::pack(
+        bin,
+        &PackOptions::default(),
+        scratchsmith::pack::Sink::OciArchive(out.clone()),
+    )
+    .expect("oci-archive pack should succeed");
+    assert_eq!(report.archive.as_deref(), Some(out.to_str().unwrap()));
+    assert!(report.tag.is_none(), "no image is loaded for --oci-archive");
+    assert!(
+        std::fs::metadata(&out)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false),
+        "archive not written"
+    );
+}
+
+#[test]
+fn smoke_with_oci_archive_is_rejected() {
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let tmp = tempfile::tempdir().unwrap();
+    let opts = PackOptions {
+        smoke: true,
+        ..Default::default()
+    };
+    let err = scratchsmith::pack::pack(
+        bin,
+        &opts,
+        scratchsmith::pack::Sink::OciArchive(tmp.path().join("x.tar")),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("smoke"), "got: {err}");
+}
+
+#[test]
+fn rootfs_sink_stages_without_an_image() {
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("rootfs");
+    let report = scratchsmith::pack::pack(
+        bin,
+        &PackOptions::default(),
+        scratchsmith::pack::Sink::Rootfs(out.clone()),
+    )
+    .expect("rootfs sink");
+    assert!(report.tag.is_none() && report.archive.is_none());
+    assert_eq!(report.staged_dir.as_deref(), Some(out.to_str().unwrap()));
+}
+
+#[test]
+fn docker_load_sink_via_pack() {
+    if !docker_available() {
+        eprintln!("skipping: no Docker daemon");
+        return;
+    }
+    let _g = docker_lock();
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let tag = scratchsmith::pack::pack(
+        bin,
+        &PackOptions::default(),
+        scratchsmith::pack::Sink::DockerLoad,
+    )
+    .expect("docker-load sink")
+    .tag
+    .expect("an image tag");
+    rmi(&tag);
+}

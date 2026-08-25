@@ -36,9 +36,10 @@ pub fn load_into_docker(staged: &StagedTree, tag: &str, cfg: &ImageConfig) -> Re
 }
 
 /// Write an **OCI image-layout** tarball (`oci-layout` + `index.json` + `blobs/sha256/*`)
-/// with no Docker daemon — Task 5.1. `docker load` and `skopeo copy oci-archive:…` both
-/// read this shape. The blobs (layer, config) are the exact same bytes the docker sink
-/// uses, so the manifest digest is identical across sinks.
+/// with no Docker daemon — Task 5.1. `skopeo`, `buildah`, and OCI-aware tooling read this
+/// shape (as does `docker load` where the containerd image store is enabled). The config
+/// and layer blobs are the exact same bytes the docker sink uses — so the image ID is
+/// identical across sinks; the OCI manifest/index here are new artifacts this path adds.
 pub fn write_oci_archive(
     staged: &StagedTree,
     tag: &str,
