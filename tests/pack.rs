@@ -49,11 +49,16 @@ fn find_tini_exists() -> bool {
 
 // A small dynamic-glibc system binary for the docker/registry tests that don't need to
 // dogfood scratchsmith itself. Packing the 40 MB debug binary dominates their runtime;
-// /usr/bin/id is tiny, dynamically linked against glibc, exercises the NSS staging, and
-// prints a checkable `uid=`. The one dogfood test (packs_a_binary_that_runs_in_docker)
-// still packs scratchsmith to prove the real binary works.
-fn small_fixture() -> &'static Path {
-    Path::new("/usr/bin/id")
+// `id` is tiny, dynamically linked against glibc, exercises the NSS staging, and prints a
+// checkable `uid=`. Returns None when absent so callers skip gracefully (parity with the
+// getent/tini optional-tool tests) rather than panicking on a minimal host. The one dogfood
+// test (packs_a_binary_that_runs_in_docker) still packs scratchsmith to prove the real
+// binary works.
+fn small_fixture() -> Option<&'static Path> {
+    ["/usr/bin/id", "/bin/id"]
+        .into_iter()
+        .map(Path::new)
+        .find(|p| p.exists())
 }
 
 #[test]
@@ -242,7 +247,10 @@ fn image_config_is_reflected_in_docker_inspect() {
         return;
     }
     let _g = docker_lock();
-    let bin = small_fixture();
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
     let cfg = ImageConfig {
         entrypoint: vec![],
         cmd: vec!["--version".into()],
@@ -284,7 +292,11 @@ fn config_file_applies_and_cli_overrides_it() {
     }
     let _g = docker_lock();
     let bin = env!("CARGO_BIN_EXE_scratchsmith"); // the CLI to invoke
-    let packed = small_fixture().to_str().unwrap(); // the (small) binary to pack
+    let Some(fixture) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let packed = fixture.to_str().unwrap(); // the (small) binary to pack
     let tag = "scratchsmith/id:packed"; // derived from the packed binary's name
     let tmp = tempfile::tempdir().unwrap();
     let toml = tmp.path().join("scratchsmith.toml");
@@ -340,7 +352,10 @@ fn smoke_run_passes_for_a_plain_binary() {
         return;
     }
     let _g = docker_lock();
-    let bin = small_fixture();
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
     let tag = scratchsmith::pack::run(bin, &PackOptions::default())
         .expect("pack")
         .tag
@@ -396,7 +411,10 @@ fn smoke_run_proves_nss_lookups_work_in_image() {
 
 #[test]
 fn oci_archive_sink_writes_daemonless() {
-    let bin = small_fixture();
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("img.oci.tar");
     let report = scratchsmith::pack::pack(
@@ -454,7 +472,10 @@ fn docker_load_sink_via_pack() {
         return;
     }
     let _g = docker_lock();
-    let bin = small_fixture();
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
     let tag = scratchsmith::pack::pack(
         bin,
         &PackOptions::default(),
@@ -518,7 +539,11 @@ fn push_to_local_registry_is_pullable_and_runnable() {
         std::thread::sleep(std::time::Duration::from_millis(300));
     }
 
-    let bin = small_fixture(); // pack the small fixture, not the 40 MB debug binary
+    // pack the small fixture, not the 40 MB debug binary
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
     let reference = "localhost:5099/scratchsmith/test:v1";
     let report = scratchsmith::pack::pack(
         bin,
