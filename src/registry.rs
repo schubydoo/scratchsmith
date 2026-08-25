@@ -15,8 +15,9 @@ use oci_client::{Client, Reference};
 /// blob the registry already has. Credentials come from the local Docker config
 /// (`~/.docker/config.json`, incl. credential helpers); a localhost registry is treated as
 /// plain-HTTP (matching Docker's insecure-localhost default), which also lets CI test
-/// against a local `registry:2`.
-pub fn push_to_registry(staged: &StagedTree, reference: &str, cfg: &ImageConfig) -> Result<()> {
+/// against a local `registry:2`. Returns the pushed image's by-digest reference
+/// (`registry/repo@sha256:…`), which `--sign` signs.
+pub fn push_to_registry(staged: &StagedTree, reference: &str, cfg: &ImageConfig) -> Result<String> {
     let built = image::build_image(staged, cfg)?;
     let reference: Reference = reference
         .parse()
@@ -42,17 +43,35 @@ pub fn push_to_registry(staged: &StagedTree, reference: &str, cfg: &ImageConfig)
         .enable_all()
         .build()
         .context("tokio runtime for registry push")?;
-    rt.block_on(async {
+    let digest_ref = rt.block_on(async {
         let auth = resolve_auth(plan, &endpoint, &repository).await?;
         // The pack report is the single user-facing line (like the other sinks); don't
         // print here too.
-        client
+        let pushed = client
             .push(&reference, &layers, config, &auth, None)
             .await
             .with_context(|| format!("pushing to {reference}"))?;
-        Ok::<_, anyhow::Error>(())
+        digest_ref_from(&reference, &pushed.manifest_url)
     })?;
-    Ok(())
+    Ok(digest_ref)
+}
+
+// Build a by-digest reference (`registry/repo@sha256:…`) from the push response's manifest
+// URL, which ends in the pushed manifest's digest. cosign signs by digest, so this is what
+// `--sign` targets — precise and immune to a tag being moved after the push.
+fn digest_ref_from(reference: &Reference, manifest_url: &str) -> Result<String> {
+    let digest = manifest_url
+        .rsplit("/manifests/")
+        .next()
+        .and_then(|tail| tail.split(['?', '#']).next())
+        .filter(|d| d.starts_with("sha256:"))
+        .with_context(|| format!("no digest in the push response manifest URL {manifest_url:?}"))?;
+    Ok(format!(
+        "{}/{}@{}",
+        reference.registry(),
+        reference.repository(),
+        digest
+    ))
 }
 
 /// What to do with a Docker-config credential. UsernamePassword and "no credential" resolve
@@ -259,6 +278,26 @@ mod tests {
             plan_credential(None),
             CredentialPlan::Ready(RegistryAuth::Anonymous)
         ));
+    }
+
+    #[test]
+    fn digest_ref_from_builds_a_by_digest_reference() {
+        let r: Reference = "ghcr.io/you/app:latest".parse().unwrap();
+        assert_eq!(
+            digest_ref_from(&r, "https://ghcr.io/v2/you/app/manifests/sha256:abc123").unwrap(),
+            "ghcr.io/you/app@sha256:abc123"
+        );
+        // A namespace/query suffix on the URL is trimmed.
+        assert_eq!(
+            digest_ref_from(
+                &r,
+                "https://ghcr.io/v2/you/app/manifests/sha256:def?ns=ghcr.io"
+            )
+            .unwrap(),
+            "ghcr.io/you/app@sha256:def"
+        );
+        // A URL without a digest is an error, not a bogus reference.
+        assert!(digest_ref_from(&r, "https://ghcr.io/v2/you/app/manifests/latest").is_err());
     }
 
     #[test]

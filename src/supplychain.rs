@@ -2,8 +2,8 @@
 //! so their absence never breaks a core pack. See Tasks 4.3-4.4.
 //!
 //! Signing/attestation act on a registry image reference (cosign works by digest in a
-//! registry), so those helpers are wired once registry push lands (Task 5.2). SBOM
-//! runs against the staged rootfs and is usable now.
+//! registry), so `pack --push --sign` runs them against the digest the push returns.
+//! SBOM runs against the staged rootfs and is usable on its own.
 
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
@@ -31,6 +31,14 @@ impl SbomFormat {
             SbomFormat::SpdxJson => "spdx-json",
         }
     }
+
+    /// The `cosign attest --type` value matching this SBOM format.
+    pub fn cosign_predicate_type(self) -> &'static str {
+        match self {
+            SbomFormat::CyclonedxJson => "cyclonedx",
+            SbomFormat::SpdxJson => "spdxjson",
+        }
+    }
 }
 
 /// Generate an SBOM of the staged rootfs with syft, written to `out`. A missing syft
@@ -51,14 +59,18 @@ fn syft_args(rootfs: &Path, format: SbomFormat, out: &Path) -> Vec<String> {
     ]
 }
 
-/// Keyless-sign an image (by registry reference) with cosign. Requires a pushed image,
-/// so this is wired once registry push exists (Task 5.2).
+/// Keyless-sign an image (by registry reference) with cosign. Signs a pushed image by
+/// digest, so `pack --push --sign` drives it.
 pub fn cosign_sign(image_ref: &str) -> Result<()> {
     run_tool(
         "cosign",
-        &["sign".into(), "--yes".into(), image_ref.into()],
+        &cosign_sign_args(image_ref),
         "install cosign: https://github.com/sigstore/cosign",
     )
+}
+
+fn cosign_sign_args(image_ref: &str) -> Vec<String> {
+    vec!["sign".into(), "--yes".into(), image_ref.into()]
 }
 
 /// Attach a signed SBOM attestation to an image (by registry reference) with cosign.
@@ -126,6 +138,27 @@ mod tests {
     fn spdx_format_switches_the_syft_name() {
         let args = syft_args(Path::new("/r"), SbomFormat::SpdxJson, Path::new("/o"));
         assert!(args.iter().any(|a| a == "spdx-json=/o"));
+    }
+
+    #[test]
+    fn cosign_sign_args_are_well_formed() {
+        assert_eq!(
+            cosign_sign_args("ghcr.io/you/app@sha256:abc"),
+            vec![
+                "sign".to_string(),
+                "--yes".into(),
+                "ghcr.io/you/app@sha256:abc".into()
+            ]
+        );
+    }
+
+    #[test]
+    fn cosign_predicate_type_matches_the_sbom_format() {
+        assert_eq!(
+            SbomFormat::CyclonedxJson.cosign_predicate_type(),
+            "cyclonedx"
+        );
+        assert_eq!(SbomFormat::SpdxJson.cosign_predicate_type(), "spdxjson");
     }
 
     #[test]

@@ -72,6 +72,10 @@ pub enum Command {
         /// Push the image straight to a registry reference, daemonless (uses your docker login).
         #[arg(long, value_name = "REF", conflicts_with_all = ["no_build", "oci_archive"])]
         push: Option<String>,
+        /// Sign the pushed image with cosign (keyless) and attest the SBOM, if one was
+        /// generated. Requires --push (cosign signs a registry image by digest).
+        #[arg(long, requires = "push")]
+        sign: bool,
         /// Image entrypoint (defaults to the packed binary's path).
         #[arg(long, value_name = "PATH")]
         entrypoint: Option<String>,
@@ -169,6 +173,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             output,
             oci_archive,
             push,
+            sign,
             entrypoint,
             cmd,
             env,
@@ -214,6 +219,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                     workdir: workdir.or(file.workdir),
                     user: user.or(file.user),
                 },
+                sign,
             };
 
             let sink = if let Some(reference) = push {
@@ -283,6 +289,33 @@ mod tests {
         // -n without -o is a usage error (clap `requires`).
         let err = Cli::try_parse_from(["scratchsmith", "pack", "-n", "/bin/ls"]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn sign_requires_push() {
+        // --sign signs a registry image by digest, so it needs --push.
+        let err = Cli::try_parse_from(["scratchsmith", "pack", "--sign", "/bin/ls"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn sign_with_push_parses() {
+        let cli = Cli::try_parse_from([
+            "scratchsmith",
+            "pack",
+            "--push",
+            "ghcr.io/you/app:latest",
+            "--sign",
+            "/bin/ls",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Pack { sign, push, .. }) => {
+                assert!(sign);
+                assert_eq!(push, Some("ghcr.io/you/app:latest".into()));
+            }
+            other => panic!("expected Pack, got {other:?}"),
+        }
     }
 
     #[test]

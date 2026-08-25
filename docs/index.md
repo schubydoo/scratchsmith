@@ -51,7 +51,7 @@ a hardening report, a non-root image, and no Dockerfile.
 | Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc first; a musl backend is a future goal) |
 | **Daemonless OCI archive** — `--oci-archive <file>` (no daemon; skopeo/buildah/registry-ready) | ✅ |
 | **Daemonless registry push** — `--push <ref>` (no daemon; uses your docker credentials) | ✅ |
-| Signing the image `pack` **produces** | ⏳ planned |
+| **Signing the image `pack` produces** — `--push --sign` (cosign keyless, by digest) | ✅ |
 
 ## Install
 

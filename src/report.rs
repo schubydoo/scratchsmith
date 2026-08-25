@@ -26,6 +26,8 @@ pub struct PackReport {
     pub smoke_ok: Option<bool>,
     /// Path of the generated SBOM, if `--sbom` was requested.
     pub sbom: Option<String>,
+    /// The signed by-digest reference, if `--sign` signed the pushed image.
+    pub signed: Option<String>,
 }
 
 impl PackReport {
@@ -51,6 +53,9 @@ impl PackReport {
         }
         if let Some(sbom) = &self.sbom {
             out.push_str(&format!("sbom: {sbom}\n"));
+        }
+        if let Some(signed) = &self.signed {
+            out.push_str(&format!("signed {signed}\n"));
         }
         if self.smoke_ok == Some(true) {
             out.push_str("smoke-run ok: the binary starts inside the image\n");
@@ -79,6 +84,7 @@ mod tests {
             warnings: vec!["NSS module not found: libnss_dns.so.2".into()],
             smoke_ok: Some(true),
             sbom: Some("sbom.json".into()),
+            signed: None,
         }
     }
 
@@ -120,8 +126,20 @@ mod tests {
             warnings: vec![],
             smoke_ok: None,
             sbom: None,
+            signed: None,
         };
         assert!(report.to_text().contains("pushed ghcr.io/you/app:latest"));
+    }
+
+    #[test]
+    fn text_and_json_report_a_signed_digest() {
+        let mut report = sample_report();
+        report.signed = Some("ghcr.io/you/app@sha256:abc".into());
+        assert!(report
+            .to_text()
+            .contains("signed ghcr.io/you/app@sha256:abc"));
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["signed"], "ghcr.io/you/app@sha256:abc");
     }
 
     #[test]
@@ -141,6 +159,7 @@ mod tests {
             warnings: vec![],
             smoke_ok: None,
             sbom: None,
+            signed: None,
         };
         assert!(report.to_text().contains("staged to /out/rootfs"));
     }

@@ -1,10 +1,12 @@
 name: Push auth smoke (live GHCR)
 
-# Manual, opt-in end-to-end proof that `pack --push` authenticates to a REAL token-auth
-# registry (GHCR) and completes the daemonless round-trip: pack a tiny binary, push it, then
-# pull it back and run it. This exercises the username/password -> registry-token exchange
-# path against real GHCR. The identity-token refresh-grant path is covered deterministically
-# by the unit tests in src/registry.rs (a live identity-token source isn't reproducible here).
+# Manual, opt-in end-to-end proof that `pack --push --sign` authenticates to a REAL token-auth
+# registry (GHCR), completes the daemonless round-trip (pack -> push -> pull -> run), and that
+# the cosign signature it creates verifies (Task 4.4 AC). This exercises the username/password
+# -> registry-token exchange path against real GHCR; the identity-token refresh-grant path is
+# covered deterministically by the unit tests in src/registry.rs (a live identity-token source
+# isn't reproducible here). SBOM attestation (`--sbom --sign`) is unit-tested for arg/predicate
+# shape; live `cosign verify-attestation` waits on wiring syft into this workflow.
 #
 # workflow_dispatch ONLY: a push creates a package in this account's GHCR namespace, so it must
 # never run unattended. It targets a dedicated throwaway package (`<repo>-authtest`) with a
@@ -37,6 +39,7 @@ jobs:
     permissions:
       contents: read
       packages: write # push the image to GHCR
+      id-token: write # cosign keyless signing (OIDC)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,17 +56,27 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pack a tiny binary and push it straight to GHCR
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Pack a tiny binary, push it to GHCR, and sign it
         run: |
           set -euo pipefail
           # /usr/bin/id is a small dynamic glibc ELF — exactly what scratchsmith packs.
           cp /usr/bin/id ./authtest-bin
-          ./target/release/scratchsmith pack --push "$PUSH_REF" ./authtest-bin
+          ./target/release/scratchsmith pack --push "$PUSH_REF" --sign ./authtest-bin
       - name: Pull it back from GHCR and run it (round-trip proof)
         run: |
           set -euo pipefail
           docker pull "$PUSH_REF"
           docker run --rm "$PUSH_REF"
+      # Prove the signature scratchsmith created actually verifies (AC 4.4). Identity is this
+      # workflow via keyless OIDC; the regexp is ref-agnostic so it holds on any branch/tag.
+      - name: Verify the signature with cosign
+        run: |
+          set -euo pipefail
+          cosign verify "$PUSH_REF" \
+            --certificate-identity-regexp '^https://github\.com/.+/\.github/workflows/push-auth-smoke\.yml@' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
       # Delete the throwaway package so it doesn't linger (public) in the namespace. Runs even
       # if an earlier step failed. GITHUB_TOKEN can't delete packages, so this uses a separate
       # PAT secret; without it, warn and skip rather than fail the run.
