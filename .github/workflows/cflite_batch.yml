@@ -1,30 +1,50 @@
-name: ClusterFuzzLite batch
-# Scheduled longer fuzzing over the whole corpus; builds coverage over time. Corpus is
-# cached across runs by the ClusterFuzzLite actions. Manual dispatch is allowed too.
+# ClusterFuzzLite: scheduled BATCH fuzzing (the deep counterpart to cflite_pr). Runs EVERY
+# harness in fuzz/ on a schedule (mode: batch), so unchanged code is re-fuzzed and each target
+# gets a longer run. A reproducible crash surfaces here and as SARIF. NOT a required check.
+#
+# Corpus persistence: clones the private storage-repo, fuzzes, and pushes the grown corpus back
+# so coverage compounds across runs. Needs schubydoo/scratchsmith-fuzz-corpus and a
+# FUZZ_STORAGE_TOKEN PAT (write). If the secret is unset the job still runs (fuzzes from seed);
+# it just does not accumulate. fuzz-seconds is PER target.
+# Docs: https://google.github.io/clusterfuzzlite/
+name: ClusterFuzzLite batch fuzzing
+
 on:
   schedule:
-    - cron: "17 4 * * 1" # weekly, Monday 04:17 UTC
+    - cron: "37 4 */2 * *" # every other calendar day, 04:37 UTC
   workflow_dispatch:
-permissions:
-  contents: read
-concurrency:
-  group: cflite-batch
-  cancel-in-progress: false
+
+permissions: {}
+
 jobs:
-  Batch:
+  batch-fuzzing:
+    name: batch fuzzing
     runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      contents: read
+      security-events: write
+    concurrency:
+      group: ${{ github.workflow }}-${{ matrix.sanitizer }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address]
     steps:
-      - name: Build fuzzers
-        id: build
+      - name: Build fuzzers (${{ matrix.sanitizer }})
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: rust
-          sanitizer: address
-      - name: Run fuzzers
-        id: run
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sanitizer: ${{ matrix.sanitizer }}
+      - name: Run fuzzers (${{ matrix.sanitizer }})
         uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          fuzz-seconds: 600
+          fuzz-seconds: 300
           mode: batch
-          sanitizer: address
+          sanitizer: ${{ matrix.sanitizer }}
+          output-sarif: true
+          storage-repo: https://${{ secrets.FUZZ_STORAGE_TOKEN }}@github.com/schubydoo/scratchsmith-fuzz-corpus.git
+          storage-repo-branch: main

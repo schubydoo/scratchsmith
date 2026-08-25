@@ -1,0 +1,69 @@
+# ClusterFuzzLite: the weekly corpus PRUNE + COVERAGE report (maintenance for cflite_batch).
+# Prune minimizes the persisted corpus (drops inputs that add no coverage). Coverage replays the
+# whole corpus and pushes an HTML line-coverage report to the corpus repo's gh-pages branch,
+# showing which parser code the fuzzers reach. Both reuse the storage-repo + FUZZ_STORAGE_TOKEN.
+# NOT required checks. Docs: https://google.github.io/clusterfuzzlite/
+name: ClusterFuzzLite cron (prune + coverage)
+
+on:
+  schedule:
+    - cron: "43 5 * * 0" # Sunday 05:43 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  prune:
+    name: prune corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      contents: read
+      security-events: write
+    concurrency:
+      group: ${{ github.workflow }}-prune
+      cancel-in-progress: true
+    steps:
+      - name: Build fuzzers (address)
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: rust
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sanitizer: address
+      - name: Prune the persisted corpus
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 300
+          mode: prune
+          sanitizer: address
+          output-sarif: true
+          storage-repo: https://${{ secrets.FUZZ_STORAGE_TOKEN }}@github.com/schubydoo/scratchsmith-fuzz-corpus.git
+          storage-repo-branch: main
+
+  coverage:
+    name: coverage report
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    concurrency:
+      group: ${{ github.workflow }}-coverage
+      cancel-in-progress: true
+    steps:
+      - name: Build fuzzers (coverage)
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: rust
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sanitizer: coverage
+      - name: Generate the coverage report
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 300
+          mode: coverage
+          sanitizer: coverage
+          storage-repo: https://${{ secrets.FUZZ_STORAGE_TOKEN }}@github.com/schubydoo/scratchsmith-fuzz-corpus.git
+          storage-repo-branch: main
+          storage-repo-branch-coverage: gh-pages
