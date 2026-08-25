@@ -94,8 +94,9 @@ pub fn read_elf_info(path: &Path) -> Result<ElfInfo> {
     parse_elf_info(&bytes).with_context(|| format!("parsing {} as ELF", path.display()))
 }
 
-// Split from `read_elf_info` so parsing is unit-testable on in-memory bytes.
-fn parse_elf_info(bytes: &[u8]) -> Result<ElfInfo> {
+/// Parse ELF dynamic-linking facts from in-memory bytes. Split from `read_elf_info` so it is
+/// unit-testable — and fuzzable — on arbitrary input (this is the untrusted binary a user packs).
+pub fn parse_elf_info(bytes: &[u8]) -> Result<ElfInfo> {
     let elf = goblin::elf::Elf::parse(bytes).context("not a valid ELF binary")?;
     Ok(ElfInfo {
         interpreter: elf.interpreter.map(str::to_owned),

@@ -1,0 +1,31 @@
+[package]
+name = "scratchsmith-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.scratchsmith]
+path = ".."
+
+# Detach from any parent workspace (scratchsmith's root is a single crate, not a workspace).
+[workspace]
+
+[[bin]]
+name = "parse_elf_info"
+path = "fuzz_targets/parse_elf_info.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "analyze_hardening"
+path = "fuzz_targets/analyze_hardening.rs"
+test = false
+doc = false
+bench = false

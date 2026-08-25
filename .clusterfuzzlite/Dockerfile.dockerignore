@@ -1,0 +1,7 @@
+# BuildKit uses this in place of the repo-root .dockerignore for the ClusterFuzzLite build.
+# The root .dockerignore is scoped to the release image (excludes everything but dist/), which
+# would strip the source ClusterFuzzLite needs. Here we include the full source and skip only
+# build output.
+target
+fuzz/target
+.git

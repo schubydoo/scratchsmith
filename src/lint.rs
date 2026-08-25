@@ -49,6 +49,12 @@ pub fn analyze(path: &Path) -> Result<Hardening> {
     Ok(analyze_elf(&elf))
 }
 
+/// Analyze hardening from in-memory ELF bytes; `None` if the bytes are not a parseable ELF.
+/// A byte-level entry point for fuzzing.
+pub fn hardening_from_bytes(bytes: &[u8]) -> Option<Hardening> {
+    Elf::parse(bytes).ok().map(|elf| analyze_elf(&elf))
+}
+
 fn analyze_elf(elf: &Elf) -> Hardening {
     let flags = elf.dynamic.as_ref().map(|d| d.info.flags).unwrap_or(0);
     let flags_1 = elf.dynamic.as_ref().map(|d| d.info.flags_1).unwrap_or(0);
@@ -210,6 +216,16 @@ mod tests {
         assert!(out.contains("NX:      yes"), "{out}");
         assert!(out.contains("Canary:  no"), "{out}");
         assert!(out.contains("Fortify: yes"), "{out}");
+    }
+
+    #[test]
+    fn hardening_from_bytes_parses_an_elf_and_rejects_junk() {
+        // Junk bytes never panic; they return None (this is the fuzzed entry point).
+        assert!(hardening_from_bytes(b"definitely not an ELF").is_none());
+        // A real dynamic ELF from the host exercises the Some path.
+        if let Ok(bytes) = std::fs::read("/bin/sh") {
+            assert!(hardening_from_bytes(&bytes).is_some());
+        }
     }
 
     #[test]
