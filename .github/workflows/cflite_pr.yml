@@ -1,0 +1,29 @@
+name: ClusterFuzzLite PR
+# Fuzz the code a PR changes for a bounded time; a crash fails the check with a repro.
+# Not wired into the required-checks aggregator — fuzzing is best-effort, never a merge gate.
+on:
+  pull_request:
+    paths: ["src/**", "fuzz/**", ".clusterfuzzlite/**", "Cargo.toml", "Cargo.lock"]
+permissions:
+  contents: read
+concurrency:
+  group: cflite-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  PR:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build fuzzers
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@82652fb49e77bc29c35da1167bb286e93c6bcc05 # v1
+        with:
+          language: rust
+          sanitizer: address
+      - name: Run fuzzers
+        id: run
+        uses: google/clusterfuzzlite/actions/run_fuzzers@82652fb49e77bc29c35da1167bb286e93c6bcc05 # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 300
+          mode: code-change
+          sanitizer: address

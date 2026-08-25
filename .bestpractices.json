@@ -132,12 +132,12 @@
   "static_analysis_fixed_justification": "Medium-and-higher static-analysis findings are fixed before merge; clippy warnings are hard errors in CI.",
   "static_analysis_often_status": "Met",
   "static_analysis_often_justification": "Static analysis runs on every pull request and push, plus scheduled Scorecard and CodeQL runs.",
-  "dynamic_analysis_status": "Unmet",
-  "dynamic_analysis_justification": "No fuzzing or sanitizer-based dynamic analysis is set up yet. The codebase is memory-safe Rust and exercised by integration tests that run the real binary (including a smoke-run and a static-musl link assertion), but continuous fuzzing (e.g. cargo-fuzz / ClusterFuzzLite) is a candidate follow-up. Dynamic analysis is a SHOULD, not a MUST, at the passing level.",
+  "dynamic_analysis_status": "Met",
+  "dynamic_analysis_justification": "Continuous fuzzing runs via ClusterFuzzLite: cargo-fuzz targets for the untrusted-ELF parsing (`resolver::parse_elf_info`) and hardening (`lint`) paths, run on pull requests (code-change mode) and on a weekly batch schedule.",
   "dynamic_analysis_unsafe_status": "Met",
-  "dynamic_analysis_unsafe_justification": "Scratchsmith is written in Rust, a memory-safe language, and uses no `unsafe` anywhere in its source, so the memory-safety defect classes this criterion targets are prevented at compile time rather than needing a sanitizer. (OpenSSF designates N/A as the canonical answer for memory-safe-language projects; Met is used here only because bestpractices.dev does not offer N/A for this criterion.)",
-  "dynamic_analysis_enable_assertions_status": "Unmet",
-  "dynamic_analysis_enable_assertions_justification": "No fuzzing/dynamic-analysis configuration is set up yet, so there is none in which to enable assertions. A candidate follow-up (cargo-fuzz / ClusterFuzzLite) would run with debug assertions enabled.",
+  "dynamic_analysis_unsafe_justification": "The fuzz targets build with AddressSanitizer, and the code is memory-safe Rust with no `unsafe` anywhere in its source, so memory-safety defect classes are guarded both at compile time and during fuzzing.",
+  "dynamic_analysis_enable_assertions_status": "Met",
+  "dynamic_analysis_enable_assertions_justification": "Fuzz builds enable debug assertions (`cargo fuzz build --debug-assertions` in .clusterfuzzlite/build.sh), so assertion failures surface during fuzzing rather than in production.",
   "dynamic_analysis_fixed_status": "Met",
-  "dynamic_analysis_fixed_justification": "There are no outstanding defects discovered via dynamic analysis (none is performed yet); any found once fuzzing is added will be fixed promptly and the reproducing corpus retained."
+  "dynamic_analysis_fixed_justification": "Any defect found by fuzzing is fixed and its reproducing input retained in the corpus; none is currently outstanding."
 }

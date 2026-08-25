@@ -49,6 +49,12 @@ pub fn analyze(path: &Path) -> Result<Hardening> {
     Ok(analyze_elf(&elf))
 }
 
+/// Analyze hardening from in-memory ELF bytes; `None` if the bytes are not a parseable ELF.
+/// A byte-level entry point for fuzzing.
+pub fn hardening_from_bytes(bytes: &[u8]) -> Option<Hardening> {
+    Elf::parse(bytes).ok().map(|elf| analyze_elf(&elf))
+}
+
 fn analyze_elf(elf: &Elf) -> Hardening {
     let flags = elf.dynamic.as_ref().map(|d| d.info.flags).unwrap_or(0);
     let flags_1 = elf.dynamic.as_ref().map(|d| d.info.flags_1).unwrap_or(0);

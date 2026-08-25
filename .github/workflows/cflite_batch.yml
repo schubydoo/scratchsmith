@@ -1,0 +1,30 @@
+name: ClusterFuzzLite batch
+# Scheduled longer fuzzing over the whole corpus; builds coverage over time. Corpus is
+# cached across runs by the ClusterFuzzLite actions. Manual dispatch is allowed too.
+on:
+  schedule:
+    - cron: "17 4 * * 1" # weekly, Monday 04:17 UTC
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cflite-batch
+  cancel-in-progress: false
+jobs:
+  Batch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build fuzzers
+        id: build
+        uses: google/clusterfuzzlite/actions/build_fuzzers@82652fb49e77bc29c35da1167bb286e93c6bcc05 # v1
+        with:
+          language: rust
+          sanitizer: address
+      - name: Run fuzzers
+        id: run
+        uses: google/clusterfuzzlite/actions/run_fuzzers@82652fb49e77bc29c35da1167bb286e93c6bcc05 # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 600
+          mode: batch
+          sanitizer: address
