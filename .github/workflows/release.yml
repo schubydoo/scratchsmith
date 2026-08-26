@@ -16,9 +16,8 @@ name: Release
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
 # Verifying a downloaded release TARBALL is documented in knope-release.yml.
 #
-# Still to slot in: a Homebrew tap (Task 3.5, deferred — needs the tap repo).
-# crates.io is deferred. A functional (non-scratch) runnable image is a planned
-# follow-up.
+# crates.io publishing is handled by crates-io.yml (also `v*`-tag-triggered).
+# A functional (non-scratch) runnable image is a planned follow-up.
 #
 # workflow_dispatch is a manual fallback to (re)build the image for an existing
 # release — dispatch it FROM THE TAG (the "Use workflow from" picker lists tags),
