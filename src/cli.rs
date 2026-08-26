@@ -353,15 +353,15 @@ mod tests {
             "/bin/ls",
         ])
         .unwrap();
-        match cli.command {
+        // `matches!` (not a match arm) so there is no unreachable panic branch to leave uncovered.
+        assert!(matches!(
+            cli.command,
             Some(Command::Pack {
-                scan, scan_fail_on, ..
-            }) => {
-                assert!(scan);
-                assert_eq!(scan_fail_on, Some(crate::supplychain::Severity::High));
-            }
-            other => panic!("expected Pack, got {other:?}"),
-        }
+                scan: true,
+                scan_fail_on: Some(crate::supplychain::Severity::High),
+                ..
+            })
+        ));
     }
 
     #[test]
