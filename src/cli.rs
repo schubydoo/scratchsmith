@@ -57,6 +57,9 @@ pub enum Command {
         /// Read defaults from a scratchsmith.toml; CLI flags override it.
         #[arg(long, value_name = "FILE")]
         config: Option<PathBuf>,
+        /// Apply a named `[profile.<name>]` from the config (layered over its base). Needs --config.
+        #[arg(long, value_name = "NAME", requires = "config")]
+        profile: Option<String>,
         /// After loading, run the image once and fail if the binary can't start.
         #[arg(long, conflicts_with = "no_build")]
         smoke: bool,
@@ -101,12 +104,12 @@ pub enum Command {
         /// Generate an SBOM of the packed rootfs (requires syft).
         #[arg(long)]
         sbom: bool,
-        /// SBOM output path (with --sbom).
-        #[arg(long = "sbom-file", value_name = "FILE", default_value = "sbom.json")]
-        sbom_file: PathBuf,
-        /// SBOM format (with --sbom).
-        #[arg(long = "sbom-format", value_enum, default_value_t = crate::supplychain::SbomFormat::CyclonedxJson)]
-        sbom_format: crate::supplychain::SbomFormat,
+        /// SBOM output path (with --sbom; defaults to sbom.json).
+        #[arg(long = "sbom-file", value_name = "FILE")]
+        sbom_file: Option<PathBuf>,
+        /// SBOM format (with --sbom; defaults to cyclonedx-json).
+        #[arg(long = "sbom-format", value_enum)]
+        sbom_format: Option<crate::supplychain::SbomFormat>,
         /// Add the TLS CA bundle (/etc/ssl/certs/ca-certificates.crt).
         #[arg(long = "ca-certs")]
         ca_certs: bool,
@@ -171,6 +174,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         Command::Pack {
             binary,
             config,
+            profile,
             smoke,
             no_build,
             output,
@@ -193,10 +197,14 @@ fn dispatch(cli: Cli) -> Result<()> {
             include,
             format,
         } => {
-            // Load the config file (if any), then let CLI flags override its values.
+            // Load the config file (if any), apply a selected profile, then let CLI flags win.
             let file = match &config {
                 Some(path) => crate::config::Config::load(path)?,
                 None => crate::config::Config::default(),
+            };
+            let file = match &profile {
+                Some(name) => file.select_profile(name)?,
+                None => file,
             };
             let Some(binary) = binary.or(file.binary) else {
                 bail!(
@@ -205,15 +213,27 @@ fn dispatch(cli: Cli) -> Result<()> {
             };
 
             let opts = crate::pack::PackOptions {
-                smoke,
-                strip: strip || file.strip, // either source enabling strip is enough
+                smoke: smoke || file.smoke,
+                strip: strip || file.strip, // either source enabling an option is enough
                 upx: upx || file.upx,
-                sbom: sbom.then_some(crate::supplychain::SbomRequest {
-                    path: sbom_file,
-                    format: sbom_format,
+                sbom: (sbom || file.sbom).then(|| crate::supplychain::SbomRequest {
+                    path: sbom_file
+                        .or(file.sbom_file)
+                        .unwrap_or_else(|| PathBuf::from("sbom.json")),
+                    format: sbom_format
+                        .or(file.sbom_format)
+                        .unwrap_or(crate::supplychain::SbomFormat::CyclonedxJson),
                 }),
-                extras: crate::stager::RuntimeExtras { ca_certs, tz, init },
-                includes: include,
+                extras: crate::stager::RuntimeExtras {
+                    ca_certs: ca_certs || file.ca_certs,
+                    tz: tz || file.tz,
+                    init: init || file.init,
+                },
+                includes: if include.is_empty() {
+                    file.include
+                } else {
+                    include
+                },
                 image: crate::image::ImageConfig {
                     entrypoint: entrypoint
                         .or(file.entrypoint)
@@ -224,19 +244,32 @@ fn dispatch(cli: Cli) -> Result<()> {
                     workdir: workdir.or(file.workdir),
                     user: user.or(file.user),
                 },
-                sign,
+                sign: sign || file.sign,
             };
 
+            // An explicit CLI delivery sink always wins; `push` from the config/profile is only
+            // the default when no CLI sink flag was given — otherwise a `[profile.ci]` `push`
+            // would silently override `--oci-archive`/`--no-build` and turn a local pack into a
+            // registry publish.
             let sink = if let Some(reference) = push {
                 crate::pack::Sink::Push(reference)
-            } else if let Some(file) = oci_archive {
-                crate::pack::Sink::OciArchive(file)
+            } else if let Some(archive) = oci_archive {
+                crate::pack::Sink::OciArchive(archive)
             } else if no_build {
                 // clap guarantees output is present when no_build is set.
                 crate::pack::Sink::Rootfs(output.expect("--no-build requires --output"))
+            } else if let Some(reference) = file.push {
+                crate::pack::Sink::Push(reference)
             } else {
                 crate::pack::Sink::DockerLoad
             };
+            // Signing needs a registry image (cosign signs by digest); a profile that set `sign`
+            // without a push target would otherwise be silently dropped.
+            if opts.sign && !matches!(sink, crate::pack::Sink::Push(_)) {
+                bail!(
+                    "--sign needs a push target — pass --push or set `push` in the config/profile"
+                );
+            }
             let report = crate::pack::pack(&binary, &opts, sink)?;
 
             match format {

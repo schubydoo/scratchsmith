@@ -94,3 +94,149 @@ fn pack_oci_archive_writes_the_file() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("wrote OCI archive"), "got: {stdout}");
 }
+
+#[test]
+fn profile_selects_options_and_reports_unknown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("scratchsmith.toml");
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    std::fs::write(
+        &cfg,
+        format!("[profile.ci]\nbinary = \"{bin}\"\nstrip = true\n"),
+    )
+    .unwrap();
+
+    // --profile requires --config (clap).
+    let out = run(&["pack", bin, "--profile", "ci"]);
+    assert!(!out.status.success(), "profile without config should fail");
+
+    // An undefined profile is a clear error naming the defined ones.
+    let out = run(&[
+        "pack",
+        "--config",
+        cfg.to_str().unwrap(),
+        "--profile",
+        "prod",
+    ]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("prod") && stderr.contains("ci"),
+        "got: {stderr}"
+    );
+
+    // The profile supplies the binary and strip; the pack succeeds via the daemonless sink.
+    let archive = tmp.path().join("profile.oci.tar");
+    let out = run(&[
+        "pack",
+        "--config",
+        cfg.to_str().unwrap(),
+        "--profile",
+        "ci",
+        "--oci-archive",
+        archive.to_str().unwrap(),
+    ]);
+    assert!(
+        out.status.success(),
+        "profile pack failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(archive.exists(), "archive not written from profile");
+}
+
+#[test]
+fn profile_sign_without_a_push_target_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("scratchsmith.toml");
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    // A profile sets `sign` but no push target; delivering to a non-push sink must fail loud
+    // (cosign signs a registry image by digest) rather than silently dropping the request.
+    std::fs::write(
+        &cfg,
+        format!("[profile.p]\nbinary = \"{bin}\"\nsign = true\n"),
+    )
+    .unwrap();
+    let archive = tmp.path().join("x.oci.tar");
+    let out = run(&[
+        "pack",
+        "--config",
+        cfg.to_str().unwrap(),
+        "--profile",
+        "p",
+        "--oci-archive",
+        archive.to_str().unwrap(),
+    ]);
+    assert!(!out.status.success(), "sign without push should fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("sign") && stderr.contains("push"),
+        "got: {stderr}"
+    );
+}
+
+#[test]
+fn cli_delivery_sink_beats_a_config_push_target() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("scratchsmith.toml");
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    // A profile sets a push target, but an explicit --oci-archive on the CLI must win — a local
+    // pack must never be turned into a registry publish by a config default.
+    std::fs::write(
+        &cfg,
+        format!("[profile.ci]\nbinary = \"{bin}\"\npush = \"ghcr.io/nope/nope:latest\"\n"),
+    )
+    .unwrap();
+    let archive = tmp.path().join("out.oci.tar");
+    let out = run(&[
+        "pack",
+        "--config",
+        cfg.to_str().unwrap(),
+        "--profile",
+        "ci",
+        "--oci-archive",
+        archive.to_str().unwrap(),
+    ]);
+    assert!(
+        out.status.success(),
+        "--oci-archive should win over a config push: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        archive.exists(),
+        "archive not written — config push hijacked the sink"
+    );
+}
+
+#[test]
+fn config_smoke_with_no_build_fails_loud() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("scratchsmith.toml");
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    // clap blocks --smoke --no-build, but `smoke` can arrive from the config; with no image to
+    // run it must fail loud, not silently skip the smoke-run.
+    std::fs::write(
+        &cfg,
+        format!("[profile.p]\nbinary = \"{bin}\"\nsmoke = true\n"),
+    )
+    .unwrap();
+    let rootfs = tmp.path().join("rootfs");
+    let out = run(&[
+        "pack",
+        "--config",
+        cfg.to_str().unwrap(),
+        "--profile",
+        "p",
+        "--no-build",
+        "-o",
+        rootfs.to_str().unwrap(),
+    ]);
+    assert!(
+        !out.status.success(),
+        "config smoke + --no-build should fail"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("smoke") && stderr.contains("no-build"),
+        "got: {stderr}"
+    );
+}
