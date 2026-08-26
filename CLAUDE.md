@@ -32,6 +32,7 @@ cosign signing. Rust CLI. See `README.md` for the product story, `CONTRIBUTING.m
 - If `audit · deny` CI fails with a RustSec advisory-db **fetch** error, it's a transient flake — `gh run rerun <id> --failed`, not a real advisory.
 - **Use `command grep` for repo-wide/negative searches** — the shimmed `grep` silently skips gitignored paths (`scratch/`, `.claude/`), so a plain `grep` can't prove a negative.
 - All GitHub Actions are **SHA-pinned** (enforced). Renovate auto-merges github-actions minor/patch/digest; its rules live in the shared `schubydoo/renovate-config` preset, not here.
+- **Fuzz the untrusted-input boundary.** A new `pub fn` that consumes untrusted external bytes (like `resolver::parse_elf_info`, `lint::hardening_from_bytes`, `resolver::resolve_with`) gets a fuzz target added or extended under `fuzz/fuzz_targets/` in the **same PR** — with token literals in a `fuzz/<target>.dict` when the code branches on specific strings. `fuzz/` is a **detached workspace** the main build never compiles, so the required **`fuzz harness check`** job (`cargo check` on it) is what catches a harness broken by an API change; the weekly `cflite_cron` report tracks reach (don't gate on the %, it drifts with the corpus).
 
 ## Workflow preferences
 
