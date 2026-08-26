@@ -92,3 +92,9 @@ component_management:
         - src/cli.rs
         - src/config.rs
         - src/doctor.rs
+    # Crate root: `pub mod` re-exports only, so this renders near-empty (no coverable
+    # lines) — listed for a complete module map, not for a coverage signal.
+    - component_id: lib
+      name: lib (crate root re-exports)
+      paths:
+        - src/lib.rs

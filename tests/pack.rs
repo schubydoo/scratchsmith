@@ -36,6 +36,14 @@ fn syft_available() -> bool {
         .unwrap_or(false)
 }
 
+fn upx_available() -> bool {
+    Command::new("upx")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 fn find_tini_exists() -> bool {
     [
         "/usr/bin/tini",
@@ -238,6 +246,30 @@ fn packs_a_binary_that_runs_in_docker() {
         .unwrap();
     assert!(!shell.status.success(), "scratch image must have no shell");
     rmi(&tag);
+}
+
+#[test]
+fn upx_packed_image_smoke_runs() {
+    if !docker_available() || !upx_available() {
+        eprintln!("skipping upx_packed_image_smoke_runs: no docker or no upx");
+        return;
+    }
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping upx_packed_image_smoke_runs: no small fixture");
+        return;
+    };
+    let _g = docker_lock();
+    // upx compresses the binary; smoke:true runs the image once and bails if the loader could
+    // not start it — so a successful return proves the compressed image still starts.
+    let opts = PackOptions {
+        upx: true,
+        smoke: true,
+        ..Default::default()
+    };
+    let report = scratchsmith::pack::run(bin, &opts).expect("upx pack + smoke-run should succeed");
+    assert_eq!(report.smoke_ok, Some(true));
+    assert!(report.size.upx, "size report should flag upx");
+    rmi(report.tag.as_deref().unwrap_or(""));
 }
 
 #[test]

@@ -85,6 +85,9 @@ jobs:
       - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
         with:
           tool: cargo-nextest
+      # upx isn't preinstalled; the --upx pack tests skip without it (Task 5.3).
+      - name: Install upx
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends upx-ucl
       - name: Test (nextest → JUnit)
         run: cargo nextest run --all-features --profile ci
       # nextest does not run doctests; run them separately (reuses the build cache).
@@ -118,6 +121,9 @@ jobs:
       # Enforce the line floor (baseline ~94.5%) and emit lcov. cargo-llvm-cov
       # writes lcov.info before the threshold check, so the upload still runs on a
       # floor failure.
+      # upx isn't preinstalled; without it the --upx pack tests skip and their lines look uncovered.
+      - name: Install upx
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends upx-ucl
       - name: Coverage (lcov + line floor)
         run: cargo llvm-cov --all-features --lcov --output-path lcov.info --fail-under-lines 90
       - name: Upload to Codecov

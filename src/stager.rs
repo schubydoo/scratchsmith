@@ -197,18 +197,22 @@ pub struct SizeReport {
     pub total_before: u64,
     pub total_after: u64,
     pub stripped: bool,
+    /// The executable was UPX-compressed (its `after` reflects the compressed size).
+    pub upx: bool,
 }
 
 impl std::fmt::Display for SizeReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Show before -> after columns whenever a size reduction was applied (strip or UPX).
+        let reduced = self.stripped || self.upx;
         for e in &self.entries {
-            if self.stripped {
+            if reduced {
                 writeln!(f, "  {:>10} -> {:>10}  {}", e.before, e.after, e.path)?;
             } else {
                 writeln!(f, "  {:>10}  {}", e.after, e.path)?;
             }
         }
-        if self.stripped {
+        if reduced {
             let saved = self.total_before.saturating_sub(self.total_after);
             write!(
                 f,
@@ -229,9 +233,13 @@ pub fn strip_and_measure(
     tree: &StagedTree,
     resolution: &Resolution,
     strip: bool,
+    upx: bool,
 ) -> Result<SizeReport> {
-    // The ELF files we placed: the binary, the loader, and every resolved library.
-    let mut targets: Vec<PathBuf> = vec![under(dest, &tree.entrypoint)];
+    // The ELF files we placed: the binary, the loader, and every resolved library. UPX
+    // compresses the executable ONLY — compressing the loader or a shared library would
+    // break startup — so it is applied to the binary (the first target) alone.
+    let binary = under(dest, &tree.entrypoint);
+    let mut targets: Vec<PathBuf> = vec![binary.clone()];
     if let Some(interp) = &resolution.interpreter {
         targets.push(under(dest, &interp.image_path));
     }
@@ -239,12 +247,17 @@ pub fn strip_and_measure(
 
     let mut report = SizeReport {
         stripped: strip,
+        upx,
         ..Default::default()
     };
     for path in targets {
         let before = std::fs::metadata(&path)?.len();
         if strip {
             run_strip(&path)?;
+        }
+        // Strip first (a smaller input compresses better), then UPX the executable.
+        if upx && path == binary {
+            run_upx(&path)?;
         }
         let after = std::fs::metadata(&path)?.len();
         report.total_before += before;
@@ -267,6 +280,24 @@ fn run_strip(path: &Path) -> Result<()> {
     if !out.status.success() {
         bail!(
             "strip failed on {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+// Compress an executable in place with UPX (`--best` for ratio). UPX is absent on many
+// hosts, so a spawn failure is surfaced as a clear, actionable error, not a panic.
+fn run_upx(path: &Path) -> Result<()> {
+    let out = Command::new("upx")
+        .arg("--best")
+        .arg(path)
+        .output()
+        .context("running upx (install upx?)")?;
+    if !out.status.success() {
+        bail!(
+            "upx failed on {}: {}",
             path.display(),
             String::from_utf8_lossy(&out.stderr).trim()
         );
@@ -574,6 +605,7 @@ mod tests {
             total_before: 100,
             total_after: 40,
             stripped: true,
+            upx: false,
         };
         let text = stripped.to_string();
         assert!(text.contains("100"), "before size missing: {text}");
@@ -589,7 +621,24 @@ mod tests {
             total_before: 40,
             total_after: 40,
             stripped: false,
+            upx: false,
         };
         assert!(plain.to_string().contains("/lib/x.so"));
+
+        // UPX (even without strip) shows the before -> after delta and a savings total.
+        let compressed = SizeReport {
+            entries: vec![SizeEntry {
+                path: "/app".into(),
+                before: 200,
+                after: 80,
+            }],
+            total_before: 200,
+            total_after: 80,
+            stripped: false,
+            upx: true,
+        };
+        let text = compressed.to_string();
+        assert!(text.contains("200"), "before size missing: {text}");
+        assert!(text.contains("saved"), "upx savings summary missing: {text}");
     }
 }

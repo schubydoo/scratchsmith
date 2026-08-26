@@ -95,6 +95,9 @@ pub enum Command {
         /// Strip symbols from the binary and libraries (strip --strip-unneeded).
         #[arg(long)]
         strip: bool,
+        /// Compress the packed binary with UPX (it self-decompresses at runtime).
+        #[arg(long)]
+        upx: bool,
         /// Generate an SBOM of the packed rootfs (requires syft).
         #[arg(long)]
         sbom: bool,
@@ -180,6 +183,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             workdir,
             user,
             strip,
+            upx,
             sbom,
             sbom_file,
             sbom_format,
@@ -203,6 +207,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             let opts = crate::pack::PackOptions {
                 smoke,
                 strip: strip || file.strip, // either source enabling strip is enough
+                upx: upx || file.upx,
                 sbom: sbom.then_some(crate::supplychain::SbomRequest {
                     path: sbom_file,
                     format: sbom_format,

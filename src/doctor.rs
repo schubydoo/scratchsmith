@@ -47,7 +47,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "upx",
         version_args: &["--version"],
-        purpose: "--upx compression (v0.3)",
+        purpose: "--upx (compress the packed binary further)",
         hint: "install upx",
     },
 ];
