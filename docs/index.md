@@ -123,6 +123,67 @@ scratchsmith pack --sbom --strip --smoke ./app        # SBOM + stripped + auto s
 scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate for CI
 ```
 
+## Configuration
+
+Instead of a long command line, put the defaults for `pack` in a `scratchsmith.toml` and load it
+with `--config`. Every key maps to a `pack` flag, and **a flag on the command line overrides the
+file** — so the config sets your defaults and the CLI tweaks one run:
+
+```toml
+# scratchsmith.toml — loaded with `scratchsmith pack --config scratchsmith.toml`.
+binary = "./dist/app"           # the ELF to pack (or pass it as the positional arg)
+entrypoint = "/app"             # --entrypoint: image ENTRYPOINT (default: the packed binary's path)
+cmd = ["--serve"]               # --cmd: default args appended to the entrypoint
+env = ["LANG=C.UTF-8"]          # --env: image environment entries (KEY=VALUE)
+workdir = "/data"               # --workdir: image WORKDIR
+user = "65532:65532"            # --user: image user UID[:GID] (default is a non-root UID; root warns)
+
+strip = true                    # --strip: strip symbols from the binary and libraries
+upx = true                      # --upx: UPX-compress the packed binary
+smoke = true                    # --smoke: run the image once after build; fail if it can't start
+
+sbom = true                     # --sbom: write an SBOM of the packed rootfs (needs syft)
+sbom-file = "sbom.json"         # --sbom-file: SBOM output path (default: sbom.json)
+sbom-format = "cyclonedx-json"  # --sbom-format: cyclonedx-json (default) or spdx-json
+
+ca-certs = true                 # --ca-certs: add the TLS CA bundle (/etc/ssl/certs/ca-certificates.crt)
+tz = true                       # --tz: add the resolved local timezone (/etc/localtime)
+init = true                     # --init: add a minimal init (tini) as pid 1
+
+include = ["libnss_myhostname.so.2"]  # --include: force-stage extra libs (e.g. dlopen'd), by soname or path
+
+sign = true                     # --sign: cosign-sign the pushed image (needs a push target)
+push = "ghcr.io/you/app:latest" # --push: push straight to this registry reference (daemonless)
+```
+
+```sh
+scratchsmith pack --config scratchsmith.toml                 # binary + all keys come from the file
+scratchsmith pack --config scratchsmith.toml --push ghcr.io/you/app:dev ./other   # CLI overrides binary + push
+```
+
+The delivery sinks `--oci-archive <file>` and `--no-build` / `--output <dir>`, and the display-only
+`--format`, stay command-line-only — they are not config keys.
+
+### Profiles
+
+Group settings under `[profile.<name>]` and pick one with `--profile <name>` (which requires
+`--config`). A profile **layers over the base config**, so shared keys live at the top level and
+per-environment overrides go in the profile:
+
+```toml
+binary = "./dist/app"
+strip = true
+
+[profile.ci]                    # scratchsmith pack --config scratchsmith.toml --profile ci
+sbom = true
+sign = true
+push = "ghcr.io/you/app:latest"
+```
+
+Values layer in this order, **last wins**: base config → the selected `[profile.<name>]` → any
+command-line flag. Booleans OR together (a profile can switch something **on** but not off), a
+scalar is replaced by the more specific layer, and a non-empty list replaces the one beneath it.
+
 ## GitHub Action
 
 Pack in CI with no shell glue. The composite action downloads the signed release binary for the
