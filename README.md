@@ -160,7 +160,15 @@ Add supply-chain output, verify it starts, and shrink it:
 
 ```sh
 scratchsmith pack --sbom --strip --smoke ./app        # SBOM + stripped + auto smoke-run
+scratchsmith pack --sbom --sbom-format spdx-json --sbom-file bom.spdx.json ./app   # SPDX SBOM, custom path
 scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate for CI
+```
+
+Set what the image runs — entrypoint, arguments, environment, working directory, and user:
+
+```sh
+scratchsmith pack ./app \
+  --entrypoint /app --cmd serve --env LANG=C.UTF-8 --workdir /data --user 65532:65532
 ```
 
 ## Configuration
