@@ -39,6 +39,12 @@ const TOOLS: &[Tool] = &[
         hint: "https://github.com/anchore/syft",
     },
     Tool {
+        name: "grype",
+        version_args: &["version"],
+        purpose: "--scan (vulnerability scan)",
+        hint: "https://github.com/anchore/grype",
+    },
+    Tool {
         name: "cosign",
         version_args: &["version"],
         purpose: "image signing (v0.2)",

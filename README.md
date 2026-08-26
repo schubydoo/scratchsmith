@@ -58,6 +58,7 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 | glibc **NSS** support staged — name-service lookups like `getent hosts` work | ✅ |
 | **Non-root** by default (UID 65532), reproducible layers | ✅ |
 | **SBOM** generation — `--sbom` (CycloneDX or SPDX, via syft) | ✅ |
+| **Vulnerability scan** — `--scan` (grype), gate with `--scan-fail-on <severity>` | ✅ |
 | **ELF hardening lint** — `lint` (PIE/RELRO/NX/canary/FORTIFY), gate with `--fail-on` | ✅ |
 | `dlopen` gap **detection** + `--include` escape hatch | ✅ |
 | Symbol strip (`--strip`), UPX compression (`--upx`), size report, smoke-run (`--smoke`) | ✅ |
@@ -161,6 +162,7 @@ Add supply-chain output, verify it starts, and shrink it:
 ```sh
 scratchsmith pack --sbom --strip --smoke ./app        # SBOM + stripped + auto smoke-run
 scratchsmith pack --sbom --sbom-format spdx-json --sbom-file bom.spdx.json ./app   # SPDX SBOM, custom path
+scratchsmith pack --scan --scan-fail-on high ./app    # grype vuln scan; fail the build on a high+ CVE
 scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate for CI
 ```
 
@@ -191,6 +193,8 @@ file**.
 | `sbom` | `--sbom` | Write an SBOM of the packed rootfs (requires `syft`). |
 | `sbom-file` | `--sbom-file` | SBOM output path (default: `sbom.json`). |
 | `sbom-format` | `--sbom-format` | SBOM format: `cyclonedx-json` (default) or `spdx-json`. |
+| `scan` | `--scan` | Vulnerability-scan the packed rootfs with grype (reuses the SBOM if `--sbom` is set, else scans the rootfs). |
+| `scan-fail-on` | `--scan-fail-on` | Fail the pack if grype finds a vuln at or above this severity — `negligible`/`low`/`medium`/`high`/`critical` (implies `--scan`). |
 | `ca-certs` | `--ca-certs` | Add the TLS CA bundle (`/etc/ssl/certs/ca-certificates.crt`). |
 | `tz` | `--tz` | Add the resolved local timezone (`/etc/localtime`). |
 | `init` | `--init` | Add a minimal init (`tini`) as pid 1 wrapping the entrypoint. |
@@ -214,6 +218,8 @@ smoke = true
 sbom = true
 sbom-file = "sbom.json"
 sbom-format = "cyclonedx-json"
+scan = true
+scan-fail-on = "high"
 ca-certs = true
 tz = true
 init = true

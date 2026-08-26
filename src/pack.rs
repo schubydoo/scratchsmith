@@ -5,7 +5,7 @@ use crate::image::{self, ImageConfig};
 use crate::report::PackReport;
 use crate::resolver::{self, Sysroot};
 use crate::stager::{self, RuntimeExtras, SizeReport, StagedTree};
-use crate::supplychain::{self, SbomRequest};
+use crate::supplychain::{self, SbomRequest, ScanRequest, ScanSource, ScanSummary};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -21,6 +21,37 @@ fn maybe_sbom(rootfs: &Path, sbom: Option<&SbomRequest>) -> Result<Option<String
         }
         None => Ok(None),
     }
+}
+
+// Vulnerability-scan the staged rootfs with grype when requested, reusing the SBOM syft
+// wrote if there is one (else scanning the rootfs directly). A `fail_on` gate turns a
+// finding at or above that severity into a hard error, before anything is delivered.
+fn maybe_scan(
+    rootfs: &Path,
+    sbom_path: Option<&str>,
+    scan: Option<&ScanRequest>,
+) -> Result<Option<ScanSummary>> {
+    let Some(req) = scan else { return Ok(None) };
+    let source = match sbom_path {
+        Some(p) => ScanSource::Sbom(PathBuf::from(p)),
+        None => ScanSource::Rootfs(rootfs.to_path_buf()),
+    };
+    let summary = supplychain::run_grype(&source)?;
+    if let Some(threshold) = req.fail_on {
+        let n = summary.at_or_above(threshold);
+        if n > 0 {
+            bail!(
+                "vulnerability scan failed: {n} finding(s) at or above {threshold:?} \
+                 (critical={}, high={}, medium={}, low={}, negligible={})",
+                summary.critical,
+                summary.high,
+                summary.medium,
+                summary.low,
+                summary.negligible
+            );
+        }
+    }
+    Ok(Some(summary))
 }
 
 // Resolve `binary` and build its complete rootfs (libs, loader, cache, NSS/passwd
@@ -86,6 +117,8 @@ pub struct PackOptions {
     /// Compress the packed binary with UPX (the executable only — not the loader/libs).
     pub upx: bool,
     pub sbom: Option<SbomRequest>,
+    /// Vulnerability-scan the packed rootfs with grype; a `fail_on` gate aborts the pack.
+    pub scan: Option<ScanRequest>,
     pub extras: RuntimeExtras,
     /// Extra libraries (sonames or paths) to force-stage, e.g. dlopen'd plugins.
     pub includes: Vec<String>,
@@ -136,6 +169,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
     )?;
     stager::stage_runtime_extras(out_dir, &opts.extras)?;
     let sbom = maybe_sbom(out_dir, opts.sbom.as_ref())?;
+    let scan = maybe_scan(out_dir, sbom.as_deref(), opts.scan.as_ref())?;
     Ok(PackReport {
         tag: None,
         archive: None,
@@ -146,6 +180,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
         warnings,
         smoke_ok: None,
         sbom,
+        scan,
         signed: None,
     })
 }
@@ -161,6 +196,7 @@ struct StagedImage {
     size: SizeReport,
     warnings: Vec<String>,
     sbom: Option<String>,
+    scan: Option<ScanSummary>,
 }
 
 fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
@@ -175,8 +211,9 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         &opts.includes,
     )?;
     let extras = stager::stage_runtime_extras(&dest, &opts.extras)?;
-    // Generate the SBOM while the staged rootfs still exists (dest is temporary).
+    // Generate the SBOM and scan while the staged rootfs still exists (dest is temporary).
     let sbom = maybe_sbom(&dest, opts.sbom.as_ref())?;
+    let scan = maybe_scan(&dest, sbom.as_deref(), opts.scan.as_ref())?;
 
     // Effective image config: if --init staged tini, wrap the entrypoint so tini is
     // pid 1 and reaps/forwards for the real binary.
@@ -205,6 +242,7 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         size,
         warnings,
         sbom,
+        scan,
     })
 }
 
@@ -237,6 +275,7 @@ pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
         warnings: s.warnings,
         smoke_ok,
         sbom: s.sbom,
+        scan: s.scan,
         signed: None,
     })
 }
@@ -259,6 +298,7 @@ fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackR
         warnings: s.warnings,
         smoke_ok: None,
         sbom: s.sbom,
+        scan: s.scan,
         signed: None,
     })
 }
@@ -291,6 +331,7 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackRep
         warnings: s.warnings,
         smoke_ok: None,
         sbom: s.sbom,
+        scan: s.scan,
         signed,
     })
 }
