@@ -4,7 +4,14 @@ name: Publish to crates.io
 # `cargo install scratchsmith` tracks the release. The tagged commit carries the knope-bumped
 # Cargo.toml version, so `cargo publish` ships exactly the released version. Idempotent: it skips
 # when that version is already on crates.io, so a re-dispatch (or a tag that predates this
-# workflow) is a safe no-op rather than a hard error. Needs the CARGO_REGISTRY_TOKEN secret.
+# workflow) is a safe no-op rather than a hard error.
+#
+# Auth is OIDC Trusted Publishing — no long-lived CARGO_REGISTRY_TOKEN secret. The job mints a
+# short-lived token from a GitHub OIDC identity via rust-lang/crates-io-auth-action, matching the
+# repo's keyless posture (cosign, App client-id). ONE-TIME BOOTSTRAP: crates.io only allows adding
+# a Trusted Publisher AFTER a crate's first publish, so the initial `scratchsmith` publish is done
+# manually with a throwaway token; then the Trusted Publisher is linked (repo + this workflow file)
+# in the crates.io UI and every release after flows through here with no stored secret.
 #
 # Separate from knope-release.yml (builds+signs the tarballs, pre-tag) and release.yml (the GHCR
 # image, post-tag) — crates.io is a third, independent distribution channel keyed off the same tag.
@@ -33,6 +40,9 @@ jobs:
     if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read # checkout
+      id-token: write # OIDC token for Trusted Publishing
     steps:
       - name: Require a tag ref
         if: github.ref_type != 'tag'
@@ -43,15 +53,24 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-      - name: Publish (skip if this version already exists)
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Is this version already on crates.io?
+        id: check
         run: |
           set -euo pipefail
           ver="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
           if curl -sf -H 'User-Agent: scratchsmith-release (github.com/schubydoo/scratchsmith)' \
               "https://crates.io/api/v1/crates/scratchsmith/${ver}" >/dev/null 2>&1; then
             echo "scratchsmith ${ver} is already on crates.io — nothing to do."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
           else
-            cargo publish
+            echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
+      - name: Authenticate to crates.io (OIDC trusted publishing)
+        id: auth
+        if: steps.check.outputs.publish == 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+      - name: Publish
+        if: steps.check.outputs.publish == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish
