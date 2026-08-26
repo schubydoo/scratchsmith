@@ -124,7 +124,7 @@ impl Config {
             include: vec_or(self.include, over.include),
             sign: self.sign || over.sign,
             push: over.push.or(self.push),
-            profile: self.profile, // the effective config no longer carries nested profiles
+            profile: HashMap::new(), // the effective config no longer carries nested profiles
         }
     }
 }

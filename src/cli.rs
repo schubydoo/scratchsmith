@@ -247,13 +247,19 @@ fn dispatch(cli: Cli) -> Result<()> {
                 sign: sign || file.sign,
             };
 
-            let sink = if let Some(reference) = push.or(file.push) {
+            // An explicit CLI delivery sink always wins; `push` from the config/profile is only
+            // the default when no CLI sink flag was given — otherwise a `[profile.ci]` `push`
+            // would silently override `--oci-archive`/`--no-build` and turn a local pack into a
+            // registry publish.
+            let sink = if let Some(reference) = push {
                 crate::pack::Sink::Push(reference)
             } else if let Some(archive) = oci_archive {
                 crate::pack::Sink::OciArchive(archive)
             } else if no_build {
                 // clap guarantees output is present when no_build is set.
                 crate::pack::Sink::Rootfs(output.expect("--no-build requires --output"))
+            } else if let Some(reference) = file.push {
+                crate::pack::Sink::Push(reference)
             } else {
                 crate::pack::Sink::DockerLoad
             };
