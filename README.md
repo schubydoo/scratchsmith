@@ -23,7 +23,7 @@ symlinks), stages the glibc pieces nothing else remembers (NSS modules, a workin
 reproducible layers.
 
 <p align="center">
-  <img src="docs/demo/scratchsmith.svg" alt="Scratchsmith packing a dynamic glibc binary into a 2.5 MB FROM scratch image with an SBOM and a smoke-run, then running it" width="720">
+  <img src="docs/demo/scratchsmith.svg" alt="Scratchsmith packing a dynamic glibc binary into a minimal FROM scratch image with an SBOM and a smoke-run, then running it" width="720">
 </p>
 
 > **Status — v0.2.** The core works end to end (see [What works today](#what-works-today)), and
@@ -317,6 +317,8 @@ Every tool here builds smaller/safer images; they differ mainly in **what you fe
 | [slim](https://github.com/slimtoolkit/slim) | an already-built image | ✅ | ✅ (minifies) | security profiles | ❌ needs a built image first |
 
 Scratchsmith owns the one input the others don't serve: **an arbitrary prebuilt dynamic binary**.
+
+<sub>*Snapshot as of 2026-08 — the other tools evolve; check their own docs for current behavior. Only Scratchsmith's row is kept current here.*</sub>
 
 ## Limitations
 
