@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-full-white.svg">
-    <img alt="Scratchsmith" src="docs/assets/logo-full-black.svg" width="440">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/schubydoo/scratchsmith/main/docs/assets/logo-full-white.svg">
+    <img alt="Scratchsmith" src="https://raw.githubusercontent.com/schubydoo/scratchsmith/main/docs/assets/logo-full-black.svg" width="440">
   </picture>
 </p>
 
@@ -76,6 +76,12 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 
 ```sh
 brew install schubydoo/scratchsmith/scratchsmith
+```
+
+Or with **Cargo** (build from source):
+
+```sh
+cargo install scratchsmith
 ```
 
 Or **download a release binary** — Linux **amd64** or **arm64** — from the

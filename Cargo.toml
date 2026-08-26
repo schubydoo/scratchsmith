@@ -9,6 +9,9 @@ repository = "https://github.com/schubydoo/scratchsmith"
 readme = "README.md"
 keywords = ["container", "oci", "docker", "elf", "supply-chain"]
 categories = ["command-line-utilities"]
+# Ship only what a `cargo install` needs — src is self-contained (no build.rs, no include_str!),
+# so keep docs/, .github/, CLAUDE.md, Formula/, mkdocs.yml etc. out of the published crate.
+include = ["src/**/*.rs", "README.md", "LICENSE", "CHANGELOG.md"]
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
