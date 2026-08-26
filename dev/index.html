@@ -731,6 +731,10 @@ a hardening report, a non-root image, and no Dockerfile.</p>
 <td>✅</td>
 </tr>
 <tr>
+<td><strong>Vulnerability scan</strong> — <code>--scan</code> (grype), gate with <code>--scan-fail-on &lt;severity&gt;</code></td>
+<td>✅</td>
+</tr>
+<tr>
 <td><strong>ELF hardening lint</strong> — <code>lint</code> (PIE/RELRO/NX/canary/FORTIFY), gate with <code>--fail-on</code></td>
 <td>✅</td>
 </tr>
@@ -815,7 +819,8 @@ so <code>docker login</code> once (for GitHub's <code>ghcr.io</code>, a token wi
 <p>Add supply-chain output, verify it starts, and shrink it:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--strip<span class="w"> </span>--smoke<span class="w"> </span>./app<span class="w">        </span><span class="c1"># SBOM + stripped + auto smoke-run</span>
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--sbom-format<span class="w"> </span>spdx-json<span class="w"> </span>--sbom-file<span class="w"> </span>bom.spdx.json<span class="w"> </span>./app<span class="w">   </span><span class="c1"># SPDX SBOM, custom path</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>scratchsmith<span class="w"> </span>lint<span class="w"> </span>--fail-on<span class="w"> </span>no-pie<span class="w"> </span>--fail-on<span class="w"> </span>no-relro<span class="w"> </span>./app<span class="w">   </span><span class="c1"># hardening gate for CI</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--scan<span class="w"> </span>--scan-fail-on<span class="w"> </span>high<span class="w"> </span>./app<span class="w">    </span><span class="c1"># grype vuln scan; fail the build on a high+ CVE</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>scratchsmith<span class="w"> </span>lint<span class="w"> </span>--fail-on<span class="w"> </span>no-pie<span class="w"> </span>--fail-on<span class="w"> </span>no-relro<span class="w"> </span>./app<span class="w">   </span><span class="c1"># hardening gate for CI</span>
 </code></pre></div>
 <p>Set what the image runs — entrypoint, arguments, environment, working directory, and user:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app<span class="w"> </span><span class="se">\</span>
@@ -895,6 +900,16 @@ file</strong>.</p>
 <td>SBOM format: <code>cyclonedx-json</code> (default) or <code>spdx-json</code>.</td>
 </tr>
 <tr>
+<td><code>scan</code></td>
+<td><code>--scan</code></td>
+<td>Vulnerability-scan the packed rootfs with grype (reuses the SBOM if <code>--sbom</code> is set, else scans the rootfs).</td>
+</tr>
+<tr>
+<td><code>scan-fail-on</code></td>
+<td><code>--scan-fail-on</code></td>
+<td>Fail the pack on a grype finding at or above this severity: <code>negligible</code>/<code>low</code>/<code>medium</code>/<code>high</code>/<code>critical</code> (implies <code>--scan</code>). <code>negligible</code> blocks everything, including findings grype couldn't rank; stricter levels ignore unrankable findings.</td>
+</tr>
+<tr>
 <td><code>ca-certs</code></td>
 <td><code>--ca-certs</code></td>
 <td>Add the TLS CA bundle (<code>/etc/ssl/certs/ca-certificates.crt</code>).</td>
@@ -940,12 +955,14 @@ file</strong>.</p>
 <a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="n">sbom</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
 <a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="n">sbom-file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"sbom.json"</span>
 <a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="n">sbom-format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cyclonedx-json"</span>
-<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="n">ca-certs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="n">tz</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="n">init</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="n">include</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libnss_myhostname.so.2"</span><span class="p">]</span>
-<a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="n">scan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="n">scan-fail-on</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"high"</span>
+<a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="n">ca-certs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="n">tz</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="n">init</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="n">include</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libnss_myhostname.so.2"</span><span class="p">]</span>
+<a id="__codelineno-10-20" name="__codelineno-10-20" href="#__codelineno-10-20"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w">                 </span><span class="c1"># binary + all keys come from the file</span>
 <a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:dev<span class="w"> </span>./other<span class="w">   </span><span class="c1"># CLI overrides binary + push</span>
