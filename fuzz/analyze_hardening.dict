@@ -1,0 +1,9 @@
+# libFuzzer dictionary for analyze_hardening: the dynamic-symbol names lint's hardening checks
+# branch on (canary: __stack_chk_*; fortify: any name ending in _chk). The corpus is real ELFs,
+# so the mutator can't cheaply reconstruct these inside a valid dynstrtab — seed them so the
+# canary/fortify branches (lint.rs) actually get exercised.
+"__stack_chk_fail"
+"__stack_chk_guard"
+"_chk"
+"__printf_chk"
+"__memcpy_chk"
