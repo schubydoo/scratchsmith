@@ -23,7 +23,7 @@ symlinks), stages the glibc pieces nothing else remembers (NSS modules, a workin
 reproducible layers.
 
 <p align="center">
-  <img src="docs/demo/scratchsmith.svg" alt="Scratchsmith packing a dynamic glibc binary into a 2.5 MB FROM scratch image with an SBOM and a smoke-run, then running it" width="720">
+  <img src="docs/demo/scratchsmith.svg" alt="Scratchsmith packing a dynamic glibc binary into a minimal FROM scratch image with an SBOM and a smoke-run, then running it" width="720">
 </p>
 
 > **Status — v0.2.** The core works end to end (see [What works today](#what-works-today)), and
@@ -160,8 +160,95 @@ Add supply-chain output, verify it starts, and shrink it:
 
 ```sh
 scratchsmith pack --sbom --strip --smoke ./app        # SBOM + stripped + auto smoke-run
+scratchsmith pack --sbom --sbom-format spdx-json --sbom-file bom.spdx.json ./app   # SPDX SBOM, custom path
 scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate for CI
 ```
+
+Set what the image runs — entrypoint, arguments, environment, working directory, and user:
+
+```sh
+scratchsmith pack ./app \
+  --entrypoint /app --cmd serve --env LANG=C.UTF-8 --workdir /data --user 65532:65532
+```
+
+## Configuration
+
+Instead of a long command line, put the defaults for `pack` in a `scratchsmith.toml` and load it
+with `--config`. Every key below maps to a `pack` flag, and **a command-line flag overrides the
+file**.
+
+| `scratchsmith.toml` key | CLI flag | What it does |
+|---|---|---|
+| `binary` | *(positional arg)* | The ELF binary to pack. |
+| `entrypoint` | `--entrypoint` | Image `ENTRYPOINT` (defaults to the packed binary's path). |
+| `cmd` | `--cmd` | Default arguments appended to the entrypoint (list; `--cmd` is repeatable). |
+| `env` | `--env` | Image environment entries, each `KEY=VALUE` (list). |
+| `workdir` | `--workdir` | Image `WORKDIR`. |
+| `user` | `--user` | Image user `UID[:GID]`. Defaults to a non-root UID; `0`/root prints a warning. |
+| `strip` | `--strip` | Strip symbols from the binary and libraries. |
+| `upx` | `--upx` | Compress the packed binary with UPX (it self-decompresses at runtime). |
+| `smoke` | `--smoke` | Run the built image once and fail if the binary can't start. |
+| `sbom` | `--sbom` | Write an SBOM of the packed rootfs (requires `syft`). |
+| `sbom-file` | `--sbom-file` | SBOM output path (default: `sbom.json`). |
+| `sbom-format` | `--sbom-format` | SBOM format: `cyclonedx-json` (default) or `spdx-json`. |
+| `ca-certs` | `--ca-certs` | Add the TLS CA bundle (`/etc/ssl/certs/ca-certificates.crt`). |
+| `tz` | `--tz` | Add the resolved local timezone (`/etc/localtime`). |
+| `init` | `--init` | Add a minimal init (`tini`) as pid 1 wrapping the entrypoint. |
+| `include` | `--include` | Force-stage extra libraries by soname or path — e.g. `dlopen`'d plugins (list). |
+| `sign` | `--sign` | cosign-sign the pushed image (keyless, by digest). Requires a push target. |
+| `push` | `--push` | Push the image straight to this registry reference, daemonless. |
+
+A full config file, and how to run it:
+
+```toml
+# scratchsmith.toml — loaded with `scratchsmith pack --config scratchsmith.toml`.
+binary = "./dist/app"
+entrypoint = "/app"
+cmd = ["--serve"]
+env = ["LANG=C.UTF-8"]
+workdir = "/data"
+user = "65532:65532"
+strip = true
+upx = true
+smoke = true
+sbom = true
+sbom-file = "sbom.json"
+sbom-format = "cyclonedx-json"
+ca-certs = true
+tz = true
+init = true
+include = ["libnss_myhostname.so.2"]
+sign = true
+push = "ghcr.io/you/app:latest"
+```
+
+```sh
+scratchsmith pack --config scratchsmith.toml                 # binary + all keys come from the file
+scratchsmith pack --config scratchsmith.toml --push ghcr.io/you/app:dev ./other   # CLI overrides binary + push
+```
+
+The delivery sinks `--oci-archive <file>` and `--no-build` / `--output <dir>`, and the display-only
+`--format`, stay command-line-only — they are not config keys.
+
+### Profiles
+
+Group settings under `[profile.<name>]` and pick one with `--profile <name>` (which requires
+`--config`). A profile **layers over the base config**, so shared keys live at the top level and
+per-environment overrides go in the profile:
+
+```toml
+binary = "./dist/app"
+strip = true
+
+[profile.ci]                    # scratchsmith pack --config scratchsmith.toml --profile ci
+sbom = true
+sign = true
+push = "ghcr.io/you/app:latest"
+```
+
+Values layer in this order, **last wins**: base config → the selected `[profile.<name>]` → any
+command-line flag. Booleans OR together (a profile can switch something **on** but not off), a
+scalar is replaced by the more specific layer, and a non-empty list replaces the one beneath it.
 
 ## GitHub Action
 
@@ -230,6 +317,8 @@ Every tool here builds smaller/safer images; they differ mainly in **what you fe
 | [slim](https://github.com/slimtoolkit/slim) | an already-built image | ✅ | ✅ (minifies) | security profiles | ❌ needs a built image first |
 
 Scratchsmith owns the one input the others don't serve: **an arbitrary prebuilt dynamic binary**.
+
+<sub>*Snapshot as of 2026-08 — the other tools evolve; check their own docs for current behavior. Only Scratchsmith's row is kept current here.*</sub>
 
 ## Limitations
 
