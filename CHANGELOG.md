@@ -6,6 +6,12 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0:
 breaking changes bump the minor).
+## 0.2.1 (2026-08-26)
+
+### Fixes
+
+- Automate crates.io publishing with OIDC trusted publishing, and fix the logo so it renders on the crates.io page. ([#66](https://github.com/schubydoo/scratchsmith/pull/66))
+
 ## 0.2.0 (2026-08-25)
 
 ### Features
