@@ -1,5 +1,5 @@
 ---
-default: minor
+default: patch
 ---
 
-Publish to crates.io — install the CLI with `cargo install scratchsmith`.
+Automate crates.io publishing with OIDC trusted publishing, and fix the logo so it renders on the crates.io page.
