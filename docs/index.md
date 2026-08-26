@@ -242,8 +242,10 @@ the action runs (defaults to the pinned tag, else `latest`).
 ## Verifying releases
 
 Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
-Replace `<ver>` with the bare version you downloaded, no leading `v` (the tarball adds the
-`v` prefix; the image tag doesn't).
+Each release also ships a CycloneDX SBOM of Scratchsmith's own dependency graph
+(`scratchsmith-v<ver>.cdx.json`), listed in `checksums.txt` so the signature and provenance
+cover it too. Replace `<ver>` with the bare version you downloaded, no leading `v` (the tarball
+adds the `v` prefix; the image tag doesn't).
 
 ```sh
 # SLSA provenance — the simplest, ref-agnostic check
@@ -254,7 +256,7 @@ cosign verify-blob checksums.txt \
   --bundle checksums.txt.sigstore.json \
   --certificate-identity-regexp '^https://github\.com/schubydoo/scratchsmith/\.github/workflows/knope-release\.yml@' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
-sha256sum -c checksums.txt        # then check the tarball hashes
+sha256sum -c checksums.txt        # then check the tarball + SBOM hashes
 
 # The signed GHCR image
 cosign verify ghcr.io/schubydoo/scratchsmith:<ver> \

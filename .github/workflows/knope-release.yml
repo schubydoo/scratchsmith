@@ -2,8 +2,9 @@ name: Knope Release
 
 # knope's "publish" half. When the `chore: prepare release X.Y.Z` PR (opened by
 # knope-prepare.yml from the `release` branch) merges, this workflow BUILDS the
-# static-musl release binaries (amd64 + arm64), keyless-signs the checksums with
-# cosign, generates a SLSA build-provenance attestation, and stages the whole
+# static-musl release binaries (amd64 + arm64), generates a CycloneDX SBOM of the
+# crate's own dependency graph (syft over Cargo.lock), keyless-signs the checksums
+# with cosign, generates a SLSA build-provenance attestation, and stages the whole
 # signed set into dist/release-assets/. Only THEN does `knope release` run: with
 # `assets` configured in knope.toml it creates the GitHub Release as a DRAFT,
 # uploads every asset, and un-drafts (publishes) — the git tag is created at
@@ -23,7 +24,9 @@ name: Knope Release
 #
 # Verifying a published release asset:
 #   gh attestation verify <tarball> --repo schubydoo/scratchsmith   # SLSA provenance (primary)
-#   sha256sum -c checksums.txt                                       # tarball hashes
+#   sha256sum -c checksums.txt                                       # tarball + SBOM hashes
+# The CycloneDX SBOM (scratchsmith-vX.Y.Z.cdx.json) is listed in checksums.txt, so
+# the cosign signature + SLSA provenance over checksums.txt cover it transitively.
 #   cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
 #     --certificate-identity-regexp '^https://github\.com/schubydoo/scratchsmith/\.github/workflows/knope-release\.yml@' \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
@@ -159,6 +162,8 @@ jobs:
           path: artifacts
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Install syft (release SBOM generator)
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
       - name: Assemble, checksum, and sign
         run: |
           set -euo pipefail
@@ -168,8 +173,24 @@ jobs:
           # The matrix ships two arches; anything else means an upload went missing.
           count=$(find release -name 'scratchsmith-*.tar.gz' | wc -l)
           [ "$count" -eq 2 ] || { echo "::error::expected 2 tarballs, found ${count}"; exit 1; }
+          # Release SBOM — scratchsmith's OWN Rust dependency graph (CycloneDX, via
+          # syft). Sourced from Cargo.lock on purpose: the shipped binary is stripped
+          # (profile.release strip=true), so a binary scan is empty; the lockfile is
+          # the faithful, arch-independent dep record (one SBOM covers both arches).
+          # Named to match the tag knope creates (v${version}); it rides checksums.txt,
+          # so the one cosign signature + SLSA provenance below already cover it.
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) : ;;
+            *) echo "::error::could not parse package version from Cargo.toml (got '${version}')"; exit 1 ;;
+          esac
+          syft scan file:Cargo.lock -o "cyclonedx-json=release/scratchsmith-v${version}.cdx.json"
+          # syft exits 0 even when a cataloger finds nothing; assert the SBOM actually
+          # captured components so a broken scan can't publish a hollow SBOM.
+          components=$(jq '.components | length' "release/scratchsmith-v${version}.cdx.json")
+          [ "${components:-0}" -gt 0 ] || { echo "::error::SBOM has no components — syft scan of Cargo.lock produced nothing"; exit 1; }
           cd release
-          sha256sum scratchsmith-*.tar.gz > checksums.txt
+          sha256sum scratchsmith-*.tar.gz scratchsmith-*.cdx.json > checksums.txt
           # Keyless-sign the checksums (GitHub OIDC → Fulcio). One signature over
           # checksums.txt transitively covers every tarball through its hash.
           cosign sign-blob --bundle checksums.txt.sigstore.json checksums.txt --yes
@@ -195,16 +216,19 @@ jobs:
           cp "$BUNDLE" release/scratchsmith.intoto.jsonl
           mkdir -p dist/release-assets
           cp release/scratchsmith-*.tar.gz \
+             release/scratchsmith-*.cdx.json \
              release/checksums.txt \
              release/checksums.txt.sigstore.json \
              release/scratchsmith.intoto.jsonl \
              dist/release-assets/
           # FAIL CLOSED — knope errors only on a globbed file that vanished, not on
           # one that was never built. This gate is what guarantees the published
-          # (immutable) release is complete: 2 tarballs + checksums + signature +
-          # provenance, or abort before any publish.
+          # (immutable) release is complete: 2 tarballs + SBOM + checksums + signature
+          # + provenance, or abort before any publish.
           tarballs=$(find dist/release-assets -name 'scratchsmith-*.tar.gz' | wc -l)
           [ "$tarballs" -eq 2 ] || { echo "::error::expected 2 tarballs staged, found ${tarballs}"; exit 1; }
+          sboms=$(find dist/release-assets -name 'scratchsmith-*.cdx.json' | wc -l)
+          [ "$sboms" -eq 1 ] || { echo "::error::expected 1 SBOM staged, found ${sboms}"; exit 1; }
           for f in checksums.txt checksums.txt.sigstore.json scratchsmith.intoto.jsonl; do
             [ -s "dist/release-assets/${f}" ] || { echo "::error::missing staged asset ${f}"; exit 1; }
           done
