@@ -43,7 +43,7 @@ a hardening report, a non-root image, and no Dockerfile.
 | **SBOM** generation — `--sbom` (CycloneDX or SPDX, via syft) | ✅ |
 | **ELF hardening lint** — `lint` (PIE/RELRO/NX/canary/FORTIFY), gate with `--fail-on` | ✅ |
 | `dlopen` gap **detection** + `--include` escape hatch | ✅ |
-| Symbol strip (`--strip`), size report, smoke-run (`--smoke`) | ✅ |
+| Symbol strip (`--strip`), UPX compression (`--upx`), size report, smoke-run (`--smoke`) | ✅ |
 | Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`) | ✅ |
 | Config file (`scratchsmith.toml`), JSON output (`--format json`) | ✅ |
 | Shell completions — `--completions <bash\|zsh\|fish>` | ✅ |

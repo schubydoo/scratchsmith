@@ -26,6 +26,9 @@ pub struct Config {
     /// Strip symbols during pack.
     #[serde(default)]
     pub strip: bool,
+    /// Compress the packed binary with UPX.
+    #[serde(default)]
+    pub upx: bool,
 }
 
 impl Config {
@@ -53,12 +56,14 @@ mod tests {
             workdir = "/work"
             user = "1000:1000"
             strip = true
+            upx = true
         "#,
         )
         .unwrap();
         assert_eq!(cfg.binary, Some(PathBuf::from("/usr/bin/tool")));
         assert_eq!(cfg.cmd, vec!["--serve".to_string()]);
         assert!(cfg.strip);
+        assert!(cfg.upx);
     }
 
     #[test]

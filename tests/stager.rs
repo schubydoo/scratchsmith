@@ -103,7 +103,7 @@ fn strip_reduces_payload_size() {
     let dest = tmp.path().join("rootfs");
     let tree = stage(bin, &resolution, &dest).expect("stage");
 
-    let report = strip_and_measure(&dest, &tree, &resolution, true).expect("strip+measure");
+    let report = strip_and_measure(&dest, &tree, &resolution, true, false).expect("strip+measure");
     assert!(report.stripped);
     assert!(!report.entries.is_empty(), "should measure staged files");
     assert!(
@@ -111,5 +111,41 @@ fn strip_reduces_payload_size() {
         "strip should shrink the payload: {} -> {}",
         report.total_before,
         report.total_after
+    );
+}
+
+fn upx_available() -> bool {
+    Command::new("upx")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[test]
+fn upx_compresses_the_binary_only() {
+    // /usr/bin/id is a small real dynamic binary — fast to compress and present on any glibc
+    // host — so this stays quick where a 40 MB self-pack would not.
+    let bin = Path::new("/usr/bin/id");
+    if !upx_available() || !bin.exists() {
+        eprintln!("skipping upx_compresses_the_binary_only: no upx or no /usr/bin/id");
+        return;
+    }
+    let resolution = resolve(bin, &Sysroot::new("/")).expect("resolution");
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = tmp.path().join("rootfs");
+    let tree = stage(bin, &resolution, &dest).expect("stage");
+
+    let report = strip_and_measure(&dest, &tree, &resolution, false, true).expect("upx");
+    assert!(report.upx, "report should flag upx");
+    // The binary is the first target; UPX must shrink it. The loader/libs (later entries)
+    // are deliberately left uncompressed, so the binary is the only one that changes.
+    let binary = &report.entries[0];
+    assert!(
+        binary.after < binary.before,
+        "upx should shrink the binary: {} -> {}",
+        binary.before,
+        binary.after
     );
 }
