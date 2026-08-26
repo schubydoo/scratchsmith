@@ -194,7 +194,7 @@ file**.
 | `sbom-file` | `--sbom-file` | SBOM output path (default: `sbom.json`). |
 | `sbom-format` | `--sbom-format` | SBOM format: `cyclonedx-json` (default) or `spdx-json`. |
 | `scan` | `--scan` | Vulnerability-scan the packed rootfs with grype (reuses the SBOM if `--sbom` is set, else scans the rootfs). |
-| `scan-fail-on` | `--scan-fail-on` | Fail the pack if grype finds a vuln at or above this severity — `negligible`/`low`/`medium`/`high`/`critical` (implies `--scan`). |
+| `scan-fail-on` | `--scan-fail-on` | Fail the pack on a grype finding at or above this severity: `negligible`/`low`/`medium`/`high`/`critical` (implies `--scan`). `negligible` blocks everything, including findings grype couldn't rank; stricter levels ignore unrankable findings. |
 | `ca-certs` | `--ca-certs` | Add the TLS CA bundle (`/etc/ssl/certs/ca-certificates.crt`). |
 | `tz` | `--tz` | Add the resolved local timezone (`/etc/localtime`). |
 | `init` | `--init` | Add a minimal init (`tini`) as pid 1 wrapping the entrypoint. |

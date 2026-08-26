@@ -59,8 +59,8 @@ impl PackReport {
         }
         if let Some(scan) = &self.scan {
             out.push_str(&format!(
-                "vulnerabilities: {} total (critical={}, high={}, medium={}, low={}, negligible={})\n",
-                scan.total, scan.critical, scan.high, scan.medium, scan.low, scan.negligible
+                "vulnerabilities: {} total (critical={}, high={}, medium={}, low={}, negligible={}, unknown={})\n",
+                scan.total, scan.critical, scan.high, scan.medium, scan.low, scan.negligible, scan.unknown
             ));
         }
         if let Some(signed) = &self.signed {
@@ -170,9 +170,12 @@ mod tests {
         let text = report.to_text();
         assert!(text.contains("vulnerabilities: 7 total"));
         assert!(text.contains("critical=1, high=2"));
+        // The breakdown includes unknown so the parts reconcile with the total (1+2+0+3+0+1 = 7).
+        assert!(text.contains("negligible=0, unknown=1"));
         let json = serde_json::to_value(&report).unwrap();
         assert_eq!(json["scan"]["total"], 7);
         assert_eq!(json["scan"]["critical"], 1);
+        assert_eq!(json["scan"]["unknown"], 1);
     }
 
     #[test]

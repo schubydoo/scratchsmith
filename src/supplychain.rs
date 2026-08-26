@@ -138,9 +138,11 @@ pub struct ScanSummary {
 
 impl ScanSummary {
     /// How many findings are at or above `threshold` — what `--scan-fail-on` gates on.
-    /// `unknown`-severity findings never count toward a gate.
+    /// Findings grype couldn't rank (`unknown`) count only at the lowest threshold,
+    /// `negligible`, so `--scan-fail-on negligible` truly blocks *everything*; a stricter
+    /// threshold ignores them (an unrankable finding is not evidence of a high/critical).
     pub fn at_or_above(&self, threshold: Severity) -> usize {
-        [
+        let ranked: usize = [
             (Severity::Critical, self.critical),
             (Severity::High, self.high),
             (Severity::Medium, self.medium),
@@ -150,7 +152,12 @@ impl ScanSummary {
         .into_iter()
         .filter(|(sev, _)| *sev >= threshold)
         .map(|(_, n)| n)
-        .sum()
+        .sum();
+        if threshold == Severity::Negligible {
+            ranked + self.unknown
+        } else {
+            ranked
+        }
     }
 }
 
@@ -346,13 +353,14 @@ mod tests {
             medium: 3,
             low: 4,
             negligible: 5,
-            unknown: 9, // never counts toward a gate
+            unknown: 9,
             total: 24,
         };
-        assert_eq!(s.at_or_above(Severity::High), 3); // critical + high
-        assert_eq!(s.at_or_above(Severity::Medium), 6); // + medium
+        assert_eq!(s.at_or_above(Severity::High), 3); // critical + high; unknown excluded
+        assert_eq!(s.at_or_above(Severity::Medium), 6); // + medium; unknown excluded
         assert_eq!(s.at_or_above(Severity::Critical), 1);
-        assert_eq!(s.at_or_above(Severity::Negligible), 15); // all real severities, not unknown
+        // negligible = "block everything": all five ranked severities (15) PLUS the 9 unrankable.
+        assert_eq!(s.at_or_above(Severity::Negligible), 24);
     }
 
     #[test]
