@@ -1,0 +1,15 @@
+# libFuzzer dictionary for resolve_graph: the ld.so search tokens the resolver expands or matches.
+# Seeding them lets the engine reach the RPATH/RUNPATH/$ORIGIN and soname branches directly
+# instead of discovering the literal strings byte-by-byte.
+"$ORIGIN"
+"${ORIGIN}"
+"$LIB"
+"${LIB}"
+"$PLATFORM"
+"${PLATFORM}"
+"/lib64"
+"/usr/lib"
+"lib/x86_64-linux-gnu"
+".so"
+"ld-linux-x86-64.so.2"
+"ld-musl-x86_64.so.1"
