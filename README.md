@@ -285,7 +285,8 @@ tag, else `latest`).
 Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
 Each release also ships a CycloneDX SBOM of Scratchsmith's own dependency graph
 (`scratchsmith-v<ver>.cdx.json`), listed in `checksums.txt` so the signature and provenance
-cover it too. Replace `<ver>` with the bare version you downloaded, no leading `v` (the tarball
+cover it too. It reflects the full `Cargo.lock` graph, so it includes build- and
+dev-dependencies, not only the crates that link into the shipped binary. Replace `<ver>` with the bare version you downloaded, no leading `v` (the tarball
 adds the `v` prefix; the image tag doesn't).
 
 ```sh
