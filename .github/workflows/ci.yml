@@ -229,7 +229,12 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: fuzz
+      # -D warnings holds the harness to the main crate's clippy bar: catches warning-only drift
+      # (unused import, a newly-#[deprecated] call) that a bare `check` exits 0 on. Deps are
+      # --cap-lints'd by cargo, so only scratchsmith + the harness are held to it.
       - run: cargo check --manifest-path fuzz/Cargo.toml
+        env:
+          RUSTFLAGS: "-D warnings"
 
   ci-required-checks:
     # The single status branch protection requires. Add new required jobs to needs.
