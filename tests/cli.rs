@@ -94,3 +94,52 @@ fn pack_oci_archive_writes_the_file() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("wrote OCI archive"), "got: {stdout}");
 }
+
+#[test]
+fn profile_selects_options_and_reports_unknown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("scratchsmith.toml");
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    std::fs::write(
+        &cfg,
+        format!("[profile.ci]\nbinary = \"{bin}\"\nstrip = true\n"),
+    )
+    .unwrap();
+
+    // --profile requires --config (clap).
+    let out = run(&["pack", bin, "--profile", "ci"]);
+    assert!(!out.status.success(), "profile without config should fail");
+
+    // An undefined profile is a clear error naming the defined ones.
+    let out = run(&[
+        "pack",
+        "--config",
+        cfg.to_str().unwrap(),
+        "--profile",
+        "prod",
+    ]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("prod") && stderr.contains("ci"),
+        "got: {stderr}"
+    );
+
+    // The profile supplies the binary and strip; the pack succeeds via the daemonless sink.
+    let archive = tmp.path().join("profile.oci.tar");
+    let out = run(&[
+        "pack",
+        "--config",
+        cfg.to_str().unwrap(),
+        "--profile",
+        "ci",
+        "--oci-archive",
+        archive.to_str().unwrap(),
+    ]);
+    assert!(
+        out.status.success(),
+        "profile pack failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(archive.exists(), "archive not written from profile");
+}

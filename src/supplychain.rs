@@ -11,7 +11,8 @@ use std::process::Command;
 
 /// SBOM output format. CycloneDX is the default (better security-tool support);
 /// SPDX is offered for license/compliance consumers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")] // match the CLI value names (cyclonedx-json / spdx-json)
 pub enum SbomFormat {
     CyclonedxJson,
     SpdxJson,
