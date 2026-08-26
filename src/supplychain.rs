@@ -359,4 +359,16 @@ mod tests {
     fn malformed_grype_json_is_an_error_not_a_panic() {
         assert!(parse_grype(b"not json").is_err());
     }
+
+    #[test]
+    fn run_tool_capture_returns_stdout_on_success() {
+        let out = run_tool_capture("echo", &["scratchsmith".into()], "hint").unwrap();
+        assert_eq!(String::from_utf8_lossy(&out).trim(), "scratchsmith");
+    }
+
+    #[test]
+    fn run_tool_capture_reports_a_nonzero_exit() {
+        let err = run_tool_capture("false", &[], "hint").unwrap_err();
+        assert!(err.to_string().contains("false failed"));
+    }
 }
