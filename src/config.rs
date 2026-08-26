@@ -1,7 +1,7 @@
 //! Load `scratchsmith.toml`, optionally select a `[profile.<name>]`, and merge with CLI
 //! flags (flags win). See Tasks 2.6 and 5.5.
 
-use crate::supplychain::SbomFormat;
+use crate::supplychain::{SbomFormat, Severity};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -46,6 +46,12 @@ pub struct Config {
     /// SBOM format (`cyclonedx-json` or `spdx-json`).
     #[serde(rename = "sbom-format")]
     pub sbom_format: Option<SbomFormat>,
+    /// Vulnerability-scan the packed rootfs with grype.
+    #[serde(default)]
+    pub scan: bool,
+    /// Fail the pack when grype finds a vuln at or above this severity (implies `scan`).
+    #[serde(rename = "scan-fail-on")]
+    pub scan_fail_on: Option<Severity>,
     /// Add the TLS CA bundle (`/etc/ssl/certs/ca-certificates.crt`).
     #[serde(default, rename = "ca-certs")]
     pub ca_certs: bool,
@@ -118,6 +124,8 @@ impl Config {
             sbom: self.sbom || over.sbom,
             sbom_file: over.sbom_file.or(self.sbom_file),
             sbom_format: over.sbom_format.or(self.sbom_format),
+            scan: self.scan || over.scan,
+            scan_fail_on: over.scan_fail_on.or(self.scan_fail_on),
             ca_certs: self.ca_certs || over.ca_certs,
             tz: self.tz || over.tz,
             init: self.init || over.init,
@@ -149,6 +157,8 @@ mod tests {
             sbom = true
             sbom-file = "out.json"
             sbom-format = "spdx-json"
+            scan = true
+            scan-fail-on = "high"
             ca-certs = true
             tz = true
             init = true
@@ -160,9 +170,10 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.binary, Some(PathBuf::from("/usr/bin/tool")));
         assert_eq!(cfg.cmd, vec!["--serve".to_string()]);
-        assert!(cfg.strip && cfg.upx && cfg.smoke && cfg.sbom && cfg.sign);
+        assert!(cfg.strip && cfg.upx && cfg.smoke && cfg.sbom && cfg.sign && cfg.scan);
         assert_eq!(cfg.sbom_file, Some(PathBuf::from("out.json")));
         assert_eq!(cfg.sbom_format, Some(SbomFormat::SpdxJson));
+        assert_eq!(cfg.scan_fail_on, Some(Severity::High));
         assert!(cfg.ca_certs && cfg.tz && cfg.init);
         assert_eq!(cfg.include, vec!["libfoo.so".to_string()]);
         assert_eq!(cfg.push.as_deref(), Some("ghcr.io/me/tool:latest"));

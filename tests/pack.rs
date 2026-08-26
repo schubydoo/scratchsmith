@@ -44,6 +44,14 @@ fn upx_available() -> bool {
         .unwrap_or(false)
 }
 
+fn grype_available() -> bool {
+    Command::new("grype")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 fn find_tini_exists() -> bool {
     [
         "/usr/bin/tini",
@@ -96,6 +104,29 @@ fn sbom_is_generated_or_fails_with_a_clear_error() {
     } else {
         assert!(!out.status.success(), "missing syft must fail, not skip");
         assert!(String::from_utf8_lossy(&out.stderr).contains("syft not found"));
+    }
+}
+
+#[test]
+fn scan_runs_or_fails_with_a_clear_error() {
+    // The -n -o path needs no Docker. Whether grype is present or not, --scan must never
+    // silently skip: it scans the rootfs and reports counts, or it fails with an install hint.
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let tmp = tempfile::tempdir().unwrap();
+    let rootfs = tmp.path().join("rf");
+    let out = Command::new(bin)
+        .args(["pack", "-n", "-o", rootfs.to_str().unwrap(), "--scan", bin])
+        .output()
+        .unwrap();
+    if grype_available() {
+        assert!(
+            out.status.success(),
+            "pack --scan should succeed with grype"
+        );
+        assert!(String::from_utf8_lossy(&out.stdout).contains("vulnerabilities:"));
+    } else {
+        assert!(!out.status.success(), "missing grype must fail, not skip");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("grype not found"));
     }
 }
 

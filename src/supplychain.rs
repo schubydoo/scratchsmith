@@ -95,9 +95,130 @@ fn cosign_attest_args(image_ref: &str, sbom: &Path, predicate_type: &str) -> Vec
     ]
 }
 
+/// A vulnerability severity, ordered lowest → highest so `--scan-fail-on` can gate at
+/// or above a threshold. Names match grype's severity strings (kebab on the CLI).
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum, serde::Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum Severity {
+    Negligible,
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+/// Where grype reads its packages from: the SBOM syft already wrote (reuse it), or the
+/// staged rootfs directly when no SBOM was generated.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScanSource {
+    Sbom(PathBuf),
+    Rootfs(PathBuf),
+}
+
+/// A request to vulnerability-scan during a pack. `fail_on` (when set) gates the pack:
+/// a finding at or above that severity aborts before delivery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScanRequest {
+    pub fail_on: Option<Severity>,
+}
+
+/// Vulnerability counts by severity from a grype scan. Serialized into the pack report.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ScanSummary {
+    pub critical: usize,
+    pub high: usize,
+    pub medium: usize,
+    pub low: usize,
+    pub negligible: usize,
+    pub unknown: usize,
+    pub total: usize,
+}
+
+impl ScanSummary {
+    /// How many findings are at or above `threshold` — what `--scan-fail-on` gates on.
+    /// Findings grype couldn't rank (`unknown`) count only at the lowest threshold,
+    /// `negligible`, so `--scan-fail-on negligible` truly blocks *everything*; a stricter
+    /// threshold ignores them (an unrankable finding is not evidence of a high/critical).
+    pub fn at_or_above(&self, threshold: Severity) -> usize {
+        let ranked: usize = [
+            (Severity::Critical, self.critical),
+            (Severity::High, self.high),
+            (Severity::Medium, self.medium),
+            (Severity::Low, self.low),
+            (Severity::Negligible, self.negligible),
+        ]
+        .into_iter()
+        .filter(|(sev, _)| *sev >= threshold)
+        .map(|(_, n)| n)
+        .sum();
+        if threshold == Severity::Negligible {
+            ranked + self.unknown
+        } else {
+            ranked
+        }
+    }
+}
+
+/// Scan `source` with grype and return the severity breakdown. A missing grype is a
+/// clear error, never a silent skip. Gating is the caller's job (see `at_or_above`);
+/// grype is run without `--fail-on`, so a non-zero exit is a real tool failure.
+pub fn run_grype(source: &ScanSource) -> Result<ScanSummary> {
+    let out = run_tool_capture(
+        "grype",
+        &grype_args(source),
+        "install grype: https://github.com/anchore/grype",
+    )?;
+    parse_grype(&out)
+}
+
+fn grype_args(source: &ScanSource) -> Vec<String> {
+    let src = match source {
+        ScanSource::Sbom(p) => format!("sbom:{}", p.display()),
+        ScanSource::Rootfs(p) => format!("dir:{}", p.display()),
+    };
+    vec![src, "-o".into(), "json".into()]
+}
+
+fn parse_grype(json: &[u8]) -> Result<ScanSummary> {
+    #[derive(serde::Deserialize)]
+    struct Doc {
+        matches: Vec<Match>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Match {
+        vulnerability: Vuln,
+    }
+    #[derive(serde::Deserialize)]
+    struct Vuln {
+        #[serde(default)]
+        severity: String,
+    }
+    let doc: Doc = serde_json::from_slice(json).context("parsing grype JSON output")?;
+    let mut s = ScanSummary::default();
+    for m in &doc.matches {
+        match m.vulnerability.severity.to_ascii_lowercase().as_str() {
+            "critical" => s.critical += 1,
+            "high" => s.high += 1,
+            "medium" => s.medium += 1,
+            "low" => s.low += 1,
+            "negligible" => s.negligible += 1,
+            _ => s.unknown += 1,
+        }
+        s.total += 1;
+    }
+    Ok(s)
+}
+
 // Run an external tool, turning a not-found into a clear install hint and a non-zero
 // exit into a reported failure — never a silent skip.
 fn run_tool(tool: &str, args: &[String], hint: &str) -> Result<()> {
+    run_tool_capture(tool, args, hint).map(|_| ())
+}
+
+// As `run_tool`, but returns captured stdout (for tools whose output we parse).
+fn run_tool_capture(tool: &str, args: &[String], hint: &str) -> Result<Vec<u8>> {
     let output = match Command::new(tool).args(args).output() {
         Ok(o) => o,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -111,7 +232,7 @@ fn run_tool(tool: &str, args: &[String], hint: &str) -> Result<()> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    Ok(())
+    Ok(output.stdout)
 }
 
 #[cfg(test)]
@@ -181,5 +302,81 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("not found"));
         assert!(err.to_string().contains("install the thing"));
+    }
+
+    #[test]
+    fn grype_args_pick_the_source_prefix() {
+        assert_eq!(
+            grype_args(&ScanSource::Sbom(PathBuf::from("/tmp/sbom.json"))),
+            vec![
+                "sbom:/tmp/sbom.json".to_string(),
+                "-o".into(),
+                "json".into()
+            ]
+        );
+        assert_eq!(
+            grype_args(&ScanSource::Rootfs(PathBuf::from("/tmp/rootfs")))[0],
+            "dir:/tmp/rootfs"
+        );
+    }
+
+    #[test]
+    fn parse_grype_counts_by_severity() {
+        let json = br#"{"matches":[
+            {"vulnerability":{"severity":"Critical"}},
+            {"vulnerability":{"severity":"high"}},
+            {"vulnerability":{"severity":"High"}},
+            {"vulnerability":{"severity":"Low"}},
+            {"vulnerability":{"severity":"Unknown"}},
+            {"vulnerability":{"severity":""}}
+        ]}"#;
+        let s = parse_grype(json).unwrap();
+        assert_eq!(s.critical, 1);
+        assert_eq!(s.high, 2);
+        assert_eq!(s.low, 1);
+        assert_eq!(s.unknown, 2); // "Unknown" + the empty severity
+        assert_eq!(s.total, 6);
+    }
+
+    #[test]
+    fn empty_matches_is_a_clean_zero() {
+        let s = parse_grype(br#"{"matches":[]}"#).unwrap();
+        assert_eq!(s, ScanSummary::default());
+        assert_eq!(s.at_or_above(Severity::Negligible), 0);
+    }
+
+    #[test]
+    fn at_or_above_gates_from_the_threshold_up() {
+        let s = ScanSummary {
+            critical: 1,
+            high: 2,
+            medium: 3,
+            low: 4,
+            negligible: 5,
+            unknown: 9,
+            total: 24,
+        };
+        assert_eq!(s.at_or_above(Severity::High), 3); // critical + high; unknown excluded
+        assert_eq!(s.at_or_above(Severity::Medium), 6); // + medium; unknown excluded
+        assert_eq!(s.at_or_above(Severity::Critical), 1);
+        // negligible = "block everything": all five ranked severities (15) PLUS the 9 unrankable.
+        assert_eq!(s.at_or_above(Severity::Negligible), 24);
+    }
+
+    #[test]
+    fn malformed_grype_json_is_an_error_not_a_panic() {
+        assert!(parse_grype(b"not json").is_err());
+    }
+
+    #[test]
+    fn run_tool_capture_returns_stdout_on_success() {
+        let out = run_tool_capture("echo", &["scratchsmith".into()], "hint").unwrap();
+        assert_eq!(String::from_utf8_lossy(&out).trim(), "scratchsmith");
+    }
+
+    #[test]
+    fn run_tool_capture_reports_a_nonzero_exit() {
+        let err = run_tool_capture("false", &[], "hint").unwrap_err();
+        assert!(err.to_string().contains("false failed"));
     }
 }

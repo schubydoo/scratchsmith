@@ -2,6 +2,7 @@
 //! See Tasks 2.4, 2.8.
 
 use crate::stager::SizeReport;
+use crate::supplychain::ScanSummary;
 use serde::Serialize;
 
 /// The outcome of a pack, emitted as text or JSON (Task 2.8). Fields are stable so
@@ -26,6 +27,8 @@ pub struct PackReport {
     pub smoke_ok: Option<bool>,
     /// Path of the generated SBOM, if `--sbom` was requested.
     pub sbom: Option<String>,
+    /// Vulnerability counts by severity, if `--scan` was requested.
+    pub scan: Option<ScanSummary>,
     /// The signed by-digest reference, if `--sign` signed the pushed image.
     pub signed: Option<String>,
 }
@@ -53,6 +56,12 @@ impl PackReport {
         }
         if let Some(sbom) = &self.sbom {
             out.push_str(&format!("sbom: {sbom}\n"));
+        }
+        if let Some(scan) = &self.scan {
+            out.push_str(&format!(
+                "vulnerabilities: {} total (critical={}, high={}, medium={}, low={}, negligible={}, unknown={})\n",
+                scan.total, scan.critical, scan.high, scan.medium, scan.low, scan.negligible, scan.unknown
+            ));
         }
         if let Some(signed) = &self.signed {
             out.push_str(&format!("signed {signed}\n"));
@@ -85,6 +94,7 @@ mod tests {
             warnings: vec!["NSS module not found: libnss_dns.so.2".into()],
             smoke_ok: Some(true),
             sbom: Some("sbom.json".into()),
+            scan: None,
             signed: None,
         }
     }
@@ -128,6 +138,7 @@ mod tests {
             warnings: vec![],
             smoke_ok: None,
             sbom: None,
+            scan: None,
             signed: None,
         };
         assert!(report.to_text().contains("pushed ghcr.io/you/app:latest"));
@@ -142,6 +153,29 @@ mod tests {
             .contains("signed ghcr.io/you/app@sha256:abc"));
         let json = serde_json::to_value(&report).unwrap();
         assert_eq!(json["signed"], "ghcr.io/you/app@sha256:abc");
+    }
+
+    #[test]
+    fn text_and_json_report_vulnerability_counts() {
+        let mut report = sample_report();
+        report.scan = Some(crate::supplychain::ScanSummary {
+            critical: 1,
+            high: 2,
+            medium: 0,
+            low: 3,
+            negligible: 0,
+            unknown: 1,
+            total: 7,
+        });
+        let text = report.to_text();
+        assert!(text.contains("vulnerabilities: 7 total"));
+        assert!(text.contains("critical=1, high=2"));
+        // The breakdown includes unknown so the parts reconcile with the total (1+2+0+3+0+1 = 7).
+        assert!(text.contains("negligible=0, unknown=1"));
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["scan"]["total"], 7);
+        assert_eq!(json["scan"]["critical"], 1);
+        assert_eq!(json["scan"]["unknown"], 1);
     }
 
     #[test]
@@ -162,6 +196,7 @@ mod tests {
             warnings: vec![],
             smoke_ok: None,
             sbom: None,
+            scan: None,
             signed: None,
         };
         assert!(report.to_text().contains("staged to /out/rootfs"));

@@ -110,6 +110,12 @@ pub enum Command {
         /// SBOM format (with --sbom; defaults to cyclonedx-json).
         #[arg(long = "sbom-format", value_enum)]
         sbom_format: Option<crate::supplychain::SbomFormat>,
+        /// Vulnerability-scan the packed rootfs with grype (reuses the SBOM if --sbom is set).
+        #[arg(long)]
+        scan: bool,
+        /// Fail the pack if grype finds a vuln at or above this severity (implies --scan).
+        #[arg(long = "scan-fail-on", value_enum, value_name = "SEVERITY")]
+        scan_fail_on: Option<crate::supplychain::Severity>,
         /// Add the TLS CA bundle (/etc/ssl/certs/ca-certificates.crt).
         #[arg(long = "ca-certs")]
         ca_certs: bool,
@@ -191,6 +197,8 @@ fn dispatch(cli: Cli) -> Result<()> {
             sbom,
             sbom_file,
             sbom_format,
+            scan,
+            scan_fail_on,
             ca_certs,
             tz,
             init,
@@ -224,6 +232,11 @@ fn dispatch(cli: Cli) -> Result<()> {
                         .or(file.sbom_format)
                         .unwrap_or(crate::supplychain::SbomFormat::CyclonedxJson),
                 }),
+                scan: {
+                    let fail_on = scan_fail_on.or(file.scan_fail_on);
+                    (scan || file.scan || fail_on.is_some())
+                        .then_some(crate::supplychain::ScanRequest { fail_on })
+                },
                 extras: crate::stager::RuntimeExtras {
                     ca_certs: ca_certs || file.ca_certs,
                     tz: tz || file.tz,
@@ -327,6 +340,28 @@ mod tests {
         // -n without -o is a usage error (clap `requires`).
         let err = Cli::try_parse_from(["scratchsmith", "pack", "-n", "/bin/ls"]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn pack_parses_scan_flags() {
+        let cli = Cli::try_parse_from([
+            "scratchsmith",
+            "pack",
+            "--scan",
+            "--scan-fail-on",
+            "high",
+            "/bin/ls",
+        ])
+        .unwrap();
+        // `matches!` (not a match arm) so there is no unreachable panic branch to leave uncovered.
+        assert!(matches!(
+            cli.command,
+            Some(Command::Pack {
+                scan: true,
+                scan_fail_on: Some(crate::supplychain::Severity::High),
+                ..
+            })
+        ));
     }
 
     #[test]
