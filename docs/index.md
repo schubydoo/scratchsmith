@@ -129,7 +129,7 @@ Pack in CI with no shell glue. The composite action downloads the signed release
 runner, verifies it against the release checksums, and runs `pack`:
 
 ```yaml
-- uses: schubydoo/scratchsmith@v0.2.0
+- uses: schubydoo/scratchsmith@<ver>   # pin to a release tag
   with:
     binary: ./dist/app         # your prebuilt dynamic glibc binary
     sbom: true                 # needs syft on the runner
@@ -143,19 +143,19 @@ the built image, log in first and set `push`:
 ```yaml
 - uses: docker/login-action@v3
   with: { registry: ghcr.io, username: ${{ github.actor }}, password: ${{ secrets.GITHUB_TOKEN }} }
-- uses: schubydoo/scratchsmith@v0.2.0
+- uses: schubydoo/scratchsmith@<ver>   # pin to a release tag
   with:
     binary: ./dist/app
     push: ghcr.io/${{ github.repository }}:latest
 ```
 
-Pin to a release tag (`@v0.2.0`) or a commit SHA. `version:` overrides which scratchsmith release
+Pin `@<ver>` to a specific release tag (or a commit SHA). `version:` overrides which scratchsmith release
 the action runs (defaults to the pinned tag, else `latest`).
 
 ## Verifying releases
 
 Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
-Replace `<ver>` with the bare version you downloaded — e.g. `0.2.0`, no `v` (the tarball adds the
+Replace `<ver>` with the bare version you downloaded, no leading `v` (the tarball adds the
 `v` prefix; the image tag doesn't).
 
 ```sh

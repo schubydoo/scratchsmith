@@ -28,7 +28,7 @@ A clear description of the bug, and what you expected instead.
 
 ## Environment
 
-- Scratchsmith version: [e.g. v0.2.0, or `cargo install` from a commit]
+- Scratchsmith version: [the output of `scratchsmith --version`]
 - Install method: [prebuilt binary / cargo / from source]
 - OS & arch: [e.g. Debian 13 amd64]
 - glibc / `ldconfig --version` (first line): [e.g. 2.41]
