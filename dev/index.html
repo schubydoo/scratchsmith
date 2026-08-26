@@ -990,7 +990,11 @@ the built image, log in first and set <code>push</code>:</p>
 the action runs (defaults to the pinned tag, else <code>latest</code>).</p>
 <h2 id="verifying-releases">Verifying releases<a class="headerlink" href="#verifying-releases" title="Permanent link">&para;</a></h2>
 <p>Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
-Replace <code>&lt;ver&gt;</code> with the bare version you downloaded, no leading <code>v</code> (the tarball adds the
+Each release also ships a CycloneDX SBOM of Scratchsmith's own dependency graph
+(<code>scratchsmith-v&lt;ver&gt;.cdx.json</code>), listed in <code>checksums.txt</code> so the signature and provenance
+cover it too. It reflects the full <code>Cargo.lock</code> graph, so it includes build- and
+dev-dependencies, not only the crates that link into the shipped binary.</p>
+<p>Replace <code>&lt;ver&gt;</code> with the bare version you downloaded, no leading <code>v</code> (the tarball adds the
 <code>v</code> prefix; the image tag doesn't).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># SLSA provenance — the simplest, ref-agnostic check</span>
 <a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>gh<span class="w"> </span>attestation<span class="w"> </span>verify<span class="w"> </span>scratchsmith-v&lt;ver&gt;-linux-amd64.tar.gz<span class="w"> </span>--repo<span class="w"> </span>schubydoo/scratchsmith
@@ -1000,7 +1004,7 @@ Replace <code>&lt;ver&gt;</code> with the bare version you downloaded, no leadin
 <a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="w">  </span>--bundle<span class="w"> </span>checksums.txt.sigstore.json<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/schubydoo/scratchsmith/\.github/workflows/knope-release\.yml@'</span><span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
-<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>checksums.txt<span class="w">        </span><span class="c1"># then check the tarball hashes</span>
+<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>checksums.txt<span class="w">        </span><span class="c1"># then check the tarball + SBOM hashes</span>
 <a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a>
 <a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="c1"># The signed GHCR image</span>
 <a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a>cosign<span class="w"> </span>verify<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:&lt;ver&gt;<span class="w"> </span><span class="se">\</span>
