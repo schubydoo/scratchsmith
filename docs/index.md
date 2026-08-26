@@ -134,34 +134,52 @@ scratchsmith pack ./app \
 ## Configuration
 
 Instead of a long command line, put the defaults for `pack` in a `scratchsmith.toml` and load it
-with `--config`. Every key maps to a `pack` flag, and **a flag on the command line overrides the
-file** — so the config sets your defaults and the CLI tweaks one run:
+with `--config`. Every key below maps to a `pack` flag, and **a command-line flag overrides the
+file**.
+
+| `scratchsmith.toml` key | CLI flag | What it does |
+|---|---|---|
+| `binary` | *(positional arg)* | The ELF binary to pack. |
+| `entrypoint` | `--entrypoint` | Image `ENTRYPOINT` (defaults to the packed binary's path). |
+| `cmd` | `--cmd` | Default arguments appended to the entrypoint (list; `--cmd` is repeatable). |
+| `env` | `--env` | Image environment entries, each `KEY=VALUE` (list). |
+| `workdir` | `--workdir` | Image `WORKDIR`. |
+| `user` | `--user` | Image user `UID[:GID]`. Defaults to a non-root UID; `0`/root prints a warning. |
+| `strip` | `--strip` | Strip symbols from the binary and libraries. |
+| `upx` | `--upx` | Compress the packed binary with UPX (it self-decompresses at runtime). |
+| `smoke` | `--smoke` | Run the built image once and fail if the binary can't start. |
+| `sbom` | `--sbom` | Write an SBOM of the packed rootfs (requires `syft`). |
+| `sbom-file` | `--sbom-file` | SBOM output path (default: `sbom.json`). |
+| `sbom-format` | `--sbom-format` | SBOM format: `cyclonedx-json` (default) or `spdx-json`. |
+| `ca-certs` | `--ca-certs` | Add the TLS CA bundle (`/etc/ssl/certs/ca-certificates.crt`). |
+| `tz` | `--tz` | Add the resolved local timezone (`/etc/localtime`). |
+| `init` | `--init` | Add a minimal init (`tini`) as pid 1 wrapping the entrypoint. |
+| `include` | `--include` | Force-stage extra libraries by soname or path — e.g. `dlopen`'d plugins (list). |
+| `sign` | `--sign` | cosign-sign the pushed image (keyless, by digest). Requires a push target. |
+| `push` | `--push` | Push the image straight to this registry reference, daemonless. |
+
+A full config file, and how to run it:
 
 ```toml
 # scratchsmith.toml — loaded with `scratchsmith pack --config scratchsmith.toml`.
-binary = "./dist/app"           # the ELF to pack (or pass it as the positional arg)
-entrypoint = "/app"             # --entrypoint: image ENTRYPOINT (default: the packed binary's path)
-cmd = ["--serve"]               # --cmd: default args appended to the entrypoint
-env = ["LANG=C.UTF-8"]          # --env: image environment entries (KEY=VALUE)
-workdir = "/data"               # --workdir: image WORKDIR
-user = "65532:65532"            # --user: image user UID[:GID] (default is a non-root UID; root warns)
-
-strip = true                    # --strip: strip symbols from the binary and libraries
-upx = true                      # --upx: UPX-compress the packed binary
-smoke = true                    # --smoke: run the image once after build; fail if it can't start
-
-sbom = true                     # --sbom: write an SBOM of the packed rootfs (needs syft)
-sbom-file = "sbom.json"         # --sbom-file: SBOM output path (default: sbom.json)
-sbom-format = "cyclonedx-json"  # --sbom-format: cyclonedx-json (default) or spdx-json
-
-ca-certs = true                 # --ca-certs: add the TLS CA bundle (/etc/ssl/certs/ca-certificates.crt)
-tz = true                       # --tz: add the resolved local timezone (/etc/localtime)
-init = true                     # --init: add a minimal init (tini) as pid 1
-
-include = ["libnss_myhostname.so.2"]  # --include: force-stage extra libs (e.g. dlopen'd), by soname or path
-
-sign = true                     # --sign: cosign-sign the pushed image (needs a push target)
-push = "ghcr.io/you/app:latest" # --push: push straight to this registry reference (daemonless)
+binary = "./dist/app"
+entrypoint = "/app"
+cmd = ["--serve"]
+env = ["LANG=C.UTF-8"]
+workdir = "/data"
+user = "65532:65532"
+strip = true
+upx = true
+smoke = true
+sbom = true
+sbom-file = "sbom.json"
+sbom-format = "cyclonedx-json"
+ca-certs = true
+tz = true
+init = true
+include = ["libnss_myhostname.so.2"]
+sign = true
+push = "ghcr.io/you/app:latest"
 ```
 
 ```sh
