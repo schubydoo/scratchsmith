@@ -30,6 +30,12 @@ for f in fuzz/fuzz_targets/*.rs; do
   cp "$FUZZ_TARGET_OUTPUT_DIR/$target" "$OUT/"
 done
 
+# Stage committed libFuzzer dictionaries (<target>.dict) so the engine knows the ld.so tokens
+# ($ORIGIN, $LIB, sonames) it would otherwise have to rediscover byte-by-byte.
+for d in fuzz/*.dict; do
+  [ -e "$d" ] && cp "$d" "$OUT/"
+done
+
 # Seed corpus: bootstrap the fuzzers with valid ELFs so mutation reaches resolver's dependency
 # branches (interpreter, RPATH/RUNPATH/$ORIGIN, sonames) and lint's hardening branches — code that
 # random bytes never hit (parse_elf_info sat at ~10% before this). Generated here from the image,

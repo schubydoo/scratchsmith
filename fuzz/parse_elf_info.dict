@@ -1,0 +1,7 @@
+# libFuzzer dictionary for parse_elf_info: musl loader literals that flip is_musl() / ensure_glibc()
+# into the reject branch (resolver.rs:61-65). The seed corpus is real glibc ELFs, so these strings
+# never appear in inputs otherwise — the mutator needs them handed over to reach that path.
+"ld-musl"
+"libc.musl"
+"ld-musl-x86_64.so.1"
+"ld-musl-aarch64.so.1"
