@@ -639,6 +639,9 @@ mod tests {
         };
         let text = compressed.to_string();
         assert!(text.contains("200"), "before size missing: {text}");
-        assert!(text.contains("saved"), "upx savings summary missing: {text}");
+        assert!(
+            text.contains("saved"),
+            "upx savings summary missing: {text}"
+        );
     }
 }

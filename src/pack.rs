@@ -117,7 +117,8 @@ pub fn pack(binary: &Path, opts: &PackOptions, sink: Sink) -> Result<PackReport>
 
 /// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
 pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<PackReport> {
-    let (tree, size, warnings) = build_rootfs(binary, out_dir, opts.strip, opts.upx, &opts.includes)?;
+    let (tree, size, warnings) =
+        build_rootfs(binary, out_dir, opts.strip, opts.upx, &opts.includes)?;
     stager::stage_runtime_extras(out_dir, &opts.extras)?;
     let sbom = maybe_sbom(out_dir, opts.sbom.as_ref())?;
     Ok(PackReport {
