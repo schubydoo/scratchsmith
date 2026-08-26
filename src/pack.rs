@@ -31,6 +31,7 @@ fn build_rootfs(
     dest: &Path,
     strip: bool,
     upx: bool,
+    smoke: bool,
     includes: &[String],
 ) -> Result<(StagedTree, SizeReport, Vec<String>)> {
     let info = resolver::read_elf_info(binary)?;
@@ -47,13 +48,16 @@ fn build_rootfs(
         );
     }
     // UPX self-decompresses at runtime, but it can break a binary that dlopen's by path or
-    // self-modifies — surface the caveat whenever compression is on.
+    // self-modifies — surface the caveat whenever compression is on, and point at --smoke
+    // unless the caller already asked for it.
     if upx {
-        warnings.push(
-            "--upx compresses the binary; it self-decompresses at runtime but can break a \
-             binary that dlopen's by path or self-modifies — verify the packed image with --smoke"
-                .to_string(),
-        );
+        let mut msg = "--upx compresses the binary; it self-decompresses at runtime but can \
+                       break a binary that dlopen's by path or self-modifies"
+            .to_string();
+        if !smoke {
+            msg.push_str(" — verify the packed image with --smoke");
+        }
+        warnings.push(msg);
     }
 
     // Resolve against the host root for now; a pinned sysroot is future work.
@@ -117,8 +121,14 @@ pub fn pack(binary: &Path, opts: &PackOptions, sink: Sink) -> Result<PackReport>
 
 /// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
 pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<PackReport> {
-    let (tree, size, warnings) =
-        build_rootfs(binary, out_dir, opts.strip, opts.upx, &opts.includes)?;
+    let (tree, size, warnings) = build_rootfs(
+        binary,
+        out_dir,
+        opts.strip,
+        opts.upx,
+        opts.smoke,
+        &opts.includes,
+    )?;
     stager::stage_runtime_extras(out_dir, &opts.extras)?;
     let sbom = maybe_sbom(out_dir, opts.sbom.as_ref())?;
     Ok(PackReport {
@@ -151,7 +161,14 @@ struct StagedImage {
 fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
     let work = tempfile::tempdir()?;
     let dest = work.path().join("rootfs");
-    let (tree, size, warnings) = build_rootfs(binary, &dest, opts.strip, opts.upx, &opts.includes)?;
+    let (tree, size, warnings) = build_rootfs(
+        binary,
+        &dest,
+        opts.strip,
+        opts.upx,
+        opts.smoke,
+        &opts.includes,
+    )?;
     let extras = stager::stage_runtime_extras(&dest, &opts.extras)?;
     // Generate the SBOM while the staged rootfs still exists (dest is temporary).
     let sbom = maybe_sbom(&dest, opts.sbom.as_ref())?;
