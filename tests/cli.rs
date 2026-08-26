@@ -143,3 +143,33 @@ fn profile_selects_options_and_reports_unknown() {
     );
     assert!(archive.exists(), "archive not written from profile");
 }
+
+#[test]
+fn profile_sign_without_a_push_target_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("scratchsmith.toml");
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    // A profile sets `sign` but no push target; delivering to a non-push sink must fail loud
+    // (cosign signs a registry image by digest) rather than silently dropping the request.
+    std::fs::write(
+        &cfg,
+        format!("[profile.p]\nbinary = \"{bin}\"\nsign = true\n"),
+    )
+    .unwrap();
+    let archive = tmp.path().join("x.oci.tar");
+    let out = run(&[
+        "pack",
+        "--config",
+        cfg.to_str().unwrap(),
+        "--profile",
+        "p",
+        "--oci-archive",
+        archive.to_str().unwrap(),
+    ]);
+    assert!(!out.status.success(), "sign without push should fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("sign") && stderr.contains("push"),
+        "got: {stderr}"
+    );
+}

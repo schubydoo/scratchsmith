@@ -215,5 +215,8 @@ mod tests {
         let err = cfg.select_profile("prod").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("prod") && msg.contains("ci"), "got: {msg}");
+        // With no profiles defined at all, the message says so rather than listing nothing.
+        let err = Config::default().select_profile("prod").unwrap_err();
+        assert!(err.to_string().contains("(none)"), "got: {err}");
     }
 }
