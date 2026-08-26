@@ -6,6 +6,13 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0:
 breaking changes bump the minor).
+## 0.2.2 (2026-08-26)
+
+### Features
+
+- `scratchsmith.toml` now covers every packing flag, and supports named `[profile.<name>]` sections selectable with `pack --profile <name>` (layered over the base config, CLI flags still win) — so a `[profile.ci]` can set strip/sbom/sign/push together. ([#71](https://github.com/schubydoo/scratchsmith/pull/71))
+- `pack --upx` compresses the packed binary with UPX (it self-decompresses at runtime); the size report shows the delta, and `doctor` reports whether `upx` is available. ([#69](https://github.com/schubydoo/scratchsmith/pull/69))
+
 ## 0.2.1 (2026-08-26)
 
 ### Fixes
