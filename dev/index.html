@@ -397,6 +397,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Profiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#github-action" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -558,6 +586,34 @@
       
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Profiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -758,26 +814,177 @@ so <code>docker login</code> once (for GitHub's <code>ghcr.io</code>, a token wi
 </code></pre></div>
 <p>Add supply-chain output, verify it starts, and shrink it:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--strip<span class="w"> </span>--smoke<span class="w"> </span>./app<span class="w">        </span><span class="c1"># SBOM + stripped + auto smoke-run</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>scratchsmith<span class="w"> </span>lint<span class="w"> </span>--fail-on<span class="w"> </span>no-pie<span class="w"> </span>--fail-on<span class="w"> </span>no-relro<span class="w"> </span>./app<span class="w">   </span><span class="c1"># hardening gate for CI</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--sbom-format<span class="w"> </span>spdx-json<span class="w"> </span>--sbom-file<span class="w"> </span>bom.spdx.json<span class="w"> </span>./app<span class="w">   </span><span class="c1"># SPDX SBOM, custom path</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>scratchsmith<span class="w"> </span>lint<span class="w"> </span>--fail-on<span class="w"> </span>no-pie<span class="w"> </span>--fail-on<span class="w"> </span>no-relro<span class="w"> </span>./app<span class="w">   </span><span class="c1"># hardening gate for CI</span>
 </code></pre></div>
+<p>Set what the image runs — entrypoint, arguments, environment, working directory, and user:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>--entrypoint<span class="w"> </span>/app<span class="w"> </span>--cmd<span class="w"> </span>serve<span class="w"> </span>--env<span class="w"> </span><span class="nv">LANG</span><span class="o">=</span>C.UTF-8<span class="w"> </span>--workdir<span class="w"> </span>/data<span class="w"> </span>--user<span class="w"> </span><span class="m">65532</span>:65532
+</code></pre></div>
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<p>Instead of a long command line, put the defaults for <code>pack</code> in a <code>scratchsmith.toml</code> and load it
+with <code>--config</code>. Every key below maps to a <code>pack</code> flag, and <strong>a command-line flag overrides the
+file</strong>.</p>
+<table>
+<thead>
+<tr>
+<th><code>scratchsmith.toml</code> key</th>
+<th>CLI flag</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>binary</code></td>
+<td><em>(positional arg)</em></td>
+<td>The ELF binary to pack.</td>
+</tr>
+<tr>
+<td><code>entrypoint</code></td>
+<td><code>--entrypoint</code></td>
+<td>Image <code>ENTRYPOINT</code> (defaults to the packed binary's path).</td>
+</tr>
+<tr>
+<td><code>cmd</code></td>
+<td><code>--cmd</code></td>
+<td>Default arguments appended to the entrypoint (list; <code>--cmd</code> is repeatable).</td>
+</tr>
+<tr>
+<td><code>env</code></td>
+<td><code>--env</code></td>
+<td>Image environment entries, each <code>KEY=VALUE</code> (list).</td>
+</tr>
+<tr>
+<td><code>workdir</code></td>
+<td><code>--workdir</code></td>
+<td>Image <code>WORKDIR</code>.</td>
+</tr>
+<tr>
+<td><code>user</code></td>
+<td><code>--user</code></td>
+<td>Image user <code>UID[:GID]</code>. Defaults to a non-root UID; <code>0</code>/root prints a warning.</td>
+</tr>
+<tr>
+<td><code>strip</code></td>
+<td><code>--strip</code></td>
+<td>Strip symbols from the binary and libraries.</td>
+</tr>
+<tr>
+<td><code>upx</code></td>
+<td><code>--upx</code></td>
+<td>Compress the packed binary with UPX (it self-decompresses at runtime).</td>
+</tr>
+<tr>
+<td><code>smoke</code></td>
+<td><code>--smoke</code></td>
+<td>Run the built image once and fail if the binary can't start.</td>
+</tr>
+<tr>
+<td><code>sbom</code></td>
+<td><code>--sbom</code></td>
+<td>Write an SBOM of the packed rootfs (requires <code>syft</code>).</td>
+</tr>
+<tr>
+<td><code>sbom-file</code></td>
+<td><code>--sbom-file</code></td>
+<td>SBOM output path (default: <code>sbom.json</code>).</td>
+</tr>
+<tr>
+<td><code>sbom-format</code></td>
+<td><code>--sbom-format</code></td>
+<td>SBOM format: <code>cyclonedx-json</code> (default) or <code>spdx-json</code>.</td>
+</tr>
+<tr>
+<td><code>ca-certs</code></td>
+<td><code>--ca-certs</code></td>
+<td>Add the TLS CA bundle (<code>/etc/ssl/certs/ca-certificates.crt</code>).</td>
+</tr>
+<tr>
+<td><code>tz</code></td>
+<td><code>--tz</code></td>
+<td>Add the resolved local timezone (<code>/etc/localtime</code>).</td>
+</tr>
+<tr>
+<td><code>init</code></td>
+<td><code>--init</code></td>
+<td>Add a minimal init (<code>tini</code>) as pid 1 wrapping the entrypoint.</td>
+</tr>
+<tr>
+<td><code>include</code></td>
+<td><code>--include</code></td>
+<td>Force-stage extra libraries by soname or path — e.g. <code>dlopen</code>'d plugins (list).</td>
+</tr>
+<tr>
+<td><code>sign</code></td>
+<td><code>--sign</code></td>
+<td>cosign-sign the pushed image (keyless, by digest). Requires a push target.</td>
+</tr>
+<tr>
+<td><code>push</code></td>
+<td><code>--push</code></td>
+<td>Push the image straight to this registry reference, daemonless.</td>
+</tr>
+</tbody>
+</table>
+<p>A full config file, and how to run it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># scratchsmith.toml — loaded with `scratchsmith pack --config scratchsmith.toml`.</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">binary</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"./dist/app"</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">entrypoint</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/app"</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">cmd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"--serve"</span><span class="p">]</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">env</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"LANG=C.UTF-8"</span><span class="p">]</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="n">workdir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/data"</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="n">user</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"65532:65532"</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="n">strip</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="n">upx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="n">smoke</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="n">sbom</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="n">sbom-file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"sbom.json"</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="n">sbom-format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cyclonedx-json"</span>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="n">ca-certs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="n">tz</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="n">init</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="n">include</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libnss_myhostname.so.2"</span><span class="p">]</span>
+<a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w">                 </span><span class="c1"># binary + all keys come from the file</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:dev<span class="w"> </span>./other<span class="w">   </span><span class="c1"># CLI overrides binary + push</span>
+</code></pre></div>
+<p>The delivery sinks <code>--oci-archive &lt;file&gt;</code> and <code>--no-build</code> / <code>--output &lt;dir&gt;</code>, and the display-only
+<code>--format</code>, stay command-line-only — they are not config keys.</p>
+<h3 id="profiles">Profiles<a class="headerlink" href="#profiles" title="Permanent link">&para;</a></h3>
+<p>Group settings under <code>[profile.&lt;name&gt;]</code> and pick one with <code>--profile &lt;name&gt;</code> (which requires
+<code>--config</code>). A profile <strong>layers over the base config</strong>, so shared keys live at the top level and
+per-environment overrides go in the profile:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">binary</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"./dist/app"</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="n">strip</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="k">[profile.ci]</span><span class="w">                    </span><span class="c1"># scratchsmith pack --config scratchsmith.toml --profile ci</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="n">sbom</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
+</code></pre></div>
+<p>Values layer in this order, <strong>last wins</strong>: base config → the selected <code>[profile.&lt;name&gt;]</code> → any
+command-line flag. Booleans OR together (a profile can switch something <strong>on</strong> but not off), a
+scalar is replaced by the more specific layer, and a non-empty list replaces the one beneath it.</p>
 <h2 id="github-action">GitHub Action<a class="headerlink" href="#github-action" title="Permanent link">&para;</a></h2>
 <p>Pack in CI with no shell glue. The composite action downloads the signed release binary for the
 runner, verifies it against the release checksums, and runs <code>pack</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schubydoo/scratchsmith@v&lt;ver&gt;</span><span class="w">   </span><span class="c1"># pin to a release tag</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span><span class="nt">binary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./dist/app</span><span class="w">         </span><span class="c1"># your prebuilt dynamic glibc binary</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="nt">sbom</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                 </span><span class="c1"># needs syft on the runner</span>
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="nt">strip</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="nt">smoke</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                </span><span class="c1"># fail the job if the packed image can't start</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schubydoo/scratchsmith@v&lt;ver&gt;</span><span class="w">   </span><span class="c1"># pin to a release tag</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">    </span><span class="nt">binary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./dist/app</span><span class="w">         </span><span class="c1"># your prebuilt dynamic glibc binary</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">    </span><span class="nt">sbom</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                 </span><span class="c1"># needs syft on the runner</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">    </span><span class="nt">strip</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">    </span><span class="nt">smoke</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                </span><span class="c1"># fail the job if the packed image can't start</span>
 </code></pre></div>
 <p>Outputs <code>image</code> (the loaded tag), <code>rootfs</code> (with <code>output:</code>), and the full JSON <code>report</code>. To publish
 the built image, log in first and set <code>push</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">docker/login-action@v3</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> registry</span><span class="p">:</span><span class="w"> </span><span class="nv">ghcr.io</span><span class="p p-Indicator">,</span><span class="nt"> username</span><span class="p">:</span><span class="w"> </span><span class="nv">$</span><span class="p p-Indicator">{{</span><span class="w"> </span><span class="nv">github.actor</span><span class="w"> </span><span class="p p-Indicator">}},</span><span class="nt"> password</span><span class="p">:</span><span class="w"> </span><span class="nv">$</span><span class="p p-Indicator">{{</span><span class="w"> </span><span class="nv">secrets.GITHUB_TOKEN</span><span class="w"> </span><span class="p p-Indicator">}}</span><span class="w"> </span><span class="p p-Indicator">}</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schubydoo/scratchsmith@v&lt;ver&gt;</span><span class="w">   </span><span class="c1"># pin to a release tag</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="nt">binary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./dist/app</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">    </span><span class="nt">push</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/${{ github.repository }}:latest</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">docker/login-action@v3</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> registry</span><span class="p">:</span><span class="w"> </span><span class="nv">ghcr.io</span><span class="p p-Indicator">,</span><span class="nt"> username</span><span class="p">:</span><span class="w"> </span><span class="nv">$</span><span class="p p-Indicator">{{</span><span class="w"> </span><span class="nv">github.actor</span><span class="w"> </span><span class="p p-Indicator">}},</span><span class="nt"> password</span><span class="p">:</span><span class="w"> </span><span class="nv">$</span><span class="p p-Indicator">{{</span><span class="w"> </span><span class="nv">secrets.GITHUB_TOKEN</span><span class="w"> </span><span class="p p-Indicator">}}</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schubydoo/scratchsmith@v&lt;ver&gt;</span><span class="w">   </span><span class="c1"># pin to a release tag</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">    </span><span class="nt">binary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./dist/app</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">    </span><span class="nt">push</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/${{ github.repository }}:latest</span>
 </code></pre></div>
 <p>Pin <code>@v&lt;ver&gt;</code> to a specific release tag (or a commit SHA). <code>version:</code> overrides which scratchsmith release
 the action runs (defaults to the pinned tag, else <code>latest</code>).</p>
@@ -785,20 +992,20 @@ the action runs (defaults to the pinned tag, else <code>latest</code>).</p>
 <p>Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
 Replace <code>&lt;ver&gt;</code> with the bare version you downloaded, no leading <code>v</code> (the tarball adds the
 <code>v</code> prefix; the image tag doesn't).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># SLSA provenance — the simplest, ref-agnostic check</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>gh<span class="w"> </span>attestation<span class="w"> </span>verify<span class="w"> </span>scratchsmith-v&lt;ver&gt;-linux-amd64.tar.gz<span class="w"> </span>--repo<span class="w"> </span>schubydoo/scratchsmith
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="c1"># Checksums signature (one cosign signature covers every tarball through its hash)</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>cosign<span class="w"> </span>verify-blob<span class="w"> </span>checksums.txt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span>--bundle<span class="w"> </span>checksums.txt.sigstore.json<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/schubydoo/scratchsmith/\.github/workflows/knope-release\.yml@'</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
-<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>checksums.txt<span class="w">        </span><span class="c1"># then check the tarball hashes</span>
-<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>
-<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="c1"># The signed GHCR image</span>
-<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>cosign<span class="w"> </span>verify<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:&lt;ver&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/schubydoo/scratchsmith/\.github/workflows/release\.yml@refs/tags/'</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># SLSA provenance — the simplest, ref-agnostic check</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>gh<span class="w"> </span>attestation<span class="w"> </span>verify<span class="w"> </span>scratchsmith-v&lt;ver&gt;-linux-amd64.tar.gz<span class="w"> </span>--repo<span class="w"> </span>schubydoo/scratchsmith
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="c1"># Checksums signature (one cosign signature covers every tarball through its hash)</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>cosign<span class="w"> </span>verify-blob<span class="w"> </span>checksums.txt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="w">  </span>--bundle<span class="w"> </span>checksums.txt.sigstore.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/schubydoo/scratchsmith/\.github/workflows/knope-release\.yml@'</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
+<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>checksums.txt<span class="w">        </span><span class="c1"># then check the tarball hashes</span>
+<a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a>
+<a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="c1"># The signed GHCR image</span>
+<a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a>cosign<span class="w"> </span>verify<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:&lt;ver&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/schubydoo/scratchsmith/\.github/workflows/release\.yml@refs/tags/'</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
 </code></pre></div>
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <ol>
