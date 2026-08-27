@@ -391,6 +391,24 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitHub Action
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -407,6 +425,47 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inputs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Outputs
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -594,6 +653,36 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inputs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Outputs
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -622,8 +711,7 @@ runner, verifies it against the release checksums, and runs <code>pack</code>:</
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="nt">strip</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">smoke</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                </span><span class="c1"># fail the job if the packed image can't start</span>
 </code></pre></div>
-<p>Outputs <code>image</code> (the loaded tag), <code>rootfs</code> (with <code>output:</code>), and the full JSON <code>report</code>. To publish
-the built image, log in first and set <code>push</code>:</p>
+<p>To publish the built image, log in first and set <code>push</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">docker/login-action@v3</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> registry</span><span class="p">:</span><span class="w"> </span><span class="nv">ghcr.io</span><span class="p p-Indicator">,</span><span class="nt"> username</span><span class="p">:</span><span class="w"> </span><span class="nv">$</span><span class="p p-Indicator">{{</span><span class="w"> </span><span class="nv">github.actor</span><span class="w"> </span><span class="p p-Indicator">}},</span><span class="nt"> password</span><span class="p">:</span><span class="w"> </span><span class="nv">$</span><span class="p p-Indicator">{{</span><span class="w"> </span><span class="nv">secrets.GITHUB_TOKEN</span><span class="w"> </span><span class="p p-Indicator">}}</span><span class="w"> </span><span class="p p-Indicator">}</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schubydoo/scratchsmith@v&lt;ver&gt;</span><span class="w">   </span><span class="c1"># pin to a release tag</span>
@@ -631,11 +719,193 @@ the built image, log in first and set <code>push</code>:</p>
 <a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="nt">binary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./dist/app</span>
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nt">push</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/${{ github.repository }}:latest</span>
 </code></pre></div>
+<p>Set image metadata, gate on vulnerabilities, or cap the size. The list-valued inputs (<code>cmd</code>, <code>env</code>,
+<code>label</code>, <code>healthcheck</code>, <code>include</code>) take <strong>one value per line</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schubydoo/scratchsmith@v&lt;ver&gt;</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">binary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./dist/app</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">entrypoint</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/app</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">env</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">      </span><span class="no">LANG=C.UTF-8</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">workdir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/data</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="nt">label</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">      </span><span class="no">org.opencontainers.image.source=https://github.com/you/app</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">      </span><span class="no">role=api</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">    </span><span class="nt">healthcheck</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">      </span><span class="no">/app</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">      </span><span class="no">--health</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">    </span><span class="nt">scan</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">    </span><span class="nt">scan-fail-on</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">high</span><span class="w">        </span><span class="c1"># needs grype on the runner</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">    </span><span class="nt">max-size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">25MB</span>
+</code></pre></div>
 <p>Pin <code>@v&lt;ver&gt;</code> to a specific release tag (or a commit SHA) — the same supply-chain hygiene the tool
 itself practices. <code>version:</code> overrides which scratchsmith release the action runs (defaults to the
 pinned tag, else <code>latest</code>).</p>
-<p>The <code>with:</code> keys map to the <code>pack</code> flags documented in <a href="../configuration/">Configuration</a>; see
-<a href="../usage/">Usage</a> for the equivalent command-line recipes.</p>
+<h2 id="inputs">Inputs<a class="headerlink" href="#inputs" title="Permanent link">&para;</a></h2>
+<p>Most inputs map to the <code>pack</code> flag of the same name — see <a href="../configuration/">Configuration</a> for what
+each does and <a href="../usage/">Usage</a> for the equivalent command-line recipes. A few are action-specific:
+<code>version</code> picks which release to download, <code>output</code> maps to <code>--no-build --output</code>, and <code>args</code> is a
+verbatim escape hatch for any flag without a dedicated input (e.g. <code>--sign</code>, <code>--oci-archive</code>). Note
+<code>push</code> publishes with <code>docker tag</code>/<code>docker push</code>, <strong>not</strong> pack's daemonless, cosign-signable <code>--push</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>binary</code></td>
+<td><em>(required)</em></td>
+<td>Path to the dynamically linked glibc ELF binary to pack.</td>
+</tr>
+<tr>
+<td><code>version</code></td>
+<td><em>(the pinned tag, else <code>latest</code>)</em></td>
+<td>Which scratchsmith release to download — a tag like <code>v1.0.0</code>, or <code>latest</code>.</td>
+</tr>
+<tr>
+<td><code>output</code></td>
+<td></td>
+<td>Stage the rootfs into this directory instead of building an image (<code>--no-build</code>).</td>
+</tr>
+<tr>
+<td><code>entrypoint</code></td>
+<td><em>(the binary's path)</em></td>
+<td>Image <code>ENTRYPOINT</code>.</td>
+</tr>
+<tr>
+<td><code>cmd</code></td>
+<td></td>
+<td>Default arguments appended to the entrypoint, one per line.</td>
+</tr>
+<tr>
+<td><code>env</code></td>
+<td></td>
+<td>Image environment entries, one <code>KEY=VALUE</code> per line.</td>
+</tr>
+<tr>
+<td><code>workdir</code></td>
+<td></td>
+<td>Image <code>WORKDIR</code>.</td>
+</tr>
+<tr>
+<td><code>user</code></td>
+<td><code>65532</code></td>
+<td>Image user <code>UID[:GID]</code>; <code>0</code> warns.</td>
+</tr>
+<tr>
+<td><code>label</code></td>
+<td></td>
+<td>OCI image labels, one <code>KEY=VALUE</code> per line.</td>
+</tr>
+<tr>
+<td><code>healthcheck</code></td>
+<td></td>
+<td><code>HEALTHCHECK</code> in exec form, one token per line; must name an executable in the image.</td>
+</tr>
+<tr>
+<td><code>strip</code></td>
+<td><code>false</code></td>
+<td>Strip symbols from the binary and libraries.</td>
+</tr>
+<tr>
+<td><code>upx</code></td>
+<td><code>false</code></td>
+<td>Compress the binary with UPX (needs <code>upx</code> on the runner).</td>
+</tr>
+<tr>
+<td><code>smoke</code></td>
+<td><code>false</code></td>
+<td>After building, run the image once and fail if the binary can't start.</td>
+</tr>
+<tr>
+<td><code>sbom</code></td>
+<td><code>false</code></td>
+<td>Generate an SBOM of the packed rootfs (needs <code>syft</code> on the runner).</td>
+</tr>
+<tr>
+<td><code>sbom-file</code></td>
+<td><code>sbom.json</code></td>
+<td>SBOM output path. Requires <code>sbom</code> — ignored on its own.</td>
+</tr>
+<tr>
+<td><code>sbom-format</code></td>
+<td><code>cyclonedx-json</code></td>
+<td>SBOM format: <code>cyclonedx-json</code> or <code>spdx-json</code>.</td>
+</tr>
+<tr>
+<td><code>scan</code></td>
+<td><code>false</code></td>
+<td>Vulnerability-scan the rootfs with grype (needs <code>grype</code>; reuses the SBOM if <code>sbom</code> is set).</td>
+</tr>
+<tr>
+<td><code>scan-fail-on</code></td>
+<td></td>
+<td>Fail on a grype finding at or above this severity (<code>negligible</code>…<code>critical</code>). Implies <code>scan</code>.</td>
+</tr>
+<tr>
+<td><code>ca-certs</code></td>
+<td><code>false</code></td>
+<td>Add the TLS CA bundle to the image.</td>
+</tr>
+<tr>
+<td><code>tz</code></td>
+<td><code>false</code></td>
+<td>Add the resolved local timezone to the image.</td>
+</tr>
+<tr>
+<td><code>init</code></td>
+<td><code>false</code></td>
+<td>Add a minimal init (tini) as pid 1 wrapping the entrypoint.</td>
+</tr>
+<tr>
+<td><code>include</code></td>
+<td></td>
+<td>Extra libraries to force-stage (e.g. <code>dlopen</code>'d plugins), one soname/path per line.</td>
+</tr>
+<tr>
+<td><code>max-size</code></td>
+<td></td>
+<td>Fail if the fully-staged image exceeds this size — e.g. <code>25MB</code>, <code>512KiB</code>, or a byte count.</td>
+</tr>
+<tr>
+<td><code>push</code></td>
+<td></td>
+<td>Tag the built image as this registry ref and <code>docker push</code> it (needs a prior registry login; not compatible with <code>output</code>).</td>
+</tr>
+<tr>
+<td><code>args</code></td>
+<td></td>
+<td>Extra raw <code>pack</code> flags appended verbatim — the escape hatch for anything above.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="outputs">Outputs<a class="headerlink" href="#outputs" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Output</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>image</code></td>
+<td>The loaded image tag (empty when <code>output</code> staged a rootfs instead).</td>
+</tr>
+<tr>
+<td><code>rootfs</code></td>
+<td>The staged rootfs directory (empty when an image was built).</td>
+</tr>
+<tr>
+<td><code>report</code></td>
+<td>The full pack report as JSON.</td>
+</tr>
+</tbody>
+</table>
 
 
 
