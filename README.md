@@ -13,6 +13,8 @@
   <a href="https://blog.rust-lang.org/2026/05/28/Rust-1.96.0/"><img src="https://img.shields.io/badge/MSRV-1.96-blue" alt="MSRV 1.96"></a>
 </p>
 
+<!-- --8<-- [start:body] -->
+
 **The daemonless supply-chain packager for prebuilt dynamic Linux binaries.**
 
 Point Scratchsmith at a dynamically linked glibc ELF binary and get a minimal `FROM scratch`
@@ -23,7 +25,7 @@ symlinks), stages the glibc pieces nothing else remembers (NSS modules, a workin
 reproducible layers.
 
 <p align="center">
-  <img src="docs/demo/scratchsmith.svg" alt="Scratchsmith packing a dynamic glibc binary into a minimal FROM scratch image with an SBOM and a smoke-run, then running it" width="720">
+  <img src="https://raw.githubusercontent.com/schubydoo/scratchsmith/main/docs/demo/scratchsmith.svg" alt="Scratchsmith packing a dynamic glibc binary into a minimal FROM scratch image with an SBOM and a smoke-run, then running it" width="720">
 </p>
 
 ## Why not just static-link + `FROM scratch`?
@@ -77,7 +79,7 @@ macOS or native Windows; use a Linux container or WSL2 there.
 curl -fsSL https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install.sh | bash
 ```
 
-Piping to `bash` runs [`install.sh`](install.sh) — read it first if you prefer. `VERSION` and `BIN_DIR`
+Piping to `bash` runs [`install.sh`](https://github.com/schubydoo/scratchsmith/blob/main/install.sh) — read it first if you prefer. `VERSION` and `BIN_DIR`
 env vars override the tag and install directory. Uninstall with `--uninstall`:
 
 ```sh
@@ -98,7 +100,10 @@ Or with **Cargo** (build from source):
 cargo install scratchsmith
 ```
 
-Or **download a release binary** — Linux **amd64** or **arm64** — from the
+<details markdown="1">
+<summary>Other install methods — release binary, container image, build from source, shell completions</summary>
+
+**Download a release binary** — Linux **amd64** or **arm64** — from the
 [latest release](https://github.com/schubydoo/scratchsmith/releases/latest). Check the signature
 and provenance first (see [Verifying releases](#verifying-releases)):
 
@@ -107,13 +112,13 @@ tar -xzf scratchsmith-*-linux-amd64.tar.gz   # or -linux-arm64
 ./scratchsmith-*/scratchsmith --version
 ```
 
-Or pull the signed **container image**:
+**Container image** — pull the signed image:
 
 ```sh
 docker pull ghcr.io/schubydoo/scratchsmith:latest
 ```
 
-Or **build from source** (Rust **1.96+**):
+**Build from source** (Rust **1.96+**):
 
 ```sh
 git clone https://github.com/schubydoo/scratchsmith
@@ -122,16 +127,18 @@ cargo build --release
 # binary at target/release/scratchsmith
 ```
 
-Run `scratchsmith doctor` to see which optional external tools (syft, strip, tini, …) are
-present.
-
-**Shell completions.** Generate a script for your shell and drop it where the shell looks:
+**Shell completions** — generate a script for your shell and drop it where the shell looks:
 
 ```sh
 scratchsmith --completions bash | sudo tee /etc/bash_completion.d/scratchsmith
 scratchsmith --completions zsh  > ~/.zfunc/_scratchsmith    # ensure ~/.zfunc is on $fpath
 scratchsmith --completions fish > ~/.config/fish/completions/scratchsmith.fish
 ```
+
+</details>
+
+Run `scratchsmith doctor` to see which optional external tools (syft, strip, tini, …) are
+present.
 
 ## Quick start
 
@@ -224,7 +231,8 @@ file**.
 | `push` | `--push` | Push the image straight to this registry reference, daemonless. |
 | `max-size` | `--max-size` | Fail the pack if the packed image (the fully-staged rootfs — payload + NSS includes + runtime extras) exceeds this size — e.g. `12MB`, `512KiB`, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024). |
 
-A full config file, and how to run it:
+<details markdown="1">
+<summary>A full scratchsmith.toml with every key set</summary>
 
 ```toml
 # scratchsmith.toml — loaded with `scratchsmith pack --config scratchsmith.toml`.
@@ -252,6 +260,10 @@ sign = true
 push = "ghcr.io/you/app:latest"
 max-size = "50MB"
 ```
+
+</details>
+
+Load the file, and override any key on the command line:
 
 ```sh
 scratchsmith pack --config scratchsmith.toml                 # binary + all keys come from the file
@@ -322,6 +334,9 @@ dev-dependencies, not only the crates that link into the shipped binary.
 Replace `<ver>` with the bare version you downloaded, no leading `v` (the tarball adds the
 `v` prefix; the image tag doesn't).
 
+<details markdown="1">
+<summary>Verification commands — SLSA provenance, cosign checksums, signed image</summary>
+
 ```sh
 # SLSA provenance — the simplest, ref-agnostic check
 gh attestation verify scratchsmith-v<ver>-linux-amd64.tar.gz --repo schubydoo/scratchsmith
@@ -338,6 +353,8 @@ cosign verify ghcr.io/schubydoo/scratchsmith:<ver> \
   --certificate-identity-regexp '^https://github\.com/schubydoo/scratchsmith/\.github/workflows/release\.yml@refs/tags/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+</details>
 
 ## Stability
 
@@ -401,6 +418,8 @@ Scratchsmith owns the one input the others don't serve: **an arbitrary prebuilt 
 3. **Assemble** — build a non-root image with reproducible layers (sorted entries, zeroed
    mtime/uid/gid; the uncompressed `diff_id` and the gzip layer digest are computed separately,
    avoiding the classic unpullable-image bug).
+
+<!-- --8<-- [end:body] -->
 
 ## Contributing
 

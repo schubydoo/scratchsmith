@@ -63,7 +63,11 @@ markdown_extensions:
       permalink: true
   - pymdownx.details
   - pymdownx.inlinehilite
-  - pymdownx.snippets
+  # Single-source the site body from the repo README via `--8<-- "README.md:body"`.
+  # base_path reaches repo root; check_paths fails the build if that include breaks.
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.superfences:
