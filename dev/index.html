@@ -751,6 +751,10 @@ a hardening report, a non-root image, and no Dockerfile.</p>
 <td>✅</td>
 </tr>
 <tr>
+<td>Image metadata — labels (<code>--label</code>), <code>HEALTHCHECK</code> (<code>--healthcheck</code>)</td>
+<td>✅</td>
+</tr>
+<tr>
 <td>Config file (<code>scratchsmith.toml</code>) + named profiles (<code>--profile</code>), JSON output (<code>--format json</code>)</td>
 <td>✅</td>
 </tr>
@@ -824,8 +828,12 @@ so <code>docker login</code> once (for GitHub's <code>ghcr.io</code>, a token wi
 </code></pre></div>
 <p>Set what the image runs — entrypoint, arguments, environment, working directory, and user:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>--entrypoint<span class="w"> </span>/app<span class="w"> </span>--cmd<span class="w"> </span>serve<span class="w"> </span>--env<span class="w"> </span><span class="nv">LANG</span><span class="o">=</span>C.UTF-8<span class="w"> </span>--workdir<span class="w"> </span>/data<span class="w"> </span>--user<span class="w"> </span><span class="m">65532</span>:65532
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>--entrypoint<span class="w"> </span>/app<span class="w"> </span>--cmd<span class="w"> </span>serve<span class="w"> </span>--env<span class="w"> </span><span class="nv">LANG</span><span class="o">=</span>C.UTF-8<span class="w"> </span>--workdir<span class="w"> </span>/data<span class="w"> </span>--user<span class="w"> </span><span class="m">65532</span>:65532<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span>--label<span class="w"> </span><span class="nv">role</span><span class="o">=</span>api<span class="w"> </span>--healthcheck<span class="w"> </span>/app<span class="w"> </span>--healthcheck<span class="w"> </span>--health
 </code></pre></div>
+<p><code>--healthcheck</code> (like <code>--cmd</code>) is repeatable, and each token is one argument of a single exec
+command — so <code>--healthcheck /app --healthcheck --health</code> is the one command <code>["/app", "--health"]</code>
+(the same as <code>healthcheck = ["/app", "--health"]</code> in the config below), not two healthchecks.</p>
 <h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
 <p>Instead of a long command line, put the defaults for <code>pack</code> in a <code>scratchsmith.toml</code> and load it
 with <code>--config</code>. Every key below maps to a <code>pack</code> flag, and <strong>a command-line flag overrides the
@@ -868,6 +876,16 @@ file</strong>.</p>
 <td><code>user</code></td>
 <td><code>--user</code></td>
 <td>Image user <code>UID[:GID]</code>. Defaults to a non-root UID; <code>0</code>/root prints a warning.</td>
+</tr>
+<tr>
+<td><code>label</code></td>
+<td><code>--label</code></td>
+<td>OCI image label <code>KEY=VALUE</code> (list; <code>--label</code> is repeatable).</td>
+</tr>
+<tr>
+<td><code>healthcheck</code></td>
+<td><code>--healthcheck</code></td>
+<td>Container <code>HEALTHCHECK</code> in exec form (list; repeatable). It runs inside the scratch image, so it must name an executable present there — typically the packed binary.</td>
 </tr>
 <tr>
 <td><code>strip</code></td>
@@ -949,20 +967,22 @@ file</strong>.</p>
 <a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="n">env</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"LANG=C.UTF-8"</span><span class="p">]</span>
 <a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="n">workdir</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"/data"</span>
 <a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="n">user</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"65532:65532"</span>
-<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="n">strip</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="n">upx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="n">smoke</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="n">sbom</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="n">sbom-file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"sbom.json"</span>
-<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="n">sbom-format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cyclonedx-json"</span>
-<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="n">scan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="n">scan-fail-on</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"high"</span>
-<a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="n">ca-certs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="n">tz</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="n">init</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="n">include</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libnss_myhostname.so.2"</span><span class="p">]</span>
-<a id="__codelineno-10-20" name="__codelineno-10-20" href="#__codelineno-10-20"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="n">label</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"role=api"</span><span class="p">]</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="n">healthcheck</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"/app"</span><span class="p">,</span><span class="w"> </span><span class="s2">"--health"</span><span class="p">]</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="n">strip</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="n">upx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="n">smoke</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="n">sbom</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="n">sbom-file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"sbom.json"</span>
+<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="n">sbom-format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"cyclonedx-json"</span>
+<a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="n">scan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="n">scan-fail-on</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"high"</span>
+<a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="n">ca-certs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="n">tz</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-20" name="__codelineno-10-20" href="#__codelineno-10-20"></a><span class="n">init</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a><span class="n">include</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libnss_myhostname.so.2"</span><span class="p">]</span>
+<a id="__codelineno-10-22" name="__codelineno-10-22" href="#__codelineno-10-22"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-10-23" name="__codelineno-10-23" href="#__codelineno-10-23"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w">                 </span><span class="c1"># binary + all keys come from the file</span>
 <a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:dev<span class="w"> </span>./other<span class="w">   </span><span class="c1"># CLI overrides binary + push</span>
