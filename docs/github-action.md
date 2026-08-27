@@ -51,9 +51,11 @@ pinned tag, else `latest`).
 
 ## Inputs
 
-Every input maps to the `pack` flag of the same name — see [Configuration](configuration.md) for what
-each does and [Usage](usage.md) for the equivalent command-line recipes. Anything without a dedicated
-input (e.g. `--sign`, `--oci-archive`) is reachable through `args`.
+Most inputs map to the `pack` flag of the same name — see [Configuration](configuration.md) for what
+each does and [Usage](usage.md) for the equivalent command-line recipes. A few are action-specific:
+`version` picks which release to download, `output` maps to `--no-build --output`, and `args` is a
+verbatim escape hatch for any flag without a dedicated input (e.g. `--sign`, `--oci-archive`). Note
+`push` publishes with `docker tag`/`docker push`, **not** pack's daemonless, cosign-signable `--push`.
 
 | Input | Default | Description |
 |---|---|---|
