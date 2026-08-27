@@ -12,29 +12,33 @@
         <meta name="author" content="schubydoo">
       
       
-        <link rel="canonical" href="https://schubydoo.github.io/scratchsmith/dev/">
+        <link rel="canonical" href="https://schubydoo.github.io/scratchsmith/dev/architecture/">
       
       
+        <link rel="prev" href="../comparison/">
       
-        <link rel="next" href="installation/">
       
       
         
       
       
-      <link rel="icon" href="assets/favicon.svg">
+      <link rel="icon" href="../assets/favicon.svg">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
   
-    <title>Scratchsmith — daemonless supply-chain packager</title>
+    
+      
+        <title>Architecture - Scratchsmith</title>
+      
+    
   
 
     
-      <link rel="stylesheet" href="assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
-        <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -53,7 +57,7 @@
       
     
     
-    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -67,15 +71,15 @@
   
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Scratchsmith">
-  <meta property="og:title" content="Scratchsmith — daemonless supply-chain packager">
+  <meta property="og:title" content="Architecture - Scratchsmith">
   <meta property="og:description" content="Package a prebuilt dynamic Linux binary into a minimal, non-root FROM scratch OCI image — no Dockerfile, no static linking.">
   <meta property="og:image" content="https://schubydoo.github.io/scratchsmith/dev/assets/og-card.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="Scratchsmith">
-  <meta property="og:url" content="https://schubydoo.github.io/scratchsmith/dev/">
+  <meta property="og:url" content="https://schubydoo.github.io/scratchsmith/dev/architecture/">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Scratchsmith — daemonless supply-chain packager">
+  <meta name="twitter:title" content="Architecture - Scratchsmith">
   <meta name="twitter:description" content="Package a prebuilt dynamic Linux binary into a minimal, non-root FROM scratch OCI image — no Dockerfile, no static linking.">
   <meta name="twitter:image" content="https://schubydoo.github.io/scratchsmith/dev/assets/og-card.png">
   <meta name="twitter:image:alt" content="Scratchsmith">
@@ -99,7 +103,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#scratchsmith" class="md-skip">
+        <a href="#architecture" class="md-skip">
           Skip to content
         </a>
       
@@ -114,10 +118,10 @@
             <div class="md-banner__inner md-grid md-typeset">
               
   You're reading docs for an unreleased or older version of Scratchsmith.
-  <a href="../."><strong>Go to the latest release →</strong></a>
+  <a href="../.."><strong>Go to the latest release →</strong></a>
 
             </div>
-            <script>var el=document.querySelector("[data-md-component=outdated]"),base=new URL("."),outdated=__md_get("__outdated",sessionStorage,base);!0===outdated&&el&&(el.hidden=!1)</script>
+            <script>var el=document.querySelector("[data-md-component=outdated]"),base=new URL(".."),outdated=__md_get("__outdated",sessionStorage,base);!0===outdated&&el&&(el.hidden=!1)</script>
           </aside>
         
       </div>
@@ -129,9 +133,9 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="." title="Scratchsmith" class="md-header__button md-logo" aria-label="Scratchsmith" data-md-component="logo">
+    <a href=".." title="Scratchsmith" class="md-header__button md-logo" aria-label="Scratchsmith" data-md-component="logo">
       
-  <img src="assets/logo-mark-white.svg" alt="logo">
+  <img src="../assets/logo-mark-white.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -148,7 +152,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Home
+              Architecture
             
           </span>
         </div>
@@ -266,9 +270,9 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="." title="Scratchsmith" class="md-nav__button md-logo" aria-label="Scratchsmith" data-md-component="logo">
+    <a href=".." title="Scratchsmith" class="md-nav__button md-logo" aria-label="Scratchsmith" data-md-component="logo">
       
-  <img src="assets/logo-mark-white.svg" alt="logo">
+  <img src="../assets/logo-mark-white.svg" alt="logo">
 
     </a>
     Scratchsmith
@@ -292,37 +296,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Home
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="." class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
         
   
   
@@ -338,59 +315,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#why-not-just-static-link-from-scratch" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Why not just static-link + FROM scratch?
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-works-today" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What works today
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#next" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Next
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -402,7 +326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="installation/" class="md-nav__link">
+      <a href="../installation/" class="md-nav__link">
         
   
   
@@ -429,7 +353,7 @@
   
   
     <li class="md-nav__item">
-      <a href="usage/" class="md-nav__link">
+      <a href="../usage/" class="md-nav__link">
         
   
   
@@ -456,7 +380,7 @@
   
   
     <li class="md-nav__item">
-      <a href="github-action/" class="md-nav__link">
+      <a href="../github-action/" class="md-nav__link">
         
   
   
@@ -483,7 +407,7 @@
   
   
     <li class="md-nav__item">
-      <a href="configuration/" class="md-nav__link">
+      <a href="../configuration/" class="md-nav__link">
         
   
   
@@ -510,7 +434,7 @@
   
   
     <li class="md-nav__item">
-      <a href="verifying/" class="md-nav__link">
+      <a href="../verifying/" class="md-nav__link">
         
   
   
@@ -537,7 +461,7 @@
   
   
     <li class="md-nav__item">
-      <a href="comparison/" class="md-nav__link">
+      <a href="../comparison/" class="md-nav__link">
         
   
   
@@ -561,10 +485,37 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="architecture/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -580,6 +531,48 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stability
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -665,10 +658,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#why-not-just-static-link-from-scratch" class="md-nav__link">
+  <a href="#how-it-works" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why not just static-link + FROM scratch?
+        How it works
       
     </span>
   </a>
@@ -676,21 +669,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-works-today" class="md-nav__link">
+  <a href="#stability" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What works today
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#next" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Next
+        Stability
       
     </span>
   </a>
@@ -717,131 +699,32 @@
   
 
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-mark-white.svg">
-    <img alt="" src="assets/logo-mark-black.svg" width="96">
-  </picture>
-</p>
-
-<h1 id="scratchsmith">Scratchsmith<a class="headerlink" href="#scratchsmith" title="Permanent link">&para;</a></h1>
-<p><strong>The daemonless supply-chain packager for prebuilt dynamic Linux binaries.</strong></p>
-<p>Point Scratchsmith at a dynamically linked glibc ELF binary and get a minimal <code>FROM scratch</code>
-OCI image — no Dockerfile, no static-linking prerequisite. It resolves the binary's shared
-libraries the way <code>ld.so</code> does (RPATH/RUNPATH/<code>$ORIGIN</code>, the interpreter, versioned soname
-symlinks), stages the glibc pieces nothing else remembers (NSS modules, a working
-<code>nsswitch.conf</code>, minimal <code>passwd</code>/<code>group</code>), and assembles a <strong>non-root</strong> image with reproducible
-layers.</p>
-<p><img alt="Scratchsmith packing a dynamic glibc binary into a minimal FROM scratch image with an SBOM and a smoke-run, then running it" src="demo/scratchsmith.svg" /></p>
-<h2 id="why-not-just-static-link-from-scratch">Why not just static-link + <code>FROM scratch</code>?<a class="headerlink" href="#why-not-just-static-link-from-scratch" title="Permanent link">&para;</a></h2>
-<p>If you can rebuild your service as a static binary (<code>CGO_ENABLED=0</code>, musl), <strong>do that</strong> — you need
-no packer. Scratchsmith is built for the binaries static linking <em>can't</em> help:</p>
+<h1 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h1>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Resolve</strong> — emulate the <code>ld.so</code> search order from the ELF itself (RPATH is transitive,
+   RUNPATH is not, <code>$ORIGIN</code> is per-object). It never scrapes the host's <code>ldd</code>, <code>ld.so.cache</code>,
+   or <code>LD_LIBRARY_PATH</code>, so the result is deterministic.</li>
+<li><strong>Stage</strong> — copy the interpreter to its verbatim path, mirror the libraries, recreate
+   versioned-soname symlinks, regenerate <code>ld.so.cache</code>, and add the glibc NSS pieces.</li>
+<li><strong>Assemble</strong> — build a non-root image with reproducible layers (sorted entries, zeroed
+   mtime/uid/gid; the uncompressed <code>diff_id</code> and the gzip layer digest are computed separately,
+   avoiding the classic unpullable-image bug).</li>
+</ol>
+<h2 id="stability">Stability<a class="headerlink" href="#stability" title="Permanent link">&para;</a></h2>
+<p>Scratchsmith follows <a href="https://semver.org/">Semantic Versioning</a>. As of <strong>1.0</strong>, these surfaces are a
+stable contract — a breaking change to any of them requires a new major version:</p>
 <ul>
-<li><strong>Closed-source / vendor binaries</strong> you can't recompile.</li>
-<li><strong>glibc binaries</strong> that rely on <strong>NSS</strong>, <strong><code>dlopen</code></strong>, or <strong>locale</strong> behaviour — static glibc
-  quietly breaks these, often only in production.</li>
-<li>Anything where "just rebuild it static" isn't on the table.</li>
+<li><strong>CLI flags</strong> — the names and meaning of <code>pack</code> / <code>lint</code> / <code>doctor</code> flags. New flags arrive in minor
+  releases; a removed or renamed flag, or a changed default, is a major change.</li>
+<li><strong><code>scratchsmith.toml</code></strong> — the config keys and their types (the <a href="../configuration/">Configuration</a> reference).</li>
+<li><strong><code>--format json</code></strong> — the field names and types of the pack report (the schema CI gates consume). It is
+  pinned by a golden test, so a change is always deliberate.</li>
+<li><strong>Exit codes</strong> — <code>0</code> on success, <code>2</code> on an argument-parse error, and non-zero on any other failure.</li>
 </ul>
-<p>That's the wedge. But it's not a fence: Scratchsmith <strong>already packs a static binary too</strong> (the
-resolver detects it and stages the single file), so it's equally handy when you just want an SBOM,
-a hardening report, a non-root image, and no Dockerfile. More: <a href="comparison/">Comparison &amp; limitations</a>.</p>
-<h2 id="what-works-today">What works today<a class="headerlink" href="#what-works-today" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Capability</th>
-<th>State</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Pack a dynamic glibc ELF → runnable <code>FROM scratch</code> image</td>
-<td>✅ (loaded via <code>docker load</code>)</td>
-</tr>
-<tr>
-<td><code>ld.so</code>-faithful dependency resolution (RPATH/RUNPATH/<code>$ORIGIN</code>, interpreter, sonames)</td>
-<td>✅</td>
-</tr>
-<tr>
-<td>glibc <strong>NSS</strong> support staged — name-service lookups like <code>getent hosts</code> work</td>
-<td>✅</td>
-</tr>
-<tr>
-<td><strong>Non-root</strong> by default (UID 65532), reproducible layers</td>
-<td>✅</td>
-</tr>
-<tr>
-<td><strong>SBOM</strong> generation — <code>--sbom</code> (CycloneDX or SPDX, via syft)</td>
-<td>✅</td>
-</tr>
-<tr>
-<td><strong>Vulnerability scan</strong> — <code>--scan</code> (grype), gate with <code>--scan-fail-on &lt;severity&gt;</code></td>
-<td>✅</td>
-</tr>
-<tr>
-<td><strong>ELF hardening lint</strong> — <code>lint</code> (PIE/RELRO/NX/canary/FORTIFY), gate with <code>--fail-on</code></td>
-<td>✅</td>
-</tr>
-<tr>
-<td><code>dlopen</code> gap <strong>detection</strong> + <code>--include</code> escape hatch</td>
-<td>✅</td>
-</tr>
-<tr>
-<td>Symbol strip (<code>--strip</code>), UPX compression (<code>--upx</code>), size report, smoke-run (<code>--smoke</code>)</td>
-<td>✅</td>
-</tr>
-<tr>
-<td>Image <strong>size budget</strong> — <code>--max-size &lt;SIZE&gt;</code> (fail the build when the staged image exceeds it)</td>
-<td>✅</td>
-</tr>
-<tr>
-<td>Runtime extras: CA certs (<code>--ca-certs</code>), timezone (<code>--tz</code>), init/tini (<code>--init</code>)</td>
-<td>✅</td>
-</tr>
-<tr>
-<td>Image metadata — labels (<code>--label</code>), <code>HEALTHCHECK</code> (<code>--healthcheck</code>)</td>
-<td>✅</td>
-</tr>
-<tr>
-<td>Config file (<code>scratchsmith.toml</code>) + named profiles (<code>--profile</code>), JSON output (<code>--format json</code>)</td>
-<td>✅</td>
-</tr>
-<tr>
-<td>Shell completions — <code>--completions &lt;bash\|zsh\|fish&gt;</code></td>
-<td>✅</td>
-</tr>
-<tr>
-<td><strong>Signed releases</strong> — amd64 + arm64 binaries, cosign-signed checksums + SLSA provenance, signed multi-arch GHCR image</td>
-<td>✅ (<a href="verifying/">verify</a>)</td>
-</tr>
-<tr>
-<td>Dynamic musl/Alpine binaries</td>
-<td>❌ rejected loudly (glibc first; a musl backend is a future goal)</td>
-</tr>
-<tr>
-<td><strong>Daemonless OCI archive</strong> — <code>--oci-archive &lt;file&gt;</code> (no daemon; skopeo/buildah/registry-ready)</td>
-<td>✅</td>
-</tr>
-<tr>
-<td><strong>Daemonless registry push</strong> — <code>--push &lt;ref&gt;</code> (no daemon; uses your docker credentials)</td>
-<td>✅</td>
-</tr>
-<tr>
-<td><strong>Signing the image <code>pack</code> produces</strong> — <code>--push --sign</code> (cosign keyless, by digest)</td>
-<td>✅</td>
-</tr>
-</tbody>
-</table>
-<h2 id="next">Next<a class="headerlink" href="#next" title="Permanent link">&para;</a></h2>
-<ul>
-<li><a href="installation/">Installation</a> — one-line install, packages, release binaries, and completions.</li>
-<li><a href="usage/">Usage</a> — pack recipes and daemonless output.</li>
-<li><a href="github-action/">GitHub Action</a> — pack in a CI workflow with the composite action.</li>
-<li><a href="configuration/">Configuration</a> — the <code>scratchsmith.toml</code> key reference and profiles.</li>
-<li><a href="verifying/">Verifying releases</a> — cosign signatures, SLSA provenance, and the SBOM.</li>
-<li><a href="comparison/">Comparison &amp; limitations</a> — how it compares, and what it does not do.</li>
-<li><a href="architecture/">Architecture</a> — how resolve → stage → assemble works, and the 1.0 stability contract.</li>
-</ul>
+<p><strong>Not</strong> frozen (may change in any release): human-readable text and warning wording, log output, <code>doctor</code>'s
+exact phrasing, and the exact bytes of the produced image — layers stay reproducible for identical inputs,
+but that is a property, not a frozen API.</p>
 
 
 
@@ -901,10 +784,10 @@ a hardening report, a non-root image, and no Dockerfile. More: <a href="comparis
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.top", "navigation.sections", "navigation.tracking", "toc.follow", "content.code.copy", "search.suggest", "search.highlight"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.sections", "navigation.tracking", "toc.follow", "content.code.copy", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>
