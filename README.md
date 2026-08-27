@@ -26,14 +26,6 @@ reproducible layers.
   <img src="docs/demo/scratchsmith.svg" alt="Scratchsmith packing a dynamic glibc binary into a minimal FROM scratch image with an SBOM and a smoke-run, then running it" width="720">
 </p>
 
-> **Status — v0.2.** The core works end to end (see [What works today](#what-works-today)), and
-> releases are [signed and published](#install). One note on the tagline:
-> - **Daemonless is here.** `--push` uploads the image straight to a registry and `--oci-archive`
->   writes an OCI archive — both with **no Docker daemon**. The *default* sink still hands the image
->   to your local Docker daemon via `docker load` (or `--no-build` for a daemon-free rootfs) because
->   it's the handiest thing for local dev; reach for `--push` / `--oci-archive` when you want the
->   daemon fully out of the loop.
-
 ## Why not just static-link + `FROM scratch`?
 
 If you can rebuild your service as a static binary (`CGO_ENABLED=0`, musl), **do that** — you
@@ -409,17 +401,6 @@ Scratchsmith owns the one input the others don't serve: **an arbitrary prebuilt 
 3. **Assemble** — build a non-root image with reproducible layers (sorted entries, zeroed
    mtime/uid/gid; the uncompressed `diff_id` and the gzip layer digest are computed separately,
    avoiding the classic unpullable-image bug).
-
-## Roadmap
-
-Shipped so far: signed release binaries (amd64 + arm64), cosign keyless signing + SLSA build
-provenance, a signed multi-arch GHCR image, a [GitHub Action](#github-action), a Homebrew tap, a
-versioned docs site, **daemonless output** — `--oci-archive` and `--push` (pure-Rust OCI
-archive + direct registry push, no Docker daemon) — and **image signing** (`--push --sign`,
-cosign keyless, plus SBOM attestation). Next:
-
-- **Broader inputs (later)** — a dynamic musl/Alpine backend and cross-arch resolution are
-  on the long-term wishlist. No committed date. (`crates.io` publish is also deferred.)
 
 ## Contributing
 

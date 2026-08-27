@@ -9,15 +9,6 @@ symlinks), stages the glibc pieces nothing else remembers (NSS modules, a workin
 `nsswitch.conf`, minimal `passwd`/`group`), and assembles a **non-root** image with reproducible
 layers.
 
-!!! info "Status — v0.2"
-    The core works end to end, and releases are signed and published (see [Install](#install)).
-    One honest caveat up front:
-
-    - **Daemonless is here.** `--push` uploads the image straight to a registry and `--oci-archive`
-      writes an OCI archive — both with no Docker daemon. The default sink still uses `docker load`
-      (or `--no-build` for a rootfs) for local convenience; reach for `--push` / `--oci-archive` to
-      take the daemon fully out of the loop.
-
 ## Why not just static-link + `FROM scratch`?
 
 If you can rebuild your service as a static binary (`CGO_ENABLED=0`, musl), **do that** — you need
