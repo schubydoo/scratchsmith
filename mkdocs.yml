@@ -81,6 +81,12 @@ extra:
 
 nav:
   - Home: index.md
+  - Installation: installation.md
+  - Usage: usage.md
+  - Configuration: configuration.md
+  - Verifying releases: verifying.md
+  - Comparison & limitations: comparison.md
+  - Architecture: architecture.md
   # Governance docs stay canonical on GitHub.
   - Contributing: https://github.com/schubydoo/scratchsmith/blob/main/CONTRIBUTING.md
   - Security: https://github.com/schubydoo/scratchsmith/blob/main/SECURITY.md
