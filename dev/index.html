@@ -700,17 +700,6 @@ libraries the way <code>ld.so</code> does (RPATH/RUNPATH/<code>$ORIGIN</code>, t
 symlinks), stages the glibc pieces nothing else remembers (NSS modules, a working
 <code>nsswitch.conf</code>, minimal <code>passwd</code>/<code>group</code>), and assembles a <strong>non-root</strong> image with reproducible
 layers.</p>
-<div class="admonition info">
-<p class="admonition-title">Status — v0.2</p>
-<p>The core works end to end, and releases are signed and published (see <a href="#install">Install</a>).
-One honest caveat up front:</p>
-<ul>
-<li><strong>Daemonless is here.</strong> <code>--push</code> uploads the image straight to a registry and <code>--oci-archive</code>
-  writes an OCI archive — both with no Docker daemon. The default sink still uses <code>docker load</code>
-  (or <code>--no-build</code> for a rootfs) for local convenience; reach for <code>--push</code> / <code>--oci-archive</code> to
-  take the daemon fully out of the loop.</li>
-</ul>
-</div>
 <h2 id="why-not-just-static-link-from-scratch">Why not just static-link + <code>FROM scratch</code>?<a class="headerlink" href="#why-not-just-static-link-from-scratch" title="Permanent link">&para;</a></h2>
 <p>If you can rebuild your service as a static binary (<code>CGO_ENABLED=0</code>, musl), <strong>do that</strong> — you need
 no packer. Scratchsmith is built for the binaries static linking <em>can't</em> help:</p>
