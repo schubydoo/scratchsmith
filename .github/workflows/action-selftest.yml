@@ -98,7 +98,14 @@ jobs:
       # The `scan` input needs grype on the runner (the action preflights for it). Install it, then
       # scan the packed rootfs. No --scan-fail-on, so findings never gate this smoke of the wiring.
       - name: Install grype (for the scan input)
+        id: grype
         uses: anchore/scan-action/download-grype@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+      # download-grype only outputs an absolute path (`cmd`); it does not add grype to PATH. The
+      # action preflights with `command -v grype`, so put grype's dir on PATH for the next step.
+      - name: Put grype on PATH
+        env:
+          GRYPE_CMD: ${{ steps.grype.outputs.cmd }}
+        run: dirname "$GRYPE_CMD" >> "$GITHUB_PATH"
       - name: Pack with the scan input → image
         id: scan
         uses: ./
