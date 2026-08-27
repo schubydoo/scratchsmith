@@ -747,6 +747,10 @@ a hardening report, a non-root image, and no Dockerfile.</p>
 <td>✅</td>
 </tr>
 <tr>
+<td>Image <strong>size budget</strong> — <code>--max-size &lt;SIZE&gt;</code> (fail the build when the staged image exceeds it)</td>
+<td>✅</td>
+</tr>
+<tr>
 <td>Runtime extras: CA certs (<code>--ca-certs</code>), timezone (<code>--tz</code>), init/tini (<code>--init</code>)</td>
 <td>✅</td>
 </tr>
@@ -824,7 +828,8 @@ so <code>docker login</code> once (for GitHub's <code>ghcr.io</code>, a token wi
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--strip<span class="w"> </span>--smoke<span class="w"> </span>./app<span class="w">        </span><span class="c1"># SBOM + stripped + auto smoke-run</span>
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--sbom-format<span class="w"> </span>spdx-json<span class="w"> </span>--sbom-file<span class="w"> </span>bom.spdx.json<span class="w"> </span>./app<span class="w">   </span><span class="c1"># SPDX SBOM, custom path</span>
 <a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--scan<span class="w"> </span>--scan-fail-on<span class="w"> </span>high<span class="w"> </span>./app<span class="w">    </span><span class="c1"># grype vuln scan; fail the build on a high+ CVE</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>scratchsmith<span class="w"> </span>lint<span class="w"> </span>--fail-on<span class="w"> </span>no-pie<span class="w"> </span>--fail-on<span class="w"> </span>no-relro<span class="w"> </span>./app<span class="w">   </span><span class="c1"># hardening gate for CI</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--strip<span class="w"> </span>--max-size<span class="w"> </span>8MB<span class="w"> </span>./app<span class="w">        </span><span class="c1"># fail the build if the staged image exceeds 8 MB</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>scratchsmith<span class="w"> </span>lint<span class="w"> </span>--fail-on<span class="w"> </span>no-pie<span class="w"> </span>--fail-on<span class="w"> </span>no-relro<span class="w"> </span>./app<span class="w">   </span><span class="c1"># hardening gate for CI</span>
 </code></pre></div>
 <p>Set what the image runs — entrypoint, arguments, environment, working directory, and user:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app<span class="w"> </span><span class="se">\</span>
@@ -957,6 +962,11 @@ file</strong>.</p>
 <td><code>--push</code></td>
 <td>Push the image straight to this registry reference, daemonless.</td>
 </tr>
+<tr>
+<td><code>max-size</code></td>
+<td><code>--max-size</code></td>
+<td>Fail the pack if the packed image (the fully-staged rootfs — payload + NSS includes + runtime extras) exceeds this size — e.g. <code>12MB</code>, <code>512KiB</code>, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024).</td>
+</tr>
 </tbody>
 </table>
 <p>A full config file, and how to run it:</p>
@@ -983,6 +993,7 @@ file</strong>.</p>
 <a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a><span class="n">include</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libnss_myhostname.so.2"</span><span class="p">]</span>
 <a id="__codelineno-10-22" name="__codelineno-10-22" href="#__codelineno-10-22"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
 <a id="__codelineno-10-23" name="__codelineno-10-23" href="#__codelineno-10-23"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
+<a id="__codelineno-10-24" name="__codelineno-10-24" href="#__codelineno-10-24"></a><span class="n">max-size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50MB"</span>
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w">                 </span><span class="c1"># binary + all keys come from the file</span>
 <a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:dev<span class="w"> </span>./other<span class="w">   </span><span class="c1"># CLI overrides binary + push</span>
