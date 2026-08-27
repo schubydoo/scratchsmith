@@ -11,6 +11,17 @@ fn run(args: &[&str]) -> Output {
         .expect("failed to run scratchsmith binary")
 }
 
+// A tiny dynamic-glibc binary to PACK in the sink/profile tests — they exercise the
+// delivery/config logic, not the binary itself. `/usr/bin/id` (~50 KB) packs almost
+// instantly, whereas packing the ~130 MB debug binary dominated their runtime (30–45s
+// each in CI). Returns None when absent so the test skips rather than panicking on a
+// minimal host (parity with tests/pack.rs::small_fixture).
+fn small_fixture() -> Option<&'static str> {
+    ["/usr/bin/id", "/bin/id"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists())
+}
+
 #[test]
 fn version_prints_and_exits_zero() {
     let out = run(&["--version"]);
@@ -76,9 +87,12 @@ fn lint_reports_hardening_for_a_real_binary() {
 #[test]
 fn pack_oci_archive_writes_the_file() {
     // Exercises the `--oci-archive` sink through the CLI (daemonless — no Docker needed).
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("cli.oci.tar");
-    let bin = env!("CARGO_BIN_EXE_scratchsmith");
     let output = run(&["pack", "--oci-archive", out.to_str().unwrap(), bin]);
     assert!(
         output.status.success(),
@@ -97,9 +111,12 @@ fn pack_oci_archive_writes_the_file() {
 
 #[test]
 fn profile_selects_options_and_reports_unknown() {
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("scratchsmith.toml");
-    let bin = env!("CARGO_BIN_EXE_scratchsmith");
     std::fs::write(
         &cfg,
         format!("[profile.ci]\nbinary = \"{bin}\"\nstrip = true\n"),
@@ -176,9 +193,12 @@ fn profile_sign_without_a_push_target_errors() {
 
 #[test]
 fn cli_delivery_sink_beats_a_config_push_target() {
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
     let tmp = tempfile::tempdir().unwrap();
     let cfg = tmp.path().join("scratchsmith.toml");
-    let bin = env!("CARGO_BIN_EXE_scratchsmith");
     // A profile sets a push target, but an explicit --oci-archive on the CLI must win — a local
     // pack must never be turned into a registry publish by a config default.
     std::fs::write(
