@@ -128,19 +128,22 @@ info "verifying the SHA-256 against the release checksums…"
   || die "checksum verification failed for ${tarball}"
 ok "checksum verified"
 
-# Optional: verify the checksums file itself is cosign-signed by the release workflow.
-if have cosign && download "${base}/checksums.txt.sigstore.json" "${tmp}/checksums.txt.sigstore.json" 2>/dev/null; then
-  info "verifying the cosign signature on checksums.txt…"
-  if ( cd "$tmp" && cosign verify-blob checksums.txt \
+# Verify the checksums file is itself cosign-signed by the release workflow. A SHA-256
+# match alone is no protection against a tampered mirror — an attacker who swaps the
+# tarball swaps checksums.txt to match — so the cosign signature is the real check, and a
+# verification FAILURE aborts (it is not a warning). A genuinely absent cosign or an
+# unavailable signature bundle is a documented degradation to checksum-only.
+if ! have cosign; then
+  warn "cosign not installed — verified the SHA-256 only. Install cosign for full signature + provenance checks (see the README 'Verifying releases')."
+elif ! download "${base}/checksums.txt.sigstore.json" "${tmp}/checksums.txt.sigstore.json" 2>/dev/null; then
+  warn "could not fetch the cosign signature bundle (checksums.txt.sigstore.json) — verified the SHA-256 only."
+elif ( cd "$tmp" && cosign verify-blob checksums.txt \
         --bundle checksums.txt.sigstore.json \
         --certificate-identity-regexp "^https://github\.com/${REPO}/\.github/workflows/knope-release\.yml@" \
         --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null 2>&1 ); then
-    ok "cosign signature verified"
-  else
-    warn "cosign signature could NOT be verified — proceeding on the checksum only; investigate before trusting this binary"
-  fi
+  ok "cosign signature verified"
 else
-  warn "cosign not installed — verified the SHA-256 only. Install cosign for full signature + provenance checks (see the README 'Verifying releases')."
+  die "cosign signature verification FAILED for checksums.txt — refusing to install a possibly-tampered binary. Re-download, or (at your own risk) uninstall cosign to fall back to checksum-only."
 fi
 
 # --- install -----------------------------------------------------------------
