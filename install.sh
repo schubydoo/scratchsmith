@@ -29,6 +29,57 @@ die()  { printf '%s[fail]%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+usage() {
+  cat <<EOF
+Scratchsmith installer.
+
+  (no argument)   download, verify, and install the latest release
+  --uninstall     remove an installed scratchsmith binary
+  --help          show this message
+
+Env: VERSION=vX.Y.Z (tag to install), BIN_DIR=/path (install / lookup directory).
+
+  install:   curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash
+  uninstall: curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash -s -- --uninstall
+EOF
+}
+
+# Remove an installed binary. install.sh only ever places the binary (not completions
+# or config), so uninstall removes exactly that. Looks in BIN_DIR, then PATH, then the
+# two default directories.
+uninstall() {
+  target=""
+  if [ -n "${BIN_DIR:-}" ] && [ -x "${BIN_DIR}/${TOOL}" ]; then
+    target="${BIN_DIR}/${TOOL}"
+  elif have "$TOOL"; then
+    target="$(command -v "$TOOL")"
+  else
+    for d in /usr/local/bin "$HOME/.local/bin"; do
+      if [ -x "${d}/${TOOL}" ]; then
+        target="${d}/${TOOL}"
+        break
+      fi
+    done
+  fi
+  [ -n "$target" ] || die "no ${TOOL} install found (checked \$BIN_DIR, PATH, /usr/local/bin, ~/.local/bin)"
+  info "removing ${target}…"
+  if [ -w "$(dirname "$target")" ]; then
+    rm -f "$target"
+  elif have sudo; then
+    sudo rm -f "$target"
+  else
+    die "no write access to $(dirname "$target") and no sudo; remove ${target} manually"
+  fi
+  ok "uninstalled ${TOOL} (removed ${target})"
+}
+
+case "${1:-}" in
+  --uninstall | uninstall) uninstall; exit 0 ;;
+  --help | -h | help) usage; exit 0 ;;
+  "") : ;;
+  *) die "unknown argument '$1'; use --uninstall, --help, or no argument to install" ;;
+esac
+
 # --- platform ----------------------------------------------------------------
 os="$(uname -s)"
 [ "$os" = "Linux" ] || die "Scratchsmith is Linux-only (it stages a Linux glibc rootfs and needs ldconfig); detected '$os'. On macOS/Windows, run it inside a Linux container or WSL2."

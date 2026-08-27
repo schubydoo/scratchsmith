@@ -86,7 +86,13 @@ curl -fsSL https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install
 ```
 
 Piping to `bash` runs [`install.sh`](install.sh) — read it first if you prefer. `VERSION` and `BIN_DIR`
-env vars override the tag and install directory. Or pick a package manager:
+env vars override the tag and install directory. Uninstall with `--uninstall`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install.sh | bash -s -- --uninstall
+```
+
+Or pick a package manager:
 
 **Homebrew** (Linux):
 
