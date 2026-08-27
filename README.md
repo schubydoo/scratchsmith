@@ -175,6 +175,10 @@ scratchsmith pack ./app \
   --label role=api --healthcheck /app --healthcheck --health
 ```
 
+`--healthcheck` (like `--cmd`) is repeatable, and each token is one argument of a single exec
+command — so `--healthcheck /app --healthcheck --health` is the one command `["/app", "--health"]`
+(the same as `healthcheck = ["/app", "--health"]` in the config below), not two healthchecks.
+
 ## Configuration
 
 Instead of a long command line, put the defaults for `pack` in a `scratchsmith.toml` and load it
