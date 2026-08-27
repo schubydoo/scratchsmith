@@ -94,7 +94,7 @@ inputs:
     required: false
     default: "false"
   sbom-file:
-    description: SBOM output path when `sbom` is enabled (default `sbom.json`).
+    description: SBOM output path (default `sbom.json`). Requires `sbom` enabled — ignored on its own.
     required: false
     default: ""
   scan:
@@ -237,6 +237,10 @@ runs:
         fi
         if { [ "$IN_SCAN" = "true" ] || [ -n "$IN_SCAN_FAIL_ON" ]; } && ! command -v grype >/dev/null 2>&1; then
           echo "::error::scan needs grype on the runner — add a step that installs it (e.g. anchore/scan-action's installer) before this action."
+          exit 1
+        fi
+        if [ "$IN_UPX" = "true" ] && ! command -v upx >/dev/null 2>&1; then
+          echo "::error::upx: true needs upx on the runner — add a step that installs it (e.g. apt-get install -y upx-ucl) before this action."
           exit 1
         fi
         args=("pack" "$IN_BINARY" "--format" "json")
