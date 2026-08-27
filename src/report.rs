@@ -33,6 +33,16 @@ pub fn parse_size(s: &str) -> Result<u64> {
     Ok((num * mult) as u64)
 }
 
+/// Format a byte count as a human-readable decimal size (e.g. `8.4 MB`) for messages.
+pub fn human_size(bytes: u64) -> String {
+    for (unit, div) in [("GB", 1_000_000_000u64), ("MB", 1_000_000), ("KB", 1_000)] {
+        if bytes >= div {
+            return format!("{:.1} {unit}", bytes as f64 / div as f64);
+        }
+    }
+    format!("{bytes} B")
+}
+
 /// The outcome of a pack, emitted as text or JSON (Task 2.8). Fields are stable so
 /// the JSON can gate CI.
 #[derive(Debug, Clone, Serialize)]
@@ -222,6 +232,14 @@ mod tests {
         assert!(parse_size("abc").is_err());
         assert!(parse_size("10furlongs").is_err());
         assert!(parse_size("-5MB").is_err());
+    }
+
+    #[test]
+    fn human_size_picks_a_readable_unit() {
+        assert_eq!(human_size(8_400_000), "8.4 MB");
+        assert_eq!(human_size(1_500_000_000), "1.5 GB");
+        assert_eq!(human_size(2_048), "2.0 KB");
+        assert_eq!(human_size(512), "512 B");
     }
 
     #[test]

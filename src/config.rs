@@ -75,7 +75,7 @@ pub struct Config {
     pub sign: bool,
     /// Push target registry reference.
     pub push: Option<String>,
-    /// Fail the pack if the packed payload exceeds this size, e.g. `"12MB"` (`--max-size`).
+    /// Fail the pack if the packed image (staged rootfs) exceeds this size, e.g. `"12MB"`.
     #[serde(rename = "max-size")]
     pub max_size: Option<String>,
     /// Named profiles — `[profile.<name>]` sections that layer over the base config.
