@@ -447,6 +447,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#stability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#how-it-works" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -633,6 +644,17 @@
     <span class="md-ellipsis">
       
         Verifying releases
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stability
       
     </span>
   </a>
@@ -1059,6 +1081,20 @@ dev-dependencies, not only the crates that link into the shipped binary.</p>
 <a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/schubydoo/scratchsmith/\.github/workflows/release\.yml@refs/tags/'</span><span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
 </code></pre></div>
+<h2 id="stability">Stability<a class="headerlink" href="#stability" title="Permanent link">&para;</a></h2>
+<p>Scratchsmith follows <a href="https://semver.org/">Semantic Versioning</a>. As of <strong>1.0</strong>, these surfaces are a
+stable contract — a breaking change to any of them requires a new major version:</p>
+<ul>
+<li><strong>CLI flags</strong> — the names and meaning of <code>pack</code> / <code>lint</code> / <code>doctor</code> flags. New flags arrive in minor
+  releases; a removed or renamed flag, or a changed default, is a major change.</li>
+<li><strong><code>scratchsmith.toml</code></strong> — the config keys and their types (the <a href="#configuration">Configuration</a> table).</li>
+<li><strong><code>--format json</code></strong> — the field names and types of the pack report (the schema CI gates consume). It is
+  pinned by a golden test, so a change is always deliberate.</li>
+<li><strong>Exit codes</strong> — <code>0</code> on success, <code>2</code> on an argument-parse error, and non-zero on any other failure.</li>
+</ul>
+<p><strong>Not</strong> frozen (may change in any release): human-readable text and warning wording, log output, <code>doctor</code>'s
+exact phrasing, and the exact bytes of the produced image — layers stay reproducible for identical inputs,
+but that is a property, not a frozen API.</p>
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <ol>
 <li><strong>Resolve</strong> — emulate the <code>ld.so</code> search order from the ELF itself (RPATH is transitive, RUNPATH
