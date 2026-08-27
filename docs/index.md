@@ -58,7 +58,20 @@ a hardening report, a non-root image, and no Dockerfile.
 
 ## Install
 
-**Homebrew** (Linux — scratchsmith packs Linux ELF binaries):
+Scratchsmith is **Linux only** (amd64/arm64) — it stages a Linux glibc rootfs, so it does not run on
+macOS or native Windows; use a Linux container or WSL2 there.
+
+**One-line install** — downloads the signed release binary, verifies it against the cosign-signed
+`checksums.txt`, and installs it to `~/.local/bin` (or `/usr/local/bin` as root):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install.sh | bash
+```
+
+Piping to `bash` runs `install.sh` — read it first if you prefer. `VERSION` and `BIN_DIR` env vars
+override the tag and install directory. Or pick a package manager:
+
+**Homebrew** (Linux):
 
 ```sh
 brew install schubydoo/scratchsmith/scratchsmith
