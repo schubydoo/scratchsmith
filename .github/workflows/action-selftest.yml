@@ -60,8 +60,9 @@ jobs:
           test -e "$ROOTFS/usr/bin/id"    # staged at its verbatim path
           echo "staged rootfs at $ROOTFS"
       # Exercise the image-config inputs so a wiring regression (especially the multi-line list
-      # inputs) fails here. Covers every image-config input the LATEST RELEASE understands — as of
-      # v1.0.0 that includes label/healthcheck/max-size.
+      # inputs) fails here — entrypoint/cmd/env/workdir/user/label/healthcheck, each asserted via
+      # docker inspect below. max-size and scan are build guards (not image-config fields), so they
+      # get their own pass/fail tests further down.
       - name: Pack with image-config inputs → image
         id: meta
         uses: ./
@@ -79,7 +80,6 @@ jobs:
           healthcheck: |
             /usr/bin/id
             --version
-          max-size: 50MB
       - name: Assert the config inputs reached the image
         env:
           IMAGE: ${{ steps.meta.outputs.image }}
@@ -95,6 +95,22 @@ jobs:
           echo "$inspect" | jq -e '.[0].Config.Labels.role == "selftest"' >/dev/null
           echo "$inspect" | jq -e '(.[0].Config.Healthcheck.Test // []) | index("/usr/bin/id")' >/dev/null
           echo "config inputs verified"
+      # max-size is a build guard, so prove it by tripping it: a 1KB budget is far below the real
+      # staged size, so the pack MUST fail. A dropped --max-size would let it pass — caught here.
+      - name: Pack with an impossible max-size (must fail the build)
+        id: maxsize
+        continue-on-error: true
+        uses: ./
+        with:
+          binary: /usr/bin/id
+          max-size: 1KB
+      - name: Assert the max-size gate tripped
+        env:
+          OUTCOME: ${{ steps.maxsize.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$OUTCOME" = "failure" ] || { echo "::error::a 1KB max-size should have failed the pack but it was '$OUTCOME' — is --max-size wired in action.yml?"; exit 1; }
+          echo "max-size gate verified (1KB budget correctly rejected)"
       # The `scan` input needs grype on the runner (the action preflights for it). Install it, then
       # scan the packed rootfs. No --scan-fail-on, so findings never gate this smoke of the wiring.
       - name: Install grype (for the scan input)
@@ -112,10 +128,15 @@ jobs:
         with:
           binary: /usr/bin/id
           scan: "true"
-      - name: Assert the scan pack produced an image
+      - name: Assert the scan pack produced an image and grype actually ran
         env:
           IMAGE: ${{ steps.scan.outputs.image }}
+          REPORT: ${{ steps.scan.outputs.report }}
         run: |
           set -euo pipefail
           [ -n "$IMAGE" ] || { echo "::error::scan pack produced no image output"; exit 1; }
+          # The report's `.scan` object is populated only when grype ran; null otherwise. Asserting
+          # it proves `--scan` was actually passed — a dropped scan input still builds an image, so
+          # an image check alone would not catch that regression.
+          echo "$REPORT" | jq -e '.scan != null' >/dev/null || { echo "::error::report.scan is null — was --scan dropped from action.yml?"; exit 1; }
           echo "scan input wired (grype ran, pack succeeded)"
