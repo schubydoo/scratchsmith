@@ -150,6 +150,55 @@ mod tests {
     }
 
     #[test]
+    fn json_report_schema_is_stable() {
+        // The `--format json` output is a SemVer-covered contract as of v1.0: CI gates
+        // consume these fields. This pins the exact top-level key set and the `size`/`scan`
+        // sub-objects, so adding, removing, or renaming a field is a deliberate breaking
+        // change caught here — never a silent schema drift for consumers.
+        let mut r = sample_report();
+        r.scan = Some(ScanSummary::default());
+        let json = serde_json::to_value(&r).unwrap();
+
+        let sorted_keys = |v: &serde_json::Value| {
+            let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            k.sort();
+            k
+        };
+        assert_eq!(
+            sorted_keys(&json),
+            [
+                "archive",
+                "entrypoint",
+                "pushed",
+                "sbom",
+                "scan",
+                "signed",
+                "size",
+                "smoke_ok",
+                "staged_dir",
+                "tag",
+                "warnings",
+            ]
+        );
+        assert_eq!(
+            sorted_keys(&json["size"]),
+            ["entries", "stripped", "total_after", "total_before", "upx"]
+        );
+        assert_eq!(
+            sorted_keys(&json["scan"]),
+            [
+                "critical",
+                "high",
+                "low",
+                "medium",
+                "negligible",
+                "total",
+                "unknown"
+            ]
+        );
+    }
+
+    #[test]
     fn text_report_renders_the_key_lines() {
         let text = sample_report().to_text();
         assert!(text.contains("warning: NSS module not found"));
