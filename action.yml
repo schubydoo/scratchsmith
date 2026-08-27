@@ -5,11 +5,12 @@ branding:
   icon: package
   color: orange
 
-# Composite (not Docker): `pack` needs docker + ldconfig (and optionally syft) on the runner,
+# Composite (not Docker): `pack` needs docker + ldconfig (and optionally syft/grype) on the runner,
 # which the FROM scratch release image deliberately lacks. So this downloads the signed release
 # binary for the runner arch, verifies it against the release checksums, and runs `pack` on the
-# GitHub-hosted runner (which has Docker). It maps inputs to REAL pack flags only — there is no
-# image-signing or registry-push flag yet (those are roadmap), so none is exposed here.
+# GitHub-hosted runner (which has Docker). Inputs map to real `pack` flags; the `args` input is the
+# escape hatch for anything without a dedicated input. `--sign` is deliberately left to `args`: it
+# needs `pack --push --sign`, but this action publishes with `docker push`, not the daemonless push.
 
 inputs:
   binary:
@@ -60,6 +61,56 @@ inputs:
     default: "false"
   include:
     description: Extra libraries to force-stage (e.g. dlopen'd plugins), one soname/path per line.
+    required: false
+    default: ""
+  entrypoint:
+    description: Image ENTRYPOINT. Empty defaults to the packed binary's path.
+    required: false
+    default: ""
+  cmd:
+    description: Default arguments appended to the entrypoint, one per line.
+    required: false
+    default: ""
+  env:
+    description: Image environment entries, one `KEY=VALUE` per line.
+    required: false
+    default: ""
+  workdir:
+    description: Image WORKDIR.
+    required: false
+    default: ""
+  label:
+    description: OCI image labels, one `KEY=VALUE` per line.
+    required: false
+    default: ""
+  healthcheck:
+    description: >-
+      Container HEALTHCHECK in exec form — one token per line (e.g. `/app`, then `--health`). It runs
+      inside the scratch image, so it must name an executable present there, typically the binary.
+    required: false
+    default: ""
+  upx:
+    description: Compress the packed binary with UPX (it self-decompresses at runtime).
+    required: false
+    default: "false"
+  sbom-file:
+    description: SBOM output path (default `sbom.json`). Requires `sbom` enabled — ignored on its own.
+    required: false
+    default: ""
+  scan:
+    description: Vulnerability-scan the packed rootfs with grype (reuses the SBOM if `sbom` is set).
+    required: false
+    default: "false"
+  scan-fail-on:
+    description: >-
+      Fail the pack on a grype finding at or above this severity
+      (`negligible`/`low`/`medium`/`high`/`critical`). Implies `scan`.
+    required: false
+    default: ""
+  max-size:
+    description: >-
+      Fail the pack if the fully-staged image exceeds this size — e.g. `12MB`, `512KiB`, or a bare
+      byte count (K/M/G are x1000, Ki/Mi/Gi are x1024).
     required: false
     default: ""
   args:
@@ -165,12 +216,31 @@ runs:
         IN_INIT: ${{ inputs.init }}
         IN_INCLUDE: ${{ inputs.include }}
         IN_ARGS: ${{ inputs.args }}
+        IN_ENTRYPOINT: ${{ inputs.entrypoint }}
+        IN_CMD: ${{ inputs.cmd }}
+        IN_ENV: ${{ inputs.env }}
+        IN_WORKDIR: ${{ inputs.workdir }}
+        IN_LABEL: ${{ inputs.label }}
+        IN_HEALTHCHECK: ${{ inputs.healthcheck }}
+        IN_UPX: ${{ inputs.upx }}
+        IN_SBOM_FILE: ${{ inputs.sbom-file }}
+        IN_SCAN: ${{ inputs.scan }}
+        IN_SCAN_FAIL_ON: ${{ inputs.scan-fail-on }}
+        IN_MAX_SIZE: ${{ inputs.max-size }}
       run: |
         set -euo pipefail
         [ -n "$IN_BINARY" ] || { echo "::error::input 'binary' is required"; exit 1; }
         # Preflight: fail loud with a hint rather than a confusing pack error.
         if [ "$IN_SBOM" = "true" ] && ! command -v syft >/dev/null 2>&1; then
           echo "::error::sbom: true needs syft on the runner — add a step that installs it (e.g. anchore/sbom-action's installer) before this action."
+          exit 1
+        fi
+        if { [ "$IN_SCAN" = "true" ] || [ -n "$IN_SCAN_FAIL_ON" ]; } && ! command -v grype >/dev/null 2>&1; then
+          echo "::error::scan needs grype on the runner — add a step that installs it (e.g. anchore/scan-action's installer) before this action."
+          exit 1
+        fi
+        if [ "$IN_UPX" = "true" ] && ! command -v upx >/dev/null 2>&1; then
+          echo "::error::upx: true needs upx on the runner — add a step that installs it (e.g. apt-get install -y upx-ucl) before this action."
           exit 1
         fi
         args=("pack" "$IN_BINARY" "--format" "json")
@@ -181,13 +251,32 @@ runs:
         [ "$IN_CA_CERTS" = "true" ] && args+=("--ca-certs")
         [ "$IN_TZ" = "true" ] && args+=("--tz")
         [ "$IN_INIT" = "true" ] && args+=("--init")
+        [ "$IN_UPX" = "true" ] && args+=("--upx")
+        [ -n "$IN_ENTRYPOINT" ] && args+=("--entrypoint" "$IN_ENTRYPOINT")
+        [ -n "$IN_WORKDIR" ] && args+=("--workdir" "$IN_WORKDIR")
+        [ -n "$IN_MAX_SIZE" ] && args+=("--max-size" "$IN_MAX_SIZE")
+        [ "$IN_SCAN" = "true" ] && args+=("--scan")
+        [ -n "$IN_SCAN_FAIL_ON" ] && args+=("--scan-fail-on" "$IN_SCAN_FAIL_ON")
         if [ "$IN_SBOM" = "true" ]; then
           args+=("--sbom" "--sbom-format" "$IN_SBOM_FORMAT")
+          [ -n "$IN_SBOM_FILE" ] && args+=("--sbom-file" "$IN_SBOM_FILE")
         fi
-        # One --include per non-empty line.
+        # One flag per non-empty line for the list-valued inputs.
         while IFS= read -r lib; do
           [ -n "$lib" ] && args+=("--include" "$lib")
         done <<< "$IN_INCLUDE"
+        while IFS= read -r c; do
+          [ -n "$c" ] && args+=("--cmd" "$c")
+        done <<< "$IN_CMD"
+        while IFS= read -r e; do
+          [ -n "$e" ] && args+=("--env" "$e")
+        done <<< "$IN_ENV"
+        while IFS= read -r lbl; do
+          [ -n "$lbl" ] && args+=("--label" "$lbl")
+        done <<< "$IN_LABEL"
+        while IFS= read -r hc; do
+          [ -n "$hc" ] && args+=("--healthcheck" "$hc")
+        done <<< "$IN_HEALTHCHECK"
         # Verbatim escape-hatch flags (word-split intentionally).
         # shellcheck disable=SC2206
         [ -n "$IN_ARGS" ] && args+=($IN_ARGS)
