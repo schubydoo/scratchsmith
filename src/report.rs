@@ -157,6 +157,13 @@ mod tests {
         // change caught here — never a silent schema drift for consumers.
         let mut r = sample_report();
         r.scan = Some(ScanSummary::default());
+        // A populated entry so the `size.entries[]` sub-schema is pinned too, not just
+        // the empty vec — a rename of a SizeEntry field must break this test.
+        r.size.entries = vec![crate::stager::SizeEntry {
+            path: "/opt/app".into(),
+            before: 100,
+            after: 50,
+        }];
         let json = serde_json::to_value(&r).unwrap();
 
         let sorted_keys = |v: &serde_json::Value| {
@@ -183,6 +190,10 @@ mod tests {
         assert_eq!(
             sorted_keys(&json["size"]),
             ["entries", "stripped", "total_after", "total_before", "upx"]
+        );
+        assert_eq!(
+            sorted_keys(&json["size"]["entries"][0]),
+            ["after", "before", "path"]
         );
         assert_eq!(
             sorted_keys(&json["scan"]),

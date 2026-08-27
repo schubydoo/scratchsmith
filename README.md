@@ -338,7 +338,7 @@ stable contract — a breaking change to any of them requires a new major versio
 - **`scratchsmith.toml`** — the config keys and their types (the [Configuration](#configuration) table).
 - **`--format json`** — the field names and types of the pack report (the schema CI gates consume). It is
   pinned by a golden test, so a change is always deliberate.
-- **Exit codes** — `0` on success, `2` on a usage error, non-zero on failure.
+- **Exit codes** — `0` on success, `2` on an argument-parse error, and non-zero on any other failure.
 
 **Not** frozen (may change in any release): human-readable text and warning wording, log output, `doctor`'s
 exact phrasing, and the exact bytes of the produced image — layers stay reproducible for identical inputs,
