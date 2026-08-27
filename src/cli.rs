@@ -108,6 +108,9 @@ pub enum Command {
         /// Compress the packed binary with UPX (it self-decompresses at runtime).
         #[arg(long)]
         upx: bool,
+        /// Fail the pack if the packed payload exceeds this size, e.g. `12MB` or `512KiB`.
+        #[arg(long = "max-size", value_name = "SIZE")]
+        max_size: Option<String>,
         /// Generate an SBOM of the packed rootfs (requires syft).
         #[arg(long)]
         sbom: bool,
@@ -203,6 +206,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             healthcheck,
             strip,
             upx,
+            max_size,
             sbom,
             sbom_file,
             sbom_format,
@@ -273,6 +277,10 @@ fn dispatch(cli: Cli) -> Result<()> {
                     },
                 },
                 sign: sign || file.sign,
+                max_size: max_size
+                    .or(file.max_size)
+                    .map(|s| crate::report::parse_size(&s))
+                    .transpose()?,
             };
 
             // An explicit CLI delivery sink always wins; `push` from the config/profile is only

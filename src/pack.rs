@@ -64,6 +64,7 @@ fn build_rootfs(
     upx: bool,
     smoke: bool,
     includes: &[String],
+    max_size: Option<u64>,
 ) -> Result<(StagedTree, SizeReport, Vec<String>)> {
     let info = resolver::read_elf_info(binary)?;
     // Reject musl up front rather than staging a subtly broken image (Task 2.5).
@@ -104,6 +105,15 @@ fn build_rootfs(
     let default_includes = stager::stage_default_includes(&resolution, dest)?;
     warnings.extend(default_includes.warnings);
     let sizes = stager::strip_and_measure(dest, &tree, &resolution, strip, upx)?;
+    // Size budget (--max-size): gated on the packed payload total, after strip/upx.
+    if let Some(max) = max_size {
+        if sizes.total_after > max {
+            bail!(
+                "packed payload is {} bytes, over the --max-size limit of {max} bytes",
+                sizes.total_after
+            );
+        }
+    }
     Ok((tree, sizes, warnings))
 }
 
@@ -125,6 +135,8 @@ pub struct PackOptions {
     pub image: ImageConfig,
     /// Sign the pushed image with cosign (and attest the SBOM, if any). `--push` only.
     pub sign: bool,
+    /// Fail the pack if the packed payload exceeds this many bytes (`--max-size`).
+    pub max_size: Option<u64>,
 }
 
 /// Where a pack delivers its result. Every sink shares the resolve → stage pipeline and
@@ -166,6 +178,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
         opts.upx,
         opts.smoke,
         &opts.includes,
+        opts.max_size,
     )?;
     stager::stage_runtime_extras(out_dir, &opts.extras)?;
     let sbom = maybe_sbom(out_dir, opts.sbom.as_ref())?;
@@ -209,6 +222,7 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         opts.upx,
         opts.smoke,
         &opts.includes,
+        opts.max_size,
     )?;
     let extras = stager::stage_runtime_extras(&dest, &opts.extras)?;
     // Generate the SBOM and scan while the staged rootfs still exists (dest is temporary).

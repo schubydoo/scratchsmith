@@ -75,6 +75,9 @@ pub struct Config {
     pub sign: bool,
     /// Push target registry reference.
     pub push: Option<String>,
+    /// Fail the pack if the packed payload exceeds this size, e.g. `"12MB"` (`--max-size`).
+    #[serde(rename = "max-size")]
+    pub max_size: Option<String>,
     /// Named profiles — `[profile.<name>]` sections that layer over the base config.
     #[serde(default)]
     pub profile: HashMap<String, Config>,
@@ -140,6 +143,7 @@ impl Config {
             include: vec_or(self.include, over.include),
             sign: self.sign || over.sign,
             push: over.push.or(self.push),
+            max_size: over.max_size.or(self.max_size),
             profile: HashMap::new(), // the effective config no longer carries nested profiles
         }
     }
@@ -175,6 +179,7 @@ mod tests {
             include = ["libfoo.so"]
             sign = true
             push = "ghcr.io/me/tool:latest"
+            max-size = "12MB"
         "#,
         )
         .unwrap();
@@ -187,6 +192,7 @@ mod tests {
         assert!(cfg.ca_certs && cfg.tz && cfg.init);
         assert_eq!(cfg.include, vec!["libfoo.so".to_string()]);
         assert_eq!(cfg.push.as_deref(), Some("ghcr.io/me/tool:latest"));
+        assert_eq!(cfg.max_size.as_deref(), Some("12MB"));
         assert_eq!(cfg.label, vec!["role=api".to_string()]);
         assert_eq!(
             cfg.healthcheck,

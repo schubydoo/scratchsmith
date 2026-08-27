@@ -45,6 +45,7 @@ a hardening report, a non-root image, and no Dockerfile.
 | **ELF hardening lint** — `lint` (PIE/RELRO/NX/canary/FORTIFY), gate with `--fail-on` | ✅ |
 | `dlopen` gap **detection** + `--include` escape hatch | ✅ |
 | Symbol strip (`--strip`), UPX compression (`--upx`), size report, smoke-run (`--smoke`) | ✅ |
+| Image **size budget** — `--max-size <SIZE>` (fail the build when the payload exceeds it) | ✅ |
 | Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`) | ✅ |
 | Image metadata — labels (`--label`), `HEALTHCHECK` (`--healthcheck`) | ✅ |
 | Config file (`scratchsmith.toml`) + named profiles (`--profile`), JSON output (`--format json`) | ✅ |
@@ -124,6 +125,7 @@ Add supply-chain output, verify it starts, and shrink it:
 scratchsmith pack --sbom --strip --smoke ./app        # SBOM + stripped + auto smoke-run
 scratchsmith pack --sbom --sbom-format spdx-json --sbom-file bom.spdx.json ./app   # SPDX SBOM, custom path
 scratchsmith pack --scan --scan-fail-on high ./app    # grype vuln scan; fail the build on a high+ CVE
+scratchsmith pack --strip --max-size 8MB ./app        # fail the build if the packed payload exceeds 8 MB
 scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate for CI
 ```
 
@@ -169,6 +171,7 @@ file**.
 | `include` | `--include` | Force-stage extra libraries by soname or path — e.g. `dlopen`'d plugins (list). |
 | `sign` | `--sign` | cosign-sign the pushed image (keyless, by digest). Requires a push target. |
 | `push` | `--push` | Push the image straight to this registry reference, daemonless. |
+| `max-size` | `--max-size` | Fail the pack if the packed payload exceeds this size — e.g. `12MB`, `512KiB`, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024). |
 
 A full config file, and how to run it:
 
@@ -196,6 +199,7 @@ init = true
 include = ["libnss_myhostname.so.2"]
 sign = true
 push = "ghcr.io/you/app:latest"
+max-size = "50MB"
 ```
 
 ```sh
