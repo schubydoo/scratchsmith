@@ -368,7 +368,11 @@ fn config_file_applies_and_cli_overrides_it() {
     let tag = "scratchsmith/id:packed"; // derived from the packed binary's name
     let tmp = tempfile::tempdir().unwrap();
     let toml = tmp.path().join("scratchsmith.toml");
-    std::fs::write(&toml, "env = [\"CFGONLY=1\"]\nuser = \"1234:1234\"\n").unwrap();
+    std::fs::write(
+        &toml,
+        "env = [\"CFGONLY=1\"]\nuser = \"1234:1234\"\nlabel = [\"cfgrole=cfg\"]\nhealthcheck = [\"/id\"]\n",
+    )
+    .unwrap();
 
     // Config only: values come from the file.
     let ok = Command::new(bin)
@@ -376,24 +380,26 @@ fn config_file_applies_and_cli_overrides_it() {
         .status()
         .unwrap();
     assert!(ok.success());
-    let user = |tag: &str| {
+    let inspect = |tag: &str| {
         let out = Command::new("docker")
             .args([
                 "inspect",
                 "--format",
-                "{{.Config.User}} {{json .Config.Env}}",
+                "{{.Config.User}} {{json .Config.Env}} {{json .Config.Labels}} {{json .Config.Healthcheck.Test}}",
                 tag,
             ])
             .output()
             .unwrap();
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
-    let out = user(tag);
+    let out = inspect(tag);
     assert!(out.contains("1234:1234"), "config user not applied: {out}");
     assert!(out.contains("CFGONLY=1"), "config env not applied: {out}");
+    assert!(out.contains("cfgrole"), "config label not applied: {out}");
+    assert!(out.contains("/id"), "config healthcheck not applied: {out}");
     rmi(tag);
 
-    // CLI --user overrides the config value.
+    // CLI --user and --label override the config values (a non-empty CLI list replaces).
     Command::new(bin)
         .args([
             "pack",
@@ -401,14 +407,20 @@ fn config_file_applies_and_cli_overrides_it() {
             toml.to_str().unwrap(),
             "--user",
             "9999:9999",
+            "--label",
+            "clirole=cli",
             packed,
         ])
         .status()
         .unwrap();
-    let out = user(tag);
+    let out = inspect(tag);
     assert!(
         out.contains("9999:9999"),
         "CLI should override config user: {out}"
+    );
+    assert!(
+        out.contains("clirole") && !out.contains("cfgrole"),
+        "CLI label should replace the config label: {out}"
     );
     rmi(tag);
 }
