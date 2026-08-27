@@ -28,6 +28,12 @@ pub struct Config {
     pub workdir: Option<String>,
     /// Image user `UID[:GID]`.
     pub user: Option<String>,
+    /// OCI image labels (`KEY=VALUE`).
+    #[serde(default)]
+    pub label: Vec<String>,
+    /// HEALTHCHECK command in exec form, e.g. `["/app", "--health"]`.
+    #[serde(default)]
+    pub healthcheck: Vec<String>,
     /// Strip symbols during pack.
     #[serde(default)]
     pub strip: bool,
@@ -118,6 +124,8 @@ impl Config {
             env: vec_or(self.env, over.env),
             workdir: over.workdir.or(self.workdir),
             user: over.user.or(self.user),
+            label: vec_or(self.label, over.label),
+            healthcheck: vec_or(self.healthcheck, over.healthcheck),
             strip: self.strip || over.strip,
             upx: self.upx || over.upx,
             smoke: self.smoke || over.smoke,
@@ -151,6 +159,8 @@ mod tests {
             env = ["FOO=bar"]
             workdir = "/work"
             user = "1000:1000"
+            label = ["role=api"]
+            healthcheck = ["/usr/bin/tool", "--health"]
             strip = true
             upx = true
             smoke = true
@@ -177,6 +187,11 @@ mod tests {
         assert!(cfg.ca_certs && cfg.tz && cfg.init);
         assert_eq!(cfg.include, vec!["libfoo.so".to_string()]);
         assert_eq!(cfg.push.as_deref(), Some("ghcr.io/me/tool:latest"));
+        assert_eq!(cfg.label, vec!["role=api".to_string()]);
+        assert_eq!(
+            cfg.healthcheck,
+            vec!["/usr/bin/tool".to_string(), "--health".to_string()]
+        );
     }
 
     #[test]

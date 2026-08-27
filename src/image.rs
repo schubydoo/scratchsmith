@@ -23,6 +23,11 @@ pub struct ImageConfig {
     pub workdir: Option<String>,
     /// Image user; defaults to the non-root `nonroot` uid when unset.
     pub user: Option<String>,
+    /// OCI image labels (`KEY=VALUE`), written to `config.Labels`.
+    pub labels: Vec<String>,
+    /// HEALTHCHECK command in exec form (empty = none). It runs inside the scratch image,
+    /// so it must name an executable present there — typically the packed binary.
+    pub healthcheck: Vec<String>,
 }
 
 /// Assemble `staged` into an image and load it into the local Docker daemon as `tag`.
@@ -243,6 +248,23 @@ fn image_config(default_entrypoint: &Path, diff_id: &str, cfg: &ImageConfig) -> 
     }
     if let Some(wd) = &cfg.workdir {
         config["WorkingDir"] = serde_json::json!(wd);
+    }
+    if !cfg.labels.is_empty() {
+        // config.Labels is the OCI-standard string→string metadata map.
+        let mut labels = serde_json::Map::new();
+        for entry in &cfg.labels {
+            let (k, v) = entry.split_once('=').unwrap_or((entry.as_str(), ""));
+            labels.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+        }
+        config["Labels"] = serde_json::Value::Object(labels);
+    }
+    if !cfg.healthcheck.is_empty() {
+        // Healthcheck is a Docker/Moby config extension (pure-OCI consumers ignore it).
+        // Exec form ("CMD", …): a scratch image has no shell for CMD-SHELL. Interval,
+        // timeout, and retries fall back to Docker's defaults.
+        let mut test = vec!["CMD".to_string()];
+        test.extend(cfg.healthcheck.iter().cloned());
+        config["Healthcheck"] = serde_json::json!({ "Test": test });
     }
 
     serde_json::json!({
@@ -499,6 +521,7 @@ mod tests {
             env: vec!["FOO=bar".into()],
             workdir: Some("/work".into()),
             user: None,
+            ..Default::default()
         };
         let cfg = image_config(Path::new("/opt/app"), "d", &opts);
         assert_eq!(cfg["config"]["Entrypoint"][0], "/bin/tool");
@@ -511,6 +534,29 @@ mod tests {
             .map(|v| v.as_str().unwrap())
             .collect();
         assert!(env.contains(&"FOO=bar"));
+    }
+
+    #[test]
+    fn config_applies_labels_and_healthcheck() {
+        let opts = ImageConfig {
+            labels: vec!["role=api".into(), "team=infra".into()],
+            healthcheck: vec!["/app".into(), "--health".into()],
+            ..Default::default()
+        };
+        let cfg = image_config(Path::new("/opt/app"), "d", &opts);
+        assert_eq!(cfg["config"]["Labels"]["role"], "api");
+        assert_eq!(cfg["config"]["Labels"]["team"], "infra");
+        // Healthcheck is exec form: Test[0] is "CMD", then the command.
+        assert_eq!(cfg["config"]["Healthcheck"]["Test"][0], "CMD");
+        assert_eq!(cfg["config"]["Healthcheck"]["Test"][1], "/app");
+        assert_eq!(cfg["config"]["Healthcheck"]["Test"][2], "--health");
+    }
+
+    #[test]
+    fn no_labels_or_healthcheck_leaves_the_keys_absent() {
+        let cfg = image_config(Path::new("/opt/app"), "d", &ImageConfig::default());
+        assert!(cfg["config"]["Labels"].is_null());
+        assert!(cfg["config"]["Healthcheck"].is_null());
     }
 
     #[test]

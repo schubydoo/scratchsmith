@@ -63,6 +63,7 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 | `dlopen` gap **detection** + `--include` escape hatch | ✅ |
 | Symbol strip (`--strip`), UPX compression (`--upx`), size report, smoke-run (`--smoke`) | ✅ |
 | Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`) | ✅ |
+| Image metadata — labels (`--label`), `HEALTHCHECK` (`--healthcheck`) | ✅ |
 | Config file (`scratchsmith.toml`) + named profiles (`--profile`), JSON output (`--format json`) | ✅ |
 | Shell completions — `--completions <bash\|zsh\|fish>` | ✅ |
 | **Signed releases** — amd64 + arm64 binaries, cosign-signed checksums + SLSA provenance, signed multi-arch GHCR image | ✅ ([verify](#verifying-releases)) |
@@ -170,7 +171,8 @@ Set what the image runs — entrypoint, arguments, environment, working director
 
 ```sh
 scratchsmith pack ./app \
-  --entrypoint /app --cmd serve --env LANG=C.UTF-8 --workdir /data --user 65532:65532
+  --entrypoint /app --cmd serve --env LANG=C.UTF-8 --workdir /data --user 65532:65532 \
+  --label role=api --healthcheck /app --healthcheck --health
 ```
 
 ## Configuration
@@ -187,6 +189,8 @@ file**.
 | `env` | `--env` | Image environment entries, each `KEY=VALUE` (list). |
 | `workdir` | `--workdir` | Image `WORKDIR`. |
 | `user` | `--user` | Image user `UID[:GID]`. Defaults to a non-root UID; `0`/root prints a warning. |
+| `label` | `--label` | OCI image label `KEY=VALUE` (list; `--label` is repeatable). |
+| `healthcheck` | `--healthcheck` | Container `HEALTHCHECK` in exec form (list; repeatable). It runs inside the scratch image, so it must name an executable present there — typically the packed binary. |
 | `strip` | `--strip` | Strip symbols from the binary and libraries. |
 | `upx` | `--upx` | Compress the packed binary with UPX (it self-decompresses at runtime). |
 | `smoke` | `--smoke` | Run the built image once and fail if the binary can't start. |
@@ -212,6 +216,8 @@ cmd = ["--serve"]
 env = ["LANG=C.UTF-8"]
 workdir = "/data"
 user = "65532:65532"
+label = ["role=api"]
+healthcheck = ["/app", "--health"]
 strip = true
 upx = true
 smoke = true

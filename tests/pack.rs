@@ -320,6 +320,8 @@ fn image_config_is_reflected_in_docker_inspect() {
         env: vec!["FOO=bar".into()],
         workdir: Some("/work".into()),
         user: None,
+        labels: vec!["role=api".into()],
+        healthcheck: vec!["/health".into(), "--now".into()],
     };
     let tag = scratchsmith::pack::run(
         bin,
@@ -344,6 +346,9 @@ fn image_config_is_reflected_in_docker_inspect() {
     assert!(inspect("{{.Config.WorkingDir}}").contains("/work"));
     // Non-root by default (Task 2.3).
     assert!(inspect("{{.Config.User}}").contains("65532"));
+    // Labels + healthcheck (exec form) reach the image config.
+    assert!(inspect("{{index .Config.Labels \"role\"}}").contains("api"));
+    assert!(inspect("{{json .Config.Healthcheck.Test}}").contains("/health"));
     rmi(&tag);
 }
 
