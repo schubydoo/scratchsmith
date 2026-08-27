@@ -107,6 +107,35 @@ fn build_rootfs(
     Ok((tree, sizes, warnings))
 }
 
+// Sum the sizes of the staged rootfs's regular files — the uncompressed image content,
+// including the NSS default-includes, the regenerated ld.so.cache, and runtime extras
+// (`--ca-certs`/`--tz`/`--init`) that land after `build_rootfs`. Symlinks add ~0.
+fn staged_size(dir: &Path) -> Result<u64> {
+    let mut total = 0u64;
+    for entry in walkdir::WalkDir::new(dir).follow_links(false) {
+        let md = entry?.metadata()?;
+        if md.is_file() {
+            total += md.len();
+        }
+    }
+    Ok(total)
+}
+
+// Enforce `--max-size` against the FULLY staged rootfs (after default-includes and
+// runtime extras), so the budget reflects the whole image, not just the ELF payload.
+fn enforce_max_size(dir: &Path, max_size: Option<u64>) -> Result<()> {
+    let Some(max) = max_size else { return Ok(()) };
+    let total = staged_size(dir)?;
+    if total > max {
+        bail!(
+            "packed image is {}, over the --max-size limit of {}",
+            crate::report::human_size(total),
+            crate::report::human_size(max)
+        );
+    }
+    Ok(())
+}
+
 /// Everything a pack needs beyond the binary itself. A struct (rather than a long
 /// argument list) so new options — sbom, runtime extras, later push/upx — don't keep
 /// widening every call site.
@@ -125,6 +154,8 @@ pub struct PackOptions {
     pub image: ImageConfig,
     /// Sign the pushed image with cosign (and attest the SBOM, if any). `--push` only.
     pub sign: bool,
+    /// Fail the pack if the fully-staged rootfs exceeds this many bytes (`--max-size`).
+    pub max_size: Option<u64>,
 }
 
 /// Where a pack delivers its result. Every sink shares the resolve → stage pipeline and
@@ -168,6 +199,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
         &opts.includes,
     )?;
     stager::stage_runtime_extras(out_dir, &opts.extras)?;
+    enforce_max_size(out_dir, opts.max_size)?;
     let sbom = maybe_sbom(out_dir, opts.sbom.as_ref())?;
     let scan = maybe_scan(out_dir, sbom.as_deref(), opts.scan.as_ref())?;
     Ok(PackReport {
@@ -211,6 +243,7 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         &opts.includes,
     )?;
     let extras = stager::stage_runtime_extras(&dest, &opts.extras)?;
+    enforce_max_size(&dest, opts.max_size)?;
     // Generate the SBOM and scan while the staged rootfs still exists (dest is temporary).
     let sbom = maybe_sbom(&dest, opts.sbom.as_ref())?;
     let scan = maybe_scan(&dest, sbom.as_deref(), opts.scan.as_ref())?;

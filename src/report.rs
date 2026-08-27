@@ -3,7 +3,45 @@
 
 use crate::stager::SizeReport;
 use crate::supplychain::ScanSummary;
+use anyhow::{bail, Context, Result};
 use serde::Serialize;
+
+/// Parse a human size like `10MB`, `512KiB`, `2.5G`, or a bare byte count into bytes.
+/// Decimal units (K/M/G) are powers of 1000; binary units (Ki/Mi/Gi) are powers of 1024.
+/// Used for `--max-size` and the `max-size` config key.
+pub fn parse_size(s: &str) -> Result<u64> {
+    let s = s.trim();
+    let split = s
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    let num: f64 = num.parse().with_context(|| {
+        format!("invalid size '{s}': expected a number, optionally with a unit")
+    })?;
+    let mult: f64 = match unit.trim().to_ascii_lowercase().as_str() {
+        "" | "b" => 1.0,
+        "k" | "kb" => 1_000.0,
+        "ki" | "kib" => 1_024.0,
+        "m" | "mb" => 1_000_000.0,
+        "mi" | "mib" => 1_048_576.0,
+        "g" | "gb" => 1_000_000_000.0,
+        "gi" | "gib" => 1_073_741_824.0,
+        other => bail!("invalid size unit '{other}' in '{s}' (use B, KB/MB/GB, or KiB/MiB/GiB)"),
+    };
+    // A leading '-' is the split point (a non-digit), so `num` parses empty and errors
+    // above — a negative value can never reach here, so no explicit non-negative guard.
+    Ok((num * mult) as u64)
+}
+
+/// Format a byte count as a human-readable decimal size (e.g. `8.4 MB`) for messages.
+pub fn human_size(bytes: u64) -> String {
+    for (unit, div) in [("GB", 1_000_000_000u64), ("MB", 1_000_000), ("KB", 1_000)] {
+        if bytes >= div {
+            return format!("{:.1} {unit}", bytes as f64 / div as f64);
+        }
+    }
+    format!("{bytes} B")
+}
 
 /// The outcome of a pack, emitted as text or JSON (Task 2.8). Fields are stable so
 /// the JSON can gate CI.
@@ -176,6 +214,32 @@ mod tests {
         assert_eq!(json["scan"]["total"], 7);
         assert_eq!(json["scan"]["critical"], 1);
         assert_eq!(json["scan"]["unknown"], 1);
+    }
+
+    #[test]
+    fn parse_size_handles_bytes_decimal_and_binary_units() {
+        assert_eq!(parse_size("1024").unwrap(), 1024);
+        assert_eq!(parse_size("10MB").unwrap(), 10_000_000);
+        assert_eq!(parse_size("10MiB").unwrap(), 10_485_760);
+        assert_eq!(parse_size("2.5MB").unwrap(), 2_500_000);
+        assert_eq!(parse_size("512KiB").unwrap(), 524_288);
+        assert_eq!(parse_size(" 1G ").unwrap(), 1_000_000_000);
+        assert_eq!(parse_size("100b").unwrap(), 100);
+    }
+
+    #[test]
+    fn parse_size_rejects_junk() {
+        assert!(parse_size("abc").is_err());
+        assert!(parse_size("10furlongs").is_err());
+        assert!(parse_size("-5MB").is_err());
+    }
+
+    #[test]
+    fn human_size_picks_a_readable_unit() {
+        assert_eq!(human_size(8_400_000), "8.4 MB");
+        assert_eq!(human_size(1_500_000_000), "1.5 GB");
+        assert_eq!(human_size(2_048), "2.0 KB");
+        assert_eq!(human_size(512), "512 B");
     }
 
     #[test]

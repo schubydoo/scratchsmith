@@ -131,6 +131,53 @@ fn scan_runs_or_fails_with_a_clear_error() {
 }
 
 #[test]
+fn max_size_gate_fails_when_over_and_passes_when_under() {
+    // The -n -o path needs no Docker: it stages + measures, then the size gate runs.
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let Some(fixture) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let packed = fixture.to_str().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+
+    // A 1-byte budget can't fit any real binary → fail loud, naming the limit.
+    let over = Command::new(bin)
+        .args([
+            "pack",
+            "-n",
+            "-o",
+            tmp.path().join("over").to_str().unwrap(),
+            "--max-size",
+            "1",
+            packed,
+        ])
+        .output()
+        .unwrap();
+    assert!(!over.status.success(), "a 1-byte --max-size must fail");
+    assert!(String::from_utf8_lossy(&over.stderr).contains("max-size"));
+
+    // A generous budget passes.
+    let under = Command::new(bin)
+        .args([
+            "pack",
+            "-n",
+            "-o",
+            tmp.path().join("under").to_str().unwrap(),
+            "--max-size",
+            "10GB",
+            packed,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        under.status.success(),
+        "a 10GB --max-size should pass: {}",
+        String::from_utf8_lossy(&under.stderr)
+    );
+}
+
+#[test]
 fn runtime_extras_stage_ca_and_tz_without_docker() {
     // --ca-certs and --tz copy host files into the rootfs (no Docker needed).
     let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
