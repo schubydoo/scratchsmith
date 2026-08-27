@@ -59,3 +59,32 @@ jobs:
           [ -n "$ROOTFS" ] || { echo "::error::action produced no rootfs output"; exit 1; }
           test -e "$ROOTFS/usr/bin/id"    # staged at its verbatim path
           echo "staged rootfs at $ROOTFS"
+      # Exercise the image-config inputs so a wiring regression (especially the multi-line list
+      # inputs) fails here. Limited to flags the LATEST RELEASE understands: entrypoint/cmd/env/
+      # workdir/user exist at v0.2.2. TODO(after the 1.0 release): add label/healthcheck/max-size/
+      # scan here once a release carries them — the action downloads a release, not HEAD.
+      - name: Pack with image-config inputs → image
+        id: meta
+        uses: ./
+        with:
+          binary: /usr/bin/id
+          entrypoint: /usr/bin/id
+          cmd: |
+            --version
+          env: |
+            LANG=C.UTF-8
+          workdir: /tmp
+          user: "1000:1000"
+      - name: Assert the config inputs reached the image
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+        run: |
+          set -euo pipefail
+          [ -n "$IMAGE" ] || { echo "::error::config-inputs pack produced no image output"; exit 1; }
+          inspect="$(docker image inspect "$IMAGE")"
+          echo "$inspect" | jq -e '.[0].Config.Entrypoint == ["/usr/bin/id"]' >/dev/null
+          echo "$inspect" | jq -e '(.[0].Config.Cmd // []) | index("--version")' >/dev/null
+          echo "$inspect" | jq -e '(.[0].Config.Env // []) | index("LANG=C.UTF-8")' >/dev/null
+          echo "$inspect" | jq -e '.[0].Config.WorkingDir == "/tmp"' >/dev/null
+          echo "$inspect" | jq -e '.[0].Config.User == "1000:1000"' >/dev/null
+          echo "config inputs verified"
