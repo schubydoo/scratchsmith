@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-mark-white.svg">
+    <img alt="" src="assets/logo-mark-black.svg" width="96">
+  </picture>
+</p>
+
 # Scratchsmith
 
 **The daemonless supply-chain packager for prebuilt dynamic Linux binaries.**
@@ -52,7 +59,8 @@ a hardening report, a non-root image, and no Dockerfile. More: [Comparison & lim
 ## Next
 
 - [Installation](installation.md) — one-line install, packages, release binaries, and completions.
-- [Usage](usage.md) — pack recipes, daemonless output, and the GitHub Action.
+- [Usage](usage.md) — pack recipes and daemonless output.
+- [GitHub Action](github-action.md) — pack in a CI workflow with the composite action.
 - [Configuration](configuration.md) — the `scratchsmith.toml` key reference and profiles.
 - [Verifying releases](verifying.md) — cosign signatures, SLSA provenance, and the SBOM.
 - [Comparison & limitations](comparison.md) — how it compares, and what it does not do.

@@ -101,8 +101,8 @@ scratchsmith pack --oci-archive ./app.oci.tar ./app       # an OCI archive (skop
 scratchsmith pack --push ghcr.io/you/app:latest ./app     # straight to a registry
 ```
 
-More recipes — SBOM/scan/size gates, image metadata, signing, and the GitHub Action:
-**[Usage](docs/usage.md)**.
+More recipes — SBOM/scan/size gates, image metadata, and signing: **[Usage](docs/usage.md)**. Packing
+in CI: **[GitHub Action](docs/github-action.md)**.
 
 ## Configuration
 
@@ -121,7 +121,8 @@ a CycloneDX SBOM of its own dependency graph. The exact `gh attestation` / `cosi
 📖 **Full docs: <https://schubydoo.github.io/scratchsmith/>** (searchable, versioned). The sources also render on GitHub:
 
 - **[Installation](docs/installation.md)** — every install method, uninstall, and shell completions.
-- **[Usage](docs/usage.md)** — pack recipes, daemonless output, image metadata, and the GitHub Action.
+- **[Usage](docs/usage.md)** — pack recipes, daemonless output, and image metadata.
+- **[GitHub Action](docs/github-action.md)** — pack in a CI workflow with the composite action.
 - **[Configuration](docs/configuration.md)** — the `scratchsmith.toml` reference and profiles.
 - **[Verifying releases](docs/verifying.md)** — cosign signatures, SLSA provenance, and the SBOM.
 - **[Comparison & limitations](docs/comparison.md)** — how Scratchsmith compares, and what it does not do.

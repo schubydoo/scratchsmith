@@ -83,6 +83,7 @@ nav:
   - Home: index.md
   - Installation: installation.md
   - Usage: usage.md
+  - GitHub Action: github-action.md
   - Configuration: configuration.md
   - Verifying releases: verifying.md
   - Comparison & limitations: comparison.md
