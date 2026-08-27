@@ -83,6 +83,12 @@ Or pick a package manager:
 brew install schubydoo/scratchsmith/scratchsmith
 ```
 
+Or with **Cargo**:
+
+```sh
+cargo install scratchsmith
+```
+
 Or **download a release binary** — Linux **amd64** or **arm64** — from the
 [latest release](https://github.com/schubydoo/scratchsmith/releases/latest). Check the signature
 and provenance first (see [Verifying releases](#verifying-releases)):
