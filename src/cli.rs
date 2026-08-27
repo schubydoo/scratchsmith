@@ -95,6 +95,13 @@ pub enum Command {
         /// Image user `UID[:GID]` (defaults to a non-root user; root warns).
         #[arg(long, value_name = "USER")]
         user: Option<String>,
+        /// OCI image label `KEY=VALUE`; repeatable.
+        #[arg(long = "label", value_name = "KEY=VALUE")]
+        label: Vec<String>,
+        /// HEALTHCHECK command; repeatable, exec form (must be runnable in the scratch
+        /// image, e.g. the packed binary). Flag-like values pass through.
+        #[arg(long = "healthcheck", value_name = "CMD", allow_hyphen_values = true)]
+        healthcheck: Vec<String>,
         /// Strip symbols from the binary and libraries (strip --strip-unneeded).
         #[arg(long)]
         strip: bool,
@@ -192,6 +199,8 @@ fn dispatch(cli: Cli) -> Result<()> {
             env,
             workdir,
             user,
+            label,
+            healthcheck,
             strip,
             upx,
             sbom,
@@ -256,6 +265,12 @@ fn dispatch(cli: Cli) -> Result<()> {
                     env: if env.is_empty() { file.env } else { env },
                     workdir: workdir.or(file.workdir),
                     user: user.or(file.user),
+                    labels: if label.is_empty() { file.label } else { label },
+                    healthcheck: if healthcheck.is_empty() {
+                        file.healthcheck
+                    } else {
+                        healthcheck
+                    },
                 },
                 sign: sign || file.sign,
             };
