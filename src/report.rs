@@ -28,9 +28,8 @@ pub fn parse_size(s: &str) -> Result<u64> {
         "gi" | "gib" => 1_073_741_824.0,
         other => bail!("invalid size unit '{other}' in '{s}' (use B, KB/MB/GB, or KiB/MiB/GiB)"),
     };
-    if num < 0.0 {
-        bail!("size cannot be negative: '{s}'");
-    }
+    // A leading '-' is the split point (a non-digit), so `num` parses empty and errors
+    // above — a negative value can never reach here, so no explicit non-negative guard.
     Ok((num * mult) as u64)
 }
 
