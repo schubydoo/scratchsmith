@@ -2,6 +2,8 @@
 /target/
 /site/
 /.claude/
+/.worktreeinclude
+/CLAUDE.local.md
 
 # Python bytecode (scripts/bump_packaging.py)
 __pycache__/
