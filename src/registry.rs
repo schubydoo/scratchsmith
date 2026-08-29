@@ -5,8 +5,9 @@
 
 use crate::image::{self, ImageConfig};
 use crate::stager::StagedTree;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use oci_client::client::{ClientConfig, ClientProtocol, Config as OciConfig, ImageLayer};
+use oci_client::manifest::OciImageIndex;
 use oci_client::secrets::RegistryAuth;
 use oci_client::{Client, Reference};
 
@@ -59,6 +60,208 @@ pub fn push_to_registry(
         Ok::<_, anyhow::Error>(digest_ref_from(&reference, &pushed.manifest_url))
     })?;
     Ok(digest_ref)
+}
+
+/// A per-arch image that went into an index, for the report.
+pub struct IndexEntry {
+    /// The source reference the user supplied.
+    pub source: String,
+    /// The detected platform, e.g. `linux/amd64`.
+    pub platform: String,
+    /// The child manifest's digest (`sha256:…`).
+    pub digest: String,
+}
+
+/// The result of assembling and pushing a multi-arch index.
+pub struct IndexOutcome {
+    /// The per-arch children that were assembled, in input order.
+    pub entries: Vec<IndexEntry>,
+    /// The pushed index's by-digest reference (`registry/repo@sha256:…`) when the registry
+    /// reports a digest — `Some` for `--sign`, `None` when the response carries none.
+    pub digest_ref: Option<String>,
+}
+
+// Manifest media types accepted when pulling a child. Both OCI and Docker single-image
+// manifests are valid children; the two list types are accepted only so a mistakenly
+// passed index is fetched and rejected with a clear message rather than an opaque error.
+const CHILD_MANIFEST_TYPES: &[&str] = &[
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+];
+
+/// Assemble a multi-arch OCI image index from per-arch images **already pushed** to the
+/// registry (a native-arch CI matrix) and push it to `target` — the daemonless equivalent
+/// of `docker manifest create`. Each source is pulled to read its manifest digest and size
+/// and its platform (architecture/os, from the image config); no image is built and no
+/// cross-arch resolution happens. Children must live in the target's registry (a manifest
+/// list references them by digest, within the same repository). Returns the assembled
+/// entries and the pushed index's by-digest reference.
+pub fn push_index(target: &str, sources: &[String]) -> Result<IndexOutcome> {
+    if sources.is_empty() {
+        bail!("no source images given to assemble into an index");
+    }
+    let target_ref: Reference = target
+        .parse()
+        .with_context(|| format!("invalid target reference {target:?}"))?;
+    let source_refs = sources
+        .iter()
+        .map(|s| {
+            let r: Reference = s
+                .parse()
+                .with_context(|| format!("invalid source reference {s:?}"))?;
+            if r.registry() != target_ref.registry() {
+                bail!(
+                    "source {s} is on registry {:?} but the target index is on {:?}; a \
+                     multi-arch index references its children within one registry",
+                    r.registry(),
+                    target_ref.registry()
+                );
+            }
+            Ok((s.clone(), r))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let plan = plan_credential(docker_credential::get_credential(target_ref.registry()).ok());
+    let endpoint = target_ref.resolve_registry().to_string();
+    let repository = target_ref.repository().to_string();
+    let client = Client::new(ClientConfig {
+        protocol: registry_protocol(&endpoint),
+        ..Default::default()
+    });
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("tokio runtime for the index push")?;
+    rt.block_on(async {
+        let auth = resolve_auth(plan, &endpoint, &repository).await?;
+        let mut children = Vec::with_capacity(source_refs.len());
+        for (source, r) in &source_refs {
+            children.push(fetch_child(&client, r, &auth, source).await?);
+        }
+        let index = build_index(&children)?;
+        let url = client
+            .push_manifest_list(&target_ref, &auth, index)
+            .await
+            .with_context(|| format!("pushing the image index to {target}"))?;
+        let entries = children
+            .into_iter()
+            .map(|c| IndexEntry {
+                source: c.source,
+                platform: format!("{}/{}", c.os, c.architecture),
+                digest: c.digest,
+            })
+            .collect();
+        Ok(IndexOutcome {
+            entries,
+            digest_ref: digest_ref_from(&target_ref, &url),
+        })
+    })
+}
+
+// A child manifest gathered from the registry — everything an index entry needs.
+struct Child {
+    source: String,
+    media_type: String,
+    digest: String,
+    size: i64,
+    architecture: String,
+    os: String,
+}
+
+// Pull one source: its raw manifest (for the exact stored size, digest, and media type) and
+// its config (for the platform). Size and digest must be the registry's own bytes, so they
+// come from the raw manifest — never a re-serialization, which may not be byte-identical.
+async fn fetch_child(
+    client: &Client,
+    reference: &Reference,
+    auth: &RegistryAuth,
+    source: &str,
+) -> Result<Child> {
+    let (raw, digest) = client
+        .pull_manifest_raw(reference, auth, CHILD_MANIFEST_TYPES)
+        .await
+        .with_context(|| format!("pulling the manifest for {source}"))?;
+    let manifest: serde_json::Value = serde_json::from_slice(&raw)
+        .with_context(|| format!("parsing the manifest for {source}"))?;
+    let media_type = manifest
+        .get("mediaType")
+        .and_then(|v| v.as_str())
+        .unwrap_or("application/vnd.oci.image.manifest.v1+json")
+        .to_string();
+    if is_multi_arch_media_type(&media_type) {
+        bail!(
+            "source {source} is itself a multi-arch index ({media_type}); pass the \
+             single-arch images, not an index"
+        );
+    }
+    let (_m, _d, config_json) = client
+        .pull_manifest_and_config(reference, auth)
+        .await
+        .with_context(|| format!("pulling the config for {source}"))?;
+    let config: serde_json::Value = serde_json::from_str(&config_json)
+        .with_context(|| format!("parsing the config for {source}"))?;
+    let architecture = config
+        .get("architecture")
+        .and_then(|v| v.as_str())
+        .with_context(|| format!("the config for {source} has no architecture"))?
+        .to_string();
+    let os = config
+        .get("os")
+        .and_then(|v| v.as_str())
+        .unwrap_or("linux")
+        .to_string();
+    Ok(Child {
+        source: source.to_string(),
+        media_type,
+        digest,
+        size: raw.len() as i64,
+        architecture,
+        os,
+    })
+}
+
+// An OCI image index or a Docker manifest list — a multi-arch manifest, not a single image.
+// Passing one as an index child is a mistake we reject with a clear message.
+fn is_multi_arch_media_type(media_type: &str) -> bool {
+    media_type.contains("index") || media_type.contains("manifest.list")
+}
+
+// Assemble the gathered children into an OCI image index. Built as JSON and deserialized
+// into oci-client's typed index so an unknown architecture degrades to `Arch::Other`
+// rather than failing. Rejects duplicate platforms: two children claiming the same os/arch
+// make an ambiguous index and usually mean a mislabeled or wrong source.
+fn build_index(children: &[Child]) -> Result<OciImageIndex> {
+    let mut seen = std::collections::HashSet::new();
+    for c in children {
+        if !seen.insert((c.os.as_str(), c.architecture.as_str())) {
+            bail!(
+                "two source images resolve to the same platform {}/{}; each platform must \
+                 be unique in an index",
+                c.os,
+                c.architecture
+            );
+        }
+    }
+    let manifests: Vec<serde_json::Value> = children
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "mediaType": c.media_type,
+                "digest": c.digest,
+                "size": c.size,
+                "platform": { "architecture": c.architecture, "os": c.os },
+            })
+        })
+        .collect();
+    let index = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": manifests,
+    });
+    serde_json::from_value(index).context("assembling the OCI image index")
 }
 
 // Build a by-digest reference (`registry/repo@sha256:…`) from the push response's manifest
@@ -494,5 +697,74 @@ mod tests {
         ))
         .expect_err("an unreachable registry must error");
         assert!(format!("{err:#}").contains("probing"));
+    }
+
+    fn child(arch: &str, os: &str, digest: &str) -> Child {
+        Child {
+            source: format!("reg/app:{arch}"),
+            media_type: "application/vnd.oci.image.manifest.v1+json".into(),
+            digest: digest.into(),
+            size: 100,
+            architecture: arch.into(),
+            os: os.into(),
+        }
+    }
+
+    #[test]
+    fn build_index_assembles_children_with_their_platforms() {
+        let children = vec![
+            child("amd64", "linux", "sha256:aaa"),
+            child("arm64", "linux", "sha256:bbb"),
+        ];
+        let index = build_index(&children).expect("assemble");
+        // Round-trip through JSON to pin the wire shape the registry will receive.
+        let json = serde_json::to_value(&index).unwrap();
+        assert_eq!(json["schemaVersion"], 2);
+        assert_eq!(json["mediaType"], "application/vnd.oci.image.index.v1+json");
+        let manifests = json["manifests"].as_array().unwrap();
+        assert_eq!(manifests.len(), 2);
+        assert_eq!(manifests[0]["digest"], "sha256:aaa");
+        assert_eq!(manifests[0]["size"], 100);
+        assert_eq!(manifests[0]["platform"]["architecture"], "amd64");
+        assert_eq!(manifests[0]["platform"]["os"], "linux");
+        assert_eq!(manifests[1]["platform"]["architecture"], "arm64");
+    }
+
+    #[test]
+    fn build_index_rejects_duplicate_platforms() {
+        let children = vec![
+            child("amd64", "linux", "sha256:aaa"),
+            child("amd64", "linux", "sha256:ccc"),
+        ];
+        let err = build_index(&children).expect_err("duplicate platform must be rejected");
+        assert!(
+            format!("{err:#}").contains("same platform linux/amd64"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn build_index_keeps_an_unknown_architecture() {
+        // An unmapped arch must survive as-is (oci-client stores it as Arch::Other), not
+        // be dropped or rejected — the whole point of stamping the real host arch upstream.
+        let index = build_index(&[child("riscv64", "linux", "sha256:ddd")]).expect("assemble");
+        let json = serde_json::to_value(&index).unwrap();
+        assert_eq!(json["manifests"][0]["platform"]["architecture"], "riscv64");
+    }
+
+    #[test]
+    fn multi_arch_media_types_are_recognized() {
+        assert!(is_multi_arch_media_type(
+            "application/vnd.oci.image.index.v1+json"
+        ));
+        assert!(is_multi_arch_media_type(
+            "application/vnd.docker.distribution.manifest.list.v2+json"
+        ));
+        assert!(!is_multi_arch_media_type(
+            "application/vnd.oci.image.manifest.v1+json"
+        ));
+        assert!(!is_multi_arch_media_type(
+            "application/vnd.docker.distribution.manifest.v2+json"
+        ));
     }
 }

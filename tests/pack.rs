@@ -761,3 +761,84 @@ fn push_to_local_registry_is_pullable_and_runnable() {
         .args(["rmi", "-f", reference])
         .output();
 }
+
+#[test]
+fn index_assembles_a_pushed_image_into_an_index() {
+    if !docker_available() {
+        eprintln!("skipping: no Docker daemon");
+        return;
+    }
+    let _g = docker_lock();
+    // A throwaway registry:2 (distinct name/port from the push test above) for a real
+    // push -> index round-trip. The index path contacts no Docker daemon.
+    let _ = Command::new("docker")
+        .args(["rm", "-f", "ss-test-reg-idx"])
+        .output();
+    let up = Command::new("docker")
+        .args([
+            "run",
+            "-d",
+            "--name",
+            "ss-test-reg-idx",
+            "-p",
+            "5098:5000",
+            "registry:2",
+        ])
+        .output()
+        .unwrap();
+    if !up.status.success() {
+        eprintln!("skipping: could not start registry:2");
+        return;
+    }
+    for _ in 0..40 {
+        if std::net::TcpStream::connect("127.0.0.1:5098").is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    // Push a per-arch image, then assemble it into an index. One child here: the full
+    // pull -> assemble -> push path is what this exercises end-to-end; multi-child assembly
+    // is unit-tested in registry.rs (a second real arch needs cross-arch hardware).
+    let child = "localhost:5098/scratchsmith/idx:host";
+    scratchsmith::pack::pack(
+        bin,
+        &PackOptions::default(),
+        scratchsmith::pack::Sink::Push(child.into()),
+    )
+    .expect("pushing the child image should succeed");
+
+    let target = "localhost:5098/scratchsmith/idx:multi";
+    let outcome = scratchsmith::registry::push_index(target, &[child.to_string()])
+        .expect("assembling and pushing the index should succeed");
+    assert_eq!(outcome.entries.len(), 1);
+    assert_eq!(outcome.entries[0].source, child);
+    assert!(
+        outcome.entries[0].platform.starts_with("linux/"),
+        "unexpected platform: {}",
+        outcome.entries[0].platform
+    );
+    assert!(
+        outcome.digest_ref.is_some(),
+        "the registry should report the pushed index digest"
+    );
+
+    // The target is a real, readable multi-arch index (best-effort: only if buildx is present).
+    if let Ok(out) = Command::new("docker")
+        .args(["buildx", "imagetools", "inspect", target])
+        .output()
+    {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout);
+            assert!(s.contains("linux/"), "index should list a platform: {s}");
+        }
+    }
+
+    let _ = Command::new("docker")
+        .args(["rm", "-f", "ss-test-reg-idx"])
+        .output();
+}

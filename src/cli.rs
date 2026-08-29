@@ -1,6 +1,6 @@
 //! Command-line surface and dispatch.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::generate;
 use std::path::PathBuf;
@@ -153,6 +153,22 @@ pub enum Command {
     },
     /// Check for the external tools Scratchsmith can use (syft, cosign, ...).
     Doctor,
+    /// Assemble per-arch images already pushed to a registry into a multi-arch image index
+    /// (the daemonless `docker manifest create`).
+    Index {
+        /// The index reference to create and push, e.g. `ghcr.io/you/app:1.0`.
+        target: String,
+        /// Per-arch source images already in the target's registry (one or more), e.g.
+        /// `ghcr.io/you/app:1.0-amd64 ghcr.io/you/app:1.0-arm64`.
+        #[arg(required = true, num_args = 1..)]
+        sources: Vec<String>,
+        /// Sign the pushed index with cosign (keyless), by digest.
+        #[arg(long)]
+        sign: bool,
+        /// Report format.
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
+    },
 }
 
 /// Parse process arguments and run the chosen subcommand.
@@ -316,6 +332,42 @@ fn dispatch(cli: Cli) -> Result<()> {
         }
         Command::Doctor => crate::doctor::run(),
         Command::Lint { binary, fail_on } => crate::lint::run(&binary, &fail_on),
+        Command::Index {
+            target,
+            sources,
+            sign,
+            format,
+        } => {
+            let outcome = crate::registry::push_index(&target, &sources)?;
+            let signed = if sign {
+                // cosign signs a registry image by digest; the push must have returned one.
+                let dref = outcome.digest_ref.clone().context(
+                    "cannot sign: the registry did not return a digest for the pushed index",
+                )?;
+                crate::supplychain::cosign_sign(&dref)?;
+                Some(dref)
+            } else {
+                None
+            };
+            let report = crate::report::IndexReport {
+                pushed: target,
+                manifests: outcome
+                    .entries
+                    .into_iter()
+                    .map(|e| crate::report::IndexManifest {
+                        source: e.source,
+                        platform: e.platform,
+                        digest: e.digest,
+                    })
+                    .collect(),
+                signed,
+            };
+            match format {
+                Format::Text => println!("{}", report.to_text()),
+                Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+            }
+            Ok(())
+        }
     }
 }
 
@@ -482,11 +534,12 @@ mod tests {
     }
 
     #[test]
-    fn help_lists_all_three_subcommands() {
+    fn help_lists_all_subcommands() {
         let help = Cli::command().render_help().to_string();
         assert!(help.contains("pack"), "help missing pack: {help}");
         assert!(help.contains("lint"), "help missing lint: {help}");
         assert!(help.contains("doctor"), "help missing doctor: {help}");
+        assert!(help.contains("index"), "help missing index: {help}");
     }
 
     #[test]
@@ -500,6 +553,44 @@ mod tests {
     fn doctor_runs_and_succeeds() {
         let cli = Cli::try_parse_from(["scratchsmith", "doctor"]).unwrap();
         assert!(dispatch(cli).is_ok(), "doctor always exits 0");
+    }
+
+    #[test]
+    fn index_parses_target_sources_and_sign() {
+        let cli = Cli::try_parse_from([
+            "scratchsmith",
+            "index",
+            "ghcr.io/you/app:1.0",
+            "ghcr.io/you/app:1.0-amd64",
+            "ghcr.io/you/app:1.0-arm64",
+            "--sign",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Index {
+                target,
+                sources,
+                sign,
+                ..
+            }) => {
+                assert_eq!(target, "ghcr.io/you/app:1.0");
+                assert_eq!(
+                    sources,
+                    ["ghcr.io/you/app:1.0-amd64", "ghcr.io/you/app:1.0-arm64"]
+                );
+                assert!(sign);
+            }
+            other => panic!("expected Index, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn index_requires_at_least_one_source() {
+        // Only a target, no sources: the single positional fills `target`, leaving the
+        // required variadic `sources` empty -> a clap usage error.
+        let err =
+            Cli::try_parse_from(["scratchsmith", "index", "ghcr.io/you/app:1.0"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
     }
 
     #[test]

@@ -47,6 +47,29 @@ scratchsmith pack --strip --max-size 8MB ./app        # fail the build if the st
 scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate for CI
 ```
 
+## Multi-arch images
+
+Scratchsmith resolves against the host's libraries, so it packs for the architecture it runs on.
+To publish a multi-arch image, run `pack --push` on each architecture (a CI matrix), then combine
+the per-arch images into one **multi-arch OCI image index** with `index` — the daemonless
+equivalent of `docker manifest create`, with no Docker or buildx:
+
+```sh
+# on the amd64 runner
+scratchsmith pack --push ghcr.io/you/app:1.0-amd64 ./app
+# on the arm64 runner
+scratchsmith pack --push ghcr.io/you/app:1.0-arm64 ./app
+
+# then, once both are pushed, assemble the index that consumers pull by one tag
+scratchsmith index ghcr.io/you/app:1.0 \
+  ghcr.io/you/app:1.0-amd64 \
+  ghcr.io/you/app:1.0-arm64
+```
+
+Each source's platform is read from its own image config — nothing is rebuilt and no cross-arch
+resolution happens. The sources must already be pushed and must live in the target's registry.
+Add `--sign` to cosign-sign the index by digest.
+
 ## Image metadata and entrypoint
 
 Set what the image runs — entrypoint, arguments, environment, working directory, and user:
