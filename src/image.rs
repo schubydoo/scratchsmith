@@ -623,7 +623,7 @@ mod tests {
     fn image_config_stamps_the_host_architecture() {
         // Wiring check: the config carries the mapped host arch. Correctness of the mapping
         // itself is pinned by `oci_arch_maps_*`; here we pin the concrete GOARCH on the
-        // arches CI runs, so a mis-mapping (or a revert to a wrong hardcode) is caught too.
+        // arches CI runs, so a wrong mapping (or a revert to a bad hardcode) is caught too.
         let cfg = image_config(Path::new("/app"), "abc", &ImageConfig::default());
         assert_eq!(cfg["os"], "linux");
         #[cfg(target_arch = "x86_64")]
