@@ -245,8 +245,26 @@ jobs:
         env:
           RUSTFLAGS: "-D warnings"
 
+  semver:
+    # INFORMATIONAL ONLY — deliberately NOT in ci-required-checks below, so it never
+    # blocks merge. The Rust LIBRARY API is explicitly out of contract (COMPATIBILITY.md):
+    # the crate is `pub` for its own tests, not as a supported API. This surfaces a
+    # SemVer-incompatible change to that pub API against the last crates.io release as a
+    # heads-up. Green = additive change; red = a breaking pub-API change to acknowledge
+    # (usually fine for a binary crate — the CLI/config/JSON surfaces are the real contract,
+    # and those are gated by tests). cargo-semver-checks needs nightly rustdoc JSON, which
+    # the action installs and manages.
+    name: semver-checks (informational)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
+
   ci-required-checks:
     # The single status branch protection requires. Add new required jobs to needs.
+    # `semver` is intentionally excluded — it is informational (see its comment above).
     name: ci required checks passed
     if: always()
     needs: [lint, msrv, test, coverage, supply-chain, completions, musl, fuzz-check]
