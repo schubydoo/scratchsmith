@@ -62,6 +62,7 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 | **Pluggable runtime** — `--runtime` (docker / podman / nerdctl) for the default load sink | ✅ |
 | Shell completions — `--completions <bash\|zsh\|fish>` | ✅ |
 | **Signed releases** — amd64 + arm64 binaries, cosign-signed checksums + SLSA provenance, signed multi-arch GHCR image | ✅ ([verify](docs/verifying.md)) |
+| **`:toolbox` image** — a runnable image (Wolfi + the full toolchain) that runs `pack` *inside* a container | ✅ ([usage](docs/usage.md)) |
 | Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc first; a musl backend is a future goal) |
 | **Daemonless OCI archive** — `--oci-archive <file>` (no daemon; skopeo/buildah/registry-ready) | ✅ |
 | **Daemonless registry push** — `--push <ref>` (no daemon; uses your docker credentials) | ✅ |

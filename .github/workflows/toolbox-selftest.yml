@@ -1,0 +1,70 @@
+name: Toolbox self-test
+
+# Build the :toolbox image (Dockerfile.toolbox) from HEAD and prove `pack` runs inside it —
+# doctor sees the full toolchain, and a daemonless pack of a glibc ELF succeeds. Runs only when
+# the toolbox Dockerfile or this workflow changes. Unlike the release build (which packs the
+# published static binary), this packs a HEAD debug build, validating the image against current
+# code — so a toolchain/base regression fails here, not at the next release.
+#
+# Action refs are SHA-pinned (repo Actions policy + Scorecard Pinned-Dependencies).
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile.toolbox
+      - .github/workflows/toolbox-selftest.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolbox-selftest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      # No rust-cache: this job builds a container image (a runtime artifact), and a shared
+      # build cache is a poisoning vector for it (zizmor cache-poisoning). A cold debug build
+      # is cheap enough for a path-triggered selftest.
+      - name: Build scratchsmith (HEAD) and lay out dist/
+        # A debug glibc build is enough to validate the image (Wolfi is glibc); the release
+        # image packs the static musl release binary instead.
+        run: |
+          set -euo pipefail
+          cargo build --bin scratchsmith
+          install -Dm755 target/debug/scratchsmith dist/amd64/scratchsmith
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Build the toolbox (amd64)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.toolbox
+          platforms: linux/amd64
+          load: true
+          tags: scratchsmith-toolbox:ci
+      - name: doctor sees the full toolchain
+        run: |
+          set -euo pipefail
+          docker run --rm scratchsmith-toolbox:ci doctor   # human-readable, for the log
+          # Assert each tool `pack` shells out to is actually present (independent of doctor's
+          # text format) — a dropped apk package or a Wolfi rename fails here.
+          docker run --rm --entrypoint sh scratchsmith-toolbox:ci -c '
+            for t in ldconfig docker strip syft grype cosign upx tini; do
+              command -v "$t" >/dev/null 2>&1 || { echo "::error::toolbox is missing $t"; exit 1; }
+            done
+            echo "toolbox toolchain complete"'
+      - name: pack runs daemonlessly inside the toolbox
+        run: |
+          set -euo pipefail
+          # A glibc ELF present in the image, packed daemonlessly (no docker socket) — proves the
+          # whole resolve -> stage -> assemble path plus ldconfig work inside the toolbox.
+          docker run --rm scratchsmith-toolbox:ci pack --oci-archive /tmp/out.oci.tar /usr/bin/id
+          echo "toolbox packed /usr/bin/id daemonlessly"

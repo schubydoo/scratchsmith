@@ -97,3 +97,29 @@ healthchecks.
 
 To pack in a GitHub Actions workflow with the composite action instead of shelling out to the CLI,
 see **[GitHub Action](github-action.md)**.
+
+## Run `pack` in a container — the `:toolbox` image
+
+The `FROM scratch` release image can only run `--version` / `lint` / `doctor` / `--completions`. The **`:toolbox`**
+image bundles the full `pack` toolchain (ldconfig, strip, syft, grype, cosign, upx, tini, the
+docker CLI) on a Wolfi base, so `pack` itself runs inside a container:
+
+```sh
+# Daemonless — no socket needed; write an OCI archive or push straight to a registry.
+docker run --rm -v "$PWD:/w" -w /w ghcr.io/schubydoo/scratchsmith:toolbox \
+  pack --oci-archive app.oci.tar ./app
+docker run --rm -v "$PWD:/w" -w /w ghcr.io/schubydoo/scratchsmith:toolbox \
+  pack --push ghcr.io/you/app:1.0 ./app
+```
+
+Prefer the daemonless sinks (`--push` / `--oci-archive`) in CI. The **default `docker load` sink**
+needs a host engine, so mount its socket — **which is root-equivalent on the host**, so use it only
+where you trust the workflow:
+
+```sh
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/schubydoo/scratchsmith:toolbox \
+  pack ./app
+```
+
+Tags: `:toolbox` (latest), `:X.Y.Z-toolbox`, `:X.Y-toolbox`. Verify its signature exactly like the
+scratch image — see [Verifying releases](verifying.md).

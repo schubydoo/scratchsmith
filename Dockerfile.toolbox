@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+#
+# The :toolbox image — a FUNCTIONAL scratchsmith image. Unlike the FROM scratch release image
+# (which can only run --version/lint/doctor), this bundles the full `pack` toolchain on a Wolfi
+# base, so `scratchsmith pack` runs inside a container:
+#
+#   docker run --rm -v "$PWD:/w" -w /w ghcr.io/schubydoo/scratchsmith:toolbox \
+#     pack --oci-archive out.oci.tar ./app          # daemonless — no socket needed
+#
+# The default `docker load` sink needs a host engine, so mount its socket — which is
+# root-equivalent on the host, so prefer the daemonless --push / --oci-archive sinks in CI:
+#
+#   docker run --rm -v /var/run/docker.sock:/var/run/docker.sock ...:toolbox pack ./app
+#
+# Runs as root by design: it's an ephemeral build tool (`docker run --rm`) that needs the docker
+# socket for the default sink — not a long-running service. (Non-root-by-default is a property of
+# the images scratchsmith *produces*, not of this build image.)
+#
+# Wolfi is rolling and glibc-based (matching scratchsmith's glibc target). The base digest is
+# Renovate-tracked; the apk toolchain is pulled fresh on every release build.
+FROM cgr.dev/chainguard/wolfi-base@sha256:03c6561658909fc4eadd0b2dc717375df40a22cc05455b8f82f1f1974e7e4427
+ARG TARGETARCH
+# The runtime toolchain `pack` shells out to: ldconfig (glibc), strip (binutils), syft (--sbom),
+# grype (--scan), cosign (--sign), upx (--upx), tini (--init), and the docker CLI (default sink).
+RUN apk add --no-cache glibc binutils syft grype cosign upx tini docker-cli
+COPY dist/${TARGETARCH}/scratchsmith /usr/bin/scratchsmith
+ENTRYPOINT ["/usr/bin/scratchsmith"]
