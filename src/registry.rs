@@ -210,32 +210,33 @@ async fn fetch_child(
              single-arch images, not an index"
         );
     }
-    // Pull the config pinned to the digest we just resolved, not the (possibly moving) tag,
-    // so this manifest's size/digest and its platform always come from the same image even
-    // if the tag is re-pushed mid-run.
-    let by_digest: Reference = format!(
-        "{}/{}@{}",
-        reference.registry(),
-        reference.repository(),
-        digest
-    )
-    .parse()
-    .with_context(|| format!("building a by-digest reference for {source}"))?;
-    let (_m, _d, config_json) = client
-        .pull_manifest_and_config(&by_digest, auth)
+    // We already have the manifest bytes, so pull only the config blob it names — one GET
+    // instead of re-fetching the manifest. Addressing it by digest (from the manifest we
+    // just verified) keeps it immutable, so a tag re-pushed mid-run can't swap the platform
+    // under the size/digest recorded above. Auth was primed by the pull_manifest_raw above.
+    let config_digest = manifest
+        .get("config")
+        .and_then(|c| c.get("digest"))
+        .and_then(|v| v.as_str())
+        .with_context(|| format!("the manifest for {source} has no config.digest"))?;
+    let mut config_bytes = Vec::new();
+    client
+        .pull_blob(reference, config_digest, &mut config_bytes)
         .await
         .with_context(|| format!("pulling the config for {source}"))?;
-    let config: serde_json::Value = serde_json::from_str(&config_json)
+    let config: serde_json::Value = serde_json::from_slice(&config_bytes)
         .with_context(|| format!("parsing the config for {source}"))?;
     let architecture = config
         .get("architecture")
         .and_then(|v| v.as_str())
         .with_context(|| format!("the config for {source} has no architecture"))?
         .to_string();
+    // Fail loud on a missing `os`, like a missing architecture — never silently stamp
+    // `linux` on a foreign image and ship a quietly-wrong platform in the index.
     let os = config
         .get("os")
         .and_then(|v| v.as_str())
-        .unwrap_or("linux")
+        .with_context(|| format!("the config for {source} has no os"))?
         .to_string();
     let variant = config
         .get("variant")
