@@ -437,6 +437,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#multi-arch-images" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-arch images
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#image-metadata-and-entrypoint" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -704,6 +715,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#multi-arch-images" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-arch images
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#image-metadata-and-entrypoint" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -774,11 +796,30 @@ the SBOM as a signed attestation:</p>
 <a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--strip<span class="w"> </span>--max-size<span class="w"> </span>8MB<span class="w"> </span>./app<span class="w">        </span><span class="c1"># fail the build if the staged image exceeds 8 MB</span>
 <a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>scratchsmith<span class="w"> </span>lint<span class="w"> </span>--fail-on<span class="w"> </span>no-pie<span class="w"> </span>--fail-on<span class="w"> </span>no-relro<span class="w"> </span>./app<span class="w">   </span><span class="c1"># hardening gate for CI</span>
 </code></pre></div>
+<h2 id="multi-arch-images">Multi-arch images<a class="headerlink" href="#multi-arch-images" title="Permanent link">&para;</a></h2>
+<p>Scratchsmith resolves against the host's libraries, so it packs for the architecture it runs on.
+To publish a multi-arch image, run <code>pack --push</code> on each architecture (a CI matrix), then combine
+the per-arch images into one <strong>multi-arch OCI image index</strong> with <code>index</code> — the daemonless
+equivalent of <code>docker manifest create</code>, with no Docker or buildx:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># on the amd64 runner</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0-amd64<span class="w"> </span>./app
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1"># on the arm64 runner</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0-arm64<span class="w"> </span>./app
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1"># then, once both are pushed, assemble the index that consumers pull by one tag</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>scratchsmith<span class="w"> </span>index<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span>ghcr.io/you/app:1.0-amd64<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span>ghcr.io/you/app:1.0-arm64
+</code></pre></div>
+<p>Each source's platform is read from its own image config — nothing is rebuilt and no cross-arch
+resolution happens. The sources must already be pushed and must live in the <strong>target's repository</strong>
+(an index references its children by digest within one repository) — typically the same repo with a
+different tag, as above. Add <code>--sign</code> to cosign-sign the index by digest.</p>
 <h2 id="image-metadata-and-entrypoint">Image metadata and entrypoint<a class="headerlink" href="#image-metadata-and-entrypoint" title="Permanent link">&para;</a></h2>
 <p>Set what the image runs — entrypoint, arguments, environment, working directory, and user:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--entrypoint<span class="w"> </span>/app<span class="w"> </span>--cmd<span class="w"> </span>serve<span class="w"> </span>--env<span class="w"> </span><span class="nv">LANG</span><span class="o">=</span>C.UTF-8<span class="w"> </span>--workdir<span class="w"> </span>/data<span class="w"> </span>--user<span class="w"> </span><span class="m">65532</span>:65532<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--label<span class="w"> </span><span class="nv">role</span><span class="o">=</span>api<span class="w"> </span>--healthcheck<span class="w"> </span>/app<span class="w"> </span>--healthcheck<span class="w"> </span>--health
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>--entrypoint<span class="w"> </span>/app<span class="w"> </span>--cmd<span class="w"> </span>serve<span class="w"> </span>--env<span class="w"> </span><span class="nv">LANG</span><span class="o">=</span>C.UTF-8<span class="w"> </span>--workdir<span class="w"> </span>/data<span class="w"> </span>--user<span class="w"> </span><span class="m">65532</span>:65532<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span>--label<span class="w"> </span><span class="nv">role</span><span class="o">=</span>api<span class="w"> </span>--healthcheck<span class="w"> </span>/app<span class="w"> </span>--healthcheck<span class="w"> </span>--health
 </code></pre></div>
 <p><code>--healthcheck</code> (like <code>--cmd</code>) is repeatable, and each token is one argument of a single exec
 command — so <code>--healthcheck /app --healthcheck --health</code> is the one command <code>["/app", "--health"]</code>

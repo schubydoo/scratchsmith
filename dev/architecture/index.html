@@ -715,11 +715,11 @@
 <p>Scratchsmith follows <a href="https://semver.org/">Semantic Versioning</a>. As of <strong>1.0</strong>, these surfaces are a
 stable contract — a breaking change to any of them requires a new major version:</p>
 <ul>
-<li><strong>CLI flags</strong> — the names and meaning of <code>pack</code> / <code>lint</code> / <code>doctor</code> flags. New flags arrive in minor
-  releases; a removed or renamed flag, or a changed default, is a major change.</li>
+<li><strong>CLI flags</strong> — the names and meaning of <code>pack</code> / <code>lint</code> / <code>doctor</code> / <code>index</code> flags. New flags arrive in
+  minor releases; a removed or renamed flag, or a changed default, is a major change.</li>
 <li><strong><code>scratchsmith.toml</code></strong> — the config keys and their types (the <a href="../configuration/">Configuration</a> reference).</li>
-<li><strong><code>--format json</code></strong> — the field names and types of the pack report (the schema CI gates consume). It is
-  pinned by a golden test, so a change is always deliberate.</li>
+<li><strong><code>--format json</code></strong> — the field names and types of the <code>pack</code> and <code>index</code> reports (the schema CI gates
+  consume). Each is pinned by a golden test, so a change is always deliberate.</li>
 <li><strong>Exit codes</strong> — <code>0</code> on success, <code>2</code> on an argument-parse error, and non-zero on any other failure.</li>
 </ul>
 <p><strong>Not</strong> frozen (may change in any release): human-readable text and warning wording, log output, <code>doctor</code>'s
