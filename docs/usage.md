@@ -67,8 +67,9 @@ scratchsmith index ghcr.io/you/app:1.0 \
 ```
 
 Each source's platform is read from its own image config — nothing is rebuilt and no cross-arch
-resolution happens. The sources must already be pushed and must live in the target's registry.
-Add `--sign` to cosign-sign the index by digest.
+resolution happens. The sources must already be pushed and must live in the **target's repository**
+(an index references its children by digest within one repository) — typically the same repo with a
+different tag, as above. Add `--sign` to cosign-sign the index by digest.
 
 ## Image metadata and entrypoint
 

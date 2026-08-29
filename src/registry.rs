@@ -63,6 +63,7 @@ pub fn push_to_registry(
 }
 
 /// A per-arch image that went into an index, for the report.
+#[derive(Debug)]
 pub struct IndexEntry {
     /// The source reference the user supplied.
     pub source: String,
@@ -73,6 +74,7 @@ pub struct IndexEntry {
 }
 
 /// The result of assembling and pushing a multi-arch index.
+#[derive(Debug)]
 pub struct IndexOutcome {
     /// The per-arch children that were assembled, in input order.
     pub entries: Vec<IndexEntry>,
@@ -111,12 +113,20 @@ pub fn push_index(target: &str, sources: &[String]) -> Result<IndexOutcome> {
             let r: Reference = s
                 .parse()
                 .with_context(|| format!("invalid source reference {s:?}"))?;
-            if r.registry() != target_ref.registry() {
+            // An image index references its children by digest, resolved within the
+            // repository it was pulled from — so every source must be in the target's
+            // repository (this push publishes only the list, never copies child blobs).
+            // The usual shape is the same repo, a different tag: app:1.0-amd64 -> app:1.0.
+            if r.registry() != target_ref.registry() || r.repository() != target_ref.repository() {
                 bail!(
-                    "source {s} is on registry {:?} but the target index is on {:?}; a \
-                     multi-arch index references its children within one registry",
+                    "source {s} is {}/{} but the target index is {}/{}; an image index \
+                     references its children by digest within one repository, so every \
+                     source must be in the target's repository (typically the same repo, a \
+                     different tag)",
                     r.registry(),
-                    target_ref.registry()
+                    r.repository(),
+                    target_ref.registry(),
+                    target_ref.repository()
                 );
             }
             Ok((s.clone(), r))
@@ -149,8 +159,8 @@ pub fn push_index(target: &str, sources: &[String]) -> Result<IndexOutcome> {
         let entries = children
             .into_iter()
             .map(|c| IndexEntry {
+                platform: platform_label(&c),
                 source: c.source,
-                platform: format!("{}/{}", c.os, c.architecture),
                 digest: c.digest,
             })
             .collect();
@@ -169,6 +179,9 @@ struct Child {
     size: i64,
     architecture: String,
     os: String,
+    // CPU variant (e.g. `v7` for arm), when the config declares one. Part of a platform's
+    // identity: without it, arm/v7 and arm/v6 collide and runtime matching can miss.
+    variant: Option<String>,
 }
 
 // Pull one source: its raw manifest (for the exact stored size, digest, and media type) and
@@ -197,8 +210,19 @@ async fn fetch_child(
              single-arch images, not an index"
         );
     }
+    // Pull the config pinned to the digest we just resolved, not the (possibly moving) tag,
+    // so this manifest's size/digest and its platform always come from the same image even
+    // if the tag is re-pushed mid-run.
+    let by_digest: Reference = format!(
+        "{}/{}@{}",
+        reference.registry(),
+        reference.repository(),
+        digest
+    )
+    .parse()
+    .with_context(|| format!("building a by-digest reference for {source}"))?;
     let (_m, _d, config_json) = client
-        .pull_manifest_and_config(reference, auth)
+        .pull_manifest_and_config(&by_digest, auth)
         .await
         .with_context(|| format!("pulling the config for {source}"))?;
     let config: serde_json::Value = serde_json::from_str(&config_json)
@@ -213,6 +237,10 @@ async fn fetch_child(
         .and_then(|v| v.as_str())
         .unwrap_or("linux")
         .to_string();
+    let variant = config
+        .get("variant")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     Ok(Child {
         source: source.to_string(),
         media_type,
@@ -220,6 +248,7 @@ async fn fetch_child(
         size: raw.len() as i64,
         architecture,
         os,
+        variant,
     })
 }
 
@@ -229,6 +258,14 @@ fn is_multi_arch_media_type(media_type: &str) -> bool {
     media_type.contains("index") || media_type.contains("manifest.list")
 }
 
+// Human platform label `os/arch` (or `os/arch/variant`), for the report and error messages.
+fn platform_label(c: &Child) -> String {
+    match &c.variant {
+        Some(v) => format!("{}/{}/{}", c.os, c.architecture, v),
+        None => format!("{}/{}", c.os, c.architecture),
+    }
+}
+
 // Assemble the gathered children into an OCI image index. Built as JSON and deserialized
 // into oci-client's typed index so an unknown architecture degrades to `Arch::Other`
 // rather than failing. Rejects duplicate platforms: two children claiming the same os/arch
@@ -236,23 +273,30 @@ fn is_multi_arch_media_type(media_type: &str) -> bool {
 fn build_index(children: &[Child]) -> Result<OciImageIndex> {
     let mut seen = std::collections::HashSet::new();
     for c in children {
-        if !seen.insert((c.os.as_str(), c.architecture.as_str())) {
+        // Variant is part of the platform's identity, so arm/v7 and arm/v6 are distinct.
+        if !seen.insert((c.os.as_str(), c.architecture.as_str(), c.variant.as_deref())) {
             bail!(
-                "two source images resolve to the same platform {}/{}; each platform must \
-                 be unique in an index",
-                c.os,
-                c.architecture
+                "two source images resolve to the same platform {}; each platform must be \
+                 unique in an index",
+                platform_label(c)
             );
         }
     }
     let manifests: Vec<serde_json::Value> = children
         .iter()
         .map(|c| {
+            let mut platform = serde_json::json!({
+                "architecture": c.architecture,
+                "os": c.os,
+            });
+            if let Some(variant) = &c.variant {
+                platform["variant"] = serde_json::json!(variant);
+            }
             serde_json::json!({
                 "mediaType": c.media_type,
                 "digest": c.digest,
                 "size": c.size,
-                "platform": { "architecture": c.architecture, "os": c.os },
+                "platform": platform,
             })
         })
         .collect();
@@ -700,6 +744,10 @@ mod tests {
     }
 
     fn child(arch: &str, os: &str, digest: &str) -> Child {
+        child_v(arch, os, None, digest)
+    }
+
+    fn child_v(arch: &str, os: &str, variant: Option<&str>, digest: &str) -> Child {
         Child {
             source: format!("reg/app:{arch}"),
             media_type: "application/vnd.oci.image.manifest.v1+json".into(),
@@ -707,6 +755,7 @@ mod tests {
             size: 100,
             architecture: arch.into(),
             os: os.into(),
+            variant: variant.map(str::to_string),
         }
     }
 
@@ -750,6 +799,50 @@ mod tests {
         let index = build_index(&[child("riscv64", "linux", "sha256:ddd")]).expect("assemble");
         let json = serde_json::to_value(&index).unwrap();
         assert_eq!(json["manifests"][0]["platform"]["architecture"], "riscv64");
+    }
+
+    #[test]
+    fn build_index_carries_the_variant_and_treats_variants_as_distinct_platforms() {
+        // arm/v7 and arm/v6 are different platforms — both must be kept, each with its
+        // variant in the descriptor, not collapsed as a duplicate.
+        let children = vec![
+            child_v("arm", "linux", Some("v7"), "sha256:a7"),
+            child_v("arm", "linux", Some("v6"), "sha256:a6"),
+        ];
+        let index = build_index(&children).expect("distinct variants must both be kept");
+        let json = serde_json::to_value(&index).unwrap();
+        assert_eq!(json["manifests"].as_array().unwrap().len(), 2);
+        assert_eq!(json["manifests"][0]["platform"]["variant"], "v7");
+        assert_eq!(json["manifests"][1]["platform"]["variant"], "v6");
+        // No variant key when the config declares none (amd64), rather than a null.
+        let amd = build_index(&[child("amd64", "linux", "sha256:aaa")]).unwrap();
+        let amd = serde_json::to_value(&amd).unwrap();
+        assert!(amd["manifests"][0]["platform"].get("variant").is_none());
+    }
+
+    #[test]
+    fn push_index_rejects_a_cross_repository_source() {
+        // A child in a sibling repo can't be referenced by an index in another repo. This
+        // is caught synchronously, before any network call — so no registry is contacted.
+        let err = push_index(
+            "reg.example.com/you/app:1.0",
+            &["reg.example.com/you/other:1.0-amd64".into()],
+        )
+        .expect_err("a cross-repository source must be rejected");
+        assert!(
+            format!("{err:#}").contains("target's repository"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn push_index_rejects_an_empty_source_list() {
+        let err = push_index("reg.example.com/you/app:1.0", &[])
+            .expect_err("an empty source list must be rejected");
+        assert!(
+            format!("{err:#}").contains("no source images"),
+            "got: {err}"
+        );
     }
 
     #[test]

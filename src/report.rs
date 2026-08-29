@@ -390,4 +390,31 @@ mod tests {
         assert_eq!(json["manifests"][1]["platform"], "linux/arm64");
         assert_eq!(json["signed"], "ghcr.io/you/app@sha256:idx");
     }
+
+    #[test]
+    fn index_report_schema_is_stable() {
+        // The `index --format json` output is a SemVer-covered contract (v1.1): CI can gate
+        // on it. Pin the top-level key set and the `manifests[]` sub-schema so any add,
+        // remove, or rename is a deliberate change caught here, never silent drift.
+        let report = IndexReport {
+            pushed: "reg/app:1".into(),
+            manifests: vec![IndexManifest {
+                source: "reg/app:1-amd64".into(),
+                platform: "linux/amd64".into(),
+                digest: "sha256:aaa".into(),
+            }],
+            signed: None,
+        };
+        let json = serde_json::to_value(&report).unwrap();
+        let sorted_keys = |v: &serde_json::Value| {
+            let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            k.sort();
+            k
+        };
+        assert_eq!(sorted_keys(&json), ["manifests", "pushed", "signed"]);
+        assert_eq!(
+            sorted_keys(&json["manifests"][0]),
+            ["digest", "platform", "source"]
+        );
+    }
 }
