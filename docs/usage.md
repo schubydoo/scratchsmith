@@ -100,7 +100,7 @@ see **[GitHub Action](github-action.md)**.
 
 ## Run `pack` in a container — the `:toolbox` image
 
-The `FROM scratch` release image can only run `--version` / `lint` / `doctor`. The **`:toolbox`**
+The `FROM scratch` release image can only run `--version` / `lint` / `doctor` / `--completions`. The **`:toolbox`**
 image bundles the full `pack` toolchain (ldconfig, strip, syft, grype, cosign, upx, tini, the
 docker CLI) on a Wolfi base, so `pack` itself runs inside a container:
 

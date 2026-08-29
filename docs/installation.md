@@ -53,6 +53,11 @@ Pull the signed image:
 docker pull ghcr.io/schubydoo/scratchsmith:latest
 ```
 
+`:latest` is a minimal `FROM scratch` image — it runs `--version`, `lint`, `doctor`, and
+`--completions`, but **not `pack`** (a scratch image has none of the toolchain `pack` needs). To run
+`pack` inside a container, pull the **`:toolbox`** image instead (Wolfi base + the full toolchain);
+see the [toolbox section in Usage](usage.md).
+
 ## Build from source
 
 Rust **1.96+**:
