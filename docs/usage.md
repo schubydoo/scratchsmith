@@ -9,6 +9,13 @@ scratchsmith pack ./app
 docker run --rm scratchsmith/app:packed --version   # image is named scratchsmith/<name>:packed
 ```
 
+The default sink loads into Docker. To load with **podman** or **nerdctl** instead (and run the
+`--smoke` check with it), pass `--runtime`:
+
+```sh
+scratchsmith pack --runtime podman ./app
+```
+
 Inspect the rootfs without building an image — **no Docker daemon needed**:
 
 ```sh

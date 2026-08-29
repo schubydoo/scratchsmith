@@ -156,6 +156,9 @@ pub struct PackOptions {
     pub sign: bool,
     /// Fail the pack if the fully-staged rootfs exceeds this many bytes (`--max-size`).
     pub max_size: Option<u64>,
+    /// Container engine for the docker-load sink and `--smoke` run (`--runtime`). Ignored by
+    /// the daemonless sinks (`--oci-archive`, `--push`), which never invoke a runtime.
+    pub runtime: crate::image::Runtime,
 }
 
 /// Where a pack delivers its result. Every sink shares the resolve → stage pipeline and
@@ -285,11 +288,11 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
 /// not start it — the guard against a silently broken image.
 pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
     let s = stage_for_image(binary, opts)?;
-    image::load_into_docker(&s.tree, &s.tag, &s.cfg)?;
+    image::load_into_docker(&s.tree, &s.tag, &s.cfg, opts.runtime)?;
 
     let mut smoke_ok = None;
     if opts.smoke {
-        let outcome = image::smoke_run(&s.tag, &[], SMOKE_TIMEOUT_SECS)?;
+        let outcome = image::smoke_run(opts.runtime, &s.tag, &[], SMOKE_TIMEOUT_SECS)?;
         if outcome.loader_failed() {
             bail!(
                 "smoke-run failed: the image could not start the binary.\n{}",

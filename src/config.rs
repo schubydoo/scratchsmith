@@ -78,6 +78,9 @@ pub struct Config {
     /// Fail the pack if the packed image (staged rootfs) exceeds this size, e.g. `"12MB"`.
     #[serde(rename = "max-size")]
     pub max_size: Option<String>,
+    /// Container engine for the default load + smoke-run: `docker` (default), `podman`, or
+    /// `nerdctl`. Ignored by the daemonless sinks.
+    pub runtime: Option<crate::image::Runtime>,
     /// Named profiles — `[profile.<name>]` sections that layer over the base config.
     #[serde(default)]
     pub profile: HashMap<String, Config>,
@@ -144,6 +147,7 @@ impl Config {
             sign: self.sign || over.sign,
             push: over.push.or(self.push),
             max_size: over.max_size.or(self.max_size),
+            runtime: over.runtime.or(self.runtime),
             profile: HashMap::new(), // the effective config no longer carries nested profiles
         }
     }
@@ -180,6 +184,7 @@ mod tests {
             sign = true
             push = "ghcr.io/me/tool:latest"
             max-size = "12MB"
+            runtime = "podman"
         "#,
         )
         .unwrap();
@@ -193,6 +198,7 @@ mod tests {
         assert_eq!(cfg.include, vec!["libfoo.so".to_string()]);
         assert_eq!(cfg.push.as_deref(), Some("ghcr.io/me/tool:latest"));
         assert_eq!(cfg.max_size.as_deref(), Some("12MB"));
+        assert_eq!(cfg.runtime, Some(crate::image::Runtime::Podman));
         assert_eq!(cfg.label, vec!["role=api".to_string()]);
         assert_eq!(
             cfg.healthcheck,

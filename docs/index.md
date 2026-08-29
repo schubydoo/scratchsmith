@@ -49,6 +49,7 @@ a hardening report, a non-root image, and no Dockerfile. More: [Comparison & lim
 | Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`) | ✅ |
 | Image metadata — labels (`--label`), `HEALTHCHECK` (`--healthcheck`) | ✅ |
 | Config file (`scratchsmith.toml`) + named profiles (`--profile`), JSON output (`--format json`) | ✅ |
+| **Pluggable runtime** — `--runtime` (docker / podman / nerdctl) for the default load sink | ✅ |
 | Shell completions — `--completions <bash\|zsh\|fish>` | ✅ |
 | **Signed releases** — amd64 + arm64 binaries, cosign-signed checksums + SLSA provenance, signed multi-arch GHCR image | ✅ ([verify](verifying.md)) |
 | Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc first; a musl backend is a future goal) |

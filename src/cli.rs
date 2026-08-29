@@ -100,6 +100,10 @@ pub enum Command {
         /// Image user `UID[:GID]` (defaults to a non-root user; root warns).
         #[arg(long, value_name = "USER")]
         user: Option<String>,
+        /// Container engine for the default load + `--smoke` run (docker/podman/nerdctl;
+        /// default docker). Ignored by `--oci-archive`/`--push`, which are daemonless.
+        #[arg(long, value_enum, value_name = "RUNTIME")]
+        runtime: Option<crate::image::Runtime>,
         /// OCI image label `KEY=VALUE`; repeatable.
         #[arg(long = "label", value_name = "KEY=VALUE")]
         label: Vec<String>,
@@ -223,6 +227,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             env,
             workdir,
             user,
+            runtime,
             label,
             healthcheck,
             strip,
@@ -302,6 +307,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                     .or(file.max_size)
                     .map(|s| crate::report::parse_size(&s))
                     .transpose()?,
+                runtime: runtime.or(file.runtime).unwrap_or_default(),
             };
 
             // An explicit CLI delivery sink always wins; `push` from the config/profile is only
@@ -439,6 +445,19 @@ mod tests {
             Some(Command::Pack {
                 scan: true,
                 scan_fail_on: Some(crate::supplychain::Severity::High),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn pack_parses_runtime() {
+        let cli = Cli::try_parse_from(["scratchsmith", "pack", "--runtime", "podman", "/bin/ls"])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Pack {
+                runtime: Some(crate::image::Runtime::Podman),
                 ..
             })
         ));

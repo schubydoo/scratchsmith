@@ -1,7 +1,7 @@
 //! End-to-end against a live Docker daemon: pack real binaries into scratch images
 //! and smoke-run them. Skipped when no Docker daemon is reachable (e.g. minimal CI).
 
-use scratchsmith::image::{smoke_run, ImageConfig};
+use scratchsmith::image::{smoke_run, ImageConfig, Runtime};
 use scratchsmith::pack::PackOptions;
 use scratchsmith::stager::RuntimeExtras;
 use std::path::Path;
@@ -489,7 +489,7 @@ fn smoke_run_passes_for_a_plain_binary() {
         .unwrap();
 
     // `id` with no args prints `uid=…` — proves the smoke-run mechanism starts the binary.
-    let outcome = smoke_run(&tag, &[], 15).expect("smoke run");
+    let outcome = smoke_run(Runtime::Docker, &tag, &[], 15).expect("smoke run");
     assert!(
         !outcome.loader_failed(),
         "loader failed: {}",
@@ -519,7 +519,7 @@ fn smoke_run_proves_nss_lookups_work_in_image() {
         .tag
         .unwrap();
 
-    let outcome = smoke_run(&tag, &["hosts", "localhost"], 15).expect("smoke run");
+    let outcome = smoke_run(Runtime::Docker, &tag, &["hosts", "localhost"], 15).expect("smoke run");
     assert!(
         !outcome.loader_failed(),
         "loader failed: {}",

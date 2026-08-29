@@ -30,13 +30,43 @@ pub struct ImageConfig {
     pub healthcheck: Vec<String>,
 }
 
-/// Assemble `staged` into an image and load it into the local Docker daemon as `tag`.
-pub fn load_into_docker(staged: &StagedTree, tag: &str, cfg: &ImageConfig) -> Result<()> {
+/// The container engine used for the default (docker-load) sink and `--smoke` run. Podman and
+/// nerdctl accept the same `load -i` / `run --rm` invocations as Docker, so they're drop-in.
+/// The daemonless sinks (`--oci-archive`, `--push`) don't use a runtime at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive] // may gain runtimes in a minor; not a stable exhaustive library API
+pub enum Runtime {
+    #[default]
+    Docker,
+    Podman,
+    Nerdctl,
+}
+
+impl Runtime {
+    /// The executable name to invoke.
+    pub fn binary(self) -> &'static str {
+        match self {
+            Runtime::Docker => "docker",
+            Runtime::Podman => "podman",
+            Runtime::Nerdctl => "nerdctl",
+        }
+    }
+}
+
+/// Assemble `staged` into an image and load it into the local container engine as `tag`,
+/// using `runtime` (`docker`/`podman`/`nerdctl`).
+pub fn load_into_docker(
+    staged: &StagedTree,
+    tag: &str,
+    cfg: &ImageConfig,
+    runtime: Runtime,
+) -> Result<()> {
     let built = build_image(staged, cfg)?;
     let work = tempfile::tempdir().context("temp dir for image archive")?;
     let archive = work.path().join("image.tar");
     write_docker_archive(&built, tag, &archive)?;
-    docker_load(&archive)?;
+    load_archive(runtime, &archive)?;
     Ok(())
 }
 
@@ -344,16 +374,21 @@ impl SmokeOutcome {
     }
 }
 
-/// Run the packed image once (`docker run --rm <tag> <args>`) under a timeout, so a
+/// Run the packed image once (`<runtime> run --rm <tag> <args>`) under a timeout, so a
 /// missing-library or missing-loader failure is caught before the image is trusted.
 /// A timeout is treated as "started" — a long-running entrypoint is not a failure.
-pub fn smoke_run(tag: &str, args: &[&str], timeout_secs: u32) -> Result<SmokeOutcome> {
+pub fn smoke_run(
+    runtime: Runtime,
+    tag: &str,
+    args: &[&str],
+    timeout_secs: u32,
+) -> Result<SmokeOutcome> {
     let out = Command::new("timeout")
         .arg(timeout_secs.to_string())
-        .args(["docker", "run", "--rm", tag])
+        .args([runtime.binary(), "run", "--rm", tag])
         .args(args)
         .output()
-        .context("running docker run for the smoke test")?;
+        .with_context(|| format!("running {} run for the smoke test", runtime.binary()))?;
     Ok(SmokeOutcome {
         code: out.status.code().filter(|&c| c != 124), // 124 = timeout killed it
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -361,16 +396,17 @@ pub fn smoke_run(tag: &str, args: &[&str], timeout_secs: u32) -> Result<SmokeOut
     })
 }
 
-fn docker_load(archive: &Path) -> Result<()> {
-    let out = Command::new("docker")
+fn load_archive(runtime: Runtime, archive: &Path) -> Result<()> {
+    let engine = runtime.binary();
+    let out = Command::new(engine)
         .arg("load")
         .arg("-i")
         .arg(archive)
         .output()
-        .context("running docker load (is the Docker daemon running?)")?;
+        .with_context(|| format!("running {engine} load (is the {engine} engine running?)"))?;
     if !out.status.success() {
         bail!(
-            "docker load failed: {}",
+            "{engine} load failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
