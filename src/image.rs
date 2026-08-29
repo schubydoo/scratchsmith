@@ -230,6 +230,28 @@ const DEFAULT_PATH: &str = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/b
 /// Distroless-style non-root uid:gid; the default so images never run as root.
 const DEFAULT_USER: &str = "65532:65532";
 
+// The host CPU architecture as an OCI/Go `GOARCH` value, for the image config's
+// `architecture` field. Split from the host lookup so every arm is unit-testable.
+// Unknown arches pass through rather than mislabeling as `amd64`; scratchsmith runs on
+// glibc Linux, in practice amd64 or arm64.
+fn oci_arch(rust_arch: &str) -> &str {
+    match rust_arch {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        "x86" => "386",
+        other => other,
+    }
+}
+
+// The image's architecture is the packed binary's architecture. Today that equals the host's:
+// `pack` resolves against the host root only (`Sysroot::new("/")`), so a foreign-arch ELF fails
+// to resolve rather than being staged and mislabeled — host arch == packed-ELF arch, always.
+// ⚠️ When a cross-arch sysroot lands (roadmap F18, item 50), that invariant breaks: stamp the
+// packed ELF's `e_machine` (`resolver::ElfInfo.machine`) here instead of the host arch.
+fn host_architecture() -> &'static str {
+    oci_arch(std::env::consts::ARCH)
+}
+
 fn image_config(default_entrypoint: &Path, diff_id: &str, cfg: &ImageConfig) -> serde_json::Value {
     let entrypoint = if cfg.entrypoint.is_empty() {
         vec![default_entrypoint.to_string_lossy().into_owned()]
@@ -268,8 +290,10 @@ fn image_config(default_entrypoint: &Path, diff_id: &str, cfg: &ImageConfig) -> 
     }
 
     serde_json::json!({
-        // Host-arch only at v1; multi-arch is Task 5.4.
-        "architecture": "amd64",
+        // scratchsmith packs for the host it runs on (the resolver reads the host's libs),
+        // so the image is that host's architecture. Stamping it faithfully is what lets a
+        // CI matrix's per-arch pushes assemble into a correct multi-arch index.
+        "architecture": host_architecture(),
         "os": "linux",
         "config": config,
         "rootfs": { "type": "layers", "diff_ids": [format!("sha256:{diff_id}")] },
@@ -589,5 +613,29 @@ mod tests {
         assert!(!outcome(Some(2), "error: missing subcommand").loader_failed());
         // A timeout (code None) means it started and kept running.
         assert!(!outcome(None, "").loader_failed());
+    }
+
+    #[test]
+    fn oci_arch_maps_the_arches_we_ship_and_passes_others_through() {
+        assert_eq!(oci_arch("x86_64"), "amd64");
+        assert_eq!(oci_arch("aarch64"), "arm64");
+        assert_eq!(oci_arch("x86"), "386");
+        // An unmapped arch keeps its Rust name rather than lying "amd64".
+        assert_eq!(oci_arch("riscv64"), "riscv64");
+    }
+
+    #[test]
+    fn image_config_stamps_the_host_architecture() {
+        // Wiring check: the config carries the mapped host arch. Correctness of the mapping
+        // itself is pinned by `oci_arch_maps_*`; here we pin the concrete GOARCH on the
+        // arches CI runs, so a wrong mapping (or a revert to a bad hardcode) is caught too.
+        let cfg = image_config(Path::new("/app"), "abc", &ImageConfig::default());
+        assert_eq!(cfg["os"], "linux");
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(cfg["architecture"], "amd64");
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(cfg["architecture"], "arm64");
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        assert_eq!(cfg["architecture"], host_architecture());
     }
 }
