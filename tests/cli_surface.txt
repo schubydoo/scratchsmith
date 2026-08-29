@@ -1,0 +1,45 @@
+[scratchsmith]
+  --completions  value=true  multiple=false  required=false  values=[bash,zsh,fish]
+
+[doctor]
+
+[index]
+  --format  value=true  multiple=false  required=false  default=text  values=[text,json]
+  --sign  value=false  multiple=false  required=false
+  <sources>  value=true  multiple=true  required=true
+  <target>  value=true  multiple=false  required=true
+
+[lint]
+  <binary>  value=true  multiple=false  required=true
+  --fail-on  value=true  multiple=true  required=false  values=[no-pie,no-relro,partial-relro,no-nx,no-canary,no-fortify]
+
+[pack]
+  <binary>  value=true  multiple=false  required=false
+  --ca-certs  value=false  multiple=false  required=false
+  --cmd  value=true  multiple=true  required=false
+  --config  value=true  multiple=false  required=false
+  --entrypoint  value=true  multiple=false  required=false
+  --env  value=true  multiple=true  required=false
+  --format  value=true  multiple=false  required=false  default=text  values=[text,json]
+  --healthcheck  value=true  multiple=true  required=false
+  --include  value=true  multiple=true  required=false
+  --init  value=false  multiple=false  required=false
+  --label  value=true  multiple=true  required=false
+  --max-size  value=true  multiple=false  required=false
+  --no-build -n  value=false  multiple=false  required=false
+  --oci-archive  value=true  multiple=false  required=false
+  --output -o  value=true  multiple=false  required=false
+  --profile  value=true  multiple=false  required=false
+  --push  value=true  multiple=false  required=false
+  --sbom  value=false  multiple=false  required=false
+  --sbom-file  value=true  multiple=false  required=false
+  --sbom-format  value=true  multiple=false  required=false  values=[cyclonedx-json,spdx-json]
+  --scan  value=false  multiple=false  required=false
+  --scan-fail-on  value=true  multiple=false  required=false  values=[negligible,low,medium,high,critical]
+  --sign  value=false  multiple=false  required=false
+  --smoke  value=false  multiple=false  required=false
+  --strip  value=false  multiple=false  required=false
+  --tz  value=false  multiple=false  required=false
+  --upx  value=false  multiple=false  required=false
+  --user  value=true  multiple=false  required=false
+  --workdir  value=true  multiple=false  required=false

@@ -31,13 +31,42 @@ fn version_prints_and_exits_zero() {
 }
 
 #[test]
-fn help_lists_all_three_subcommands() {
+fn help_lists_all_subcommands() {
     let out = run(&["--help"]);
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    for cmd in ["pack", "lint", "doctor"] {
+    for cmd in ["pack", "lint", "doctor", "index"] {
         assert!(stdout.contains(cmd), "help missing `{cmd}`: {stdout}");
     }
+}
+
+#[test]
+fn exit_codes_follow_the_v1_contract() {
+    // The exit-code contract (COMPATIBILITY.md): 0 on success, 2 on an argument/usage error
+    // (clap), non-zero on any other failure. Pinned here so a change is deliberate — a script
+    // gating on `$?` must not break on an upgrade.
+    assert!(run(&["--version"]).status.success(), "0: --version");
+    assert!(run(&["--help"]).status.success(), "0: --help");
+    assert!(run(&["doctor"]).status.success(), "0: doctor");
+    assert_eq!(run(&[]).status.code(), Some(2), "2: no subcommand");
+    assert_eq!(
+        run(&["bogus"]).status.code(),
+        Some(2),
+        "2: unknown subcommand"
+    );
+    assert_eq!(
+        run(&["pack", "--nope"]).status.code(),
+        Some(2),
+        "2: unknown flag"
+    );
+    // A real runtime failure (missing binary) is non-zero, and specifically not a usage error.
+    let missing = run(&["pack", "/nonexistent/scratchsmith-xyz"])
+        .status
+        .code();
+    assert!(
+        matches!(missing, Some(c) if c != 0 && c != 2),
+        "non-zero (not 2) on a runtime failure, got {missing:?}"
+    );
 }
 
 #[test]
