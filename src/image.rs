@@ -243,6 +243,11 @@ fn oci_arch(rust_arch: &str) -> &str {
     }
 }
 
+// The image's architecture is the packed binary's architecture. Today that equals the host's:
+// `pack` resolves against the host root only (`Sysroot::new("/")`), so a foreign-arch ELF fails
+// to resolve rather than being staged and mislabeled — host arch == packed-ELF arch, always.
+// ⚠️ When a cross-arch sysroot lands (roadmap F18, item 50), that invariant breaks: stamp the
+// packed ELF's `e_machine` (`resolver::ElfInfo.machine`) here instead of the host arch.
 fn host_architecture() -> &'static str {
     oci_arch(std::env::consts::ARCH)
 }
