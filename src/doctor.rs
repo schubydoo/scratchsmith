@@ -23,8 +23,20 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "docker",
         version_args: &["--version"],
-        purpose: "load the image into the Docker daemon",
+        purpose: "load the image into a container engine (default --runtime)",
         hint: "install Docker",
+    },
+    Tool {
+        name: "podman",
+        version_args: &["--version"],
+        purpose: "load the image (--runtime podman) — a Docker alternative",
+        hint: "install Podman",
+    },
+    Tool {
+        name: "nerdctl",
+        version_args: &["--version"],
+        purpose: "load the image (--runtime nerdctl) — a Docker alternative",
+        hint: "install nerdctl",
     },
     Tool {
         name: "strip",

@@ -9,8 +9,10 @@ branding:
 # which the FROM scratch release image deliberately lacks. So this downloads the signed release
 # binary for the runner arch, verifies it against the release checksums, and runs `pack` on the
 # GitHub-hosted runner (which has Docker). Inputs map to real `pack` flags; the `args` input is the
-# escape hatch for anything without a dedicated input. `--sign` is deliberately left to `args`: it
-# needs `pack --push --sign`, but this action publishes with `docker push`, not the daemonless push.
+# escape hatch for anything without a dedicated input. `--sign` and `--runtime` are deliberately left
+# to `args`: signing needs `pack --push --sign`, and this action publishes with `docker push` (not the
+# daemonless push) — which also means the load engine must be docker, so `--runtime podman|nerdctl`
+# (loads into that engine's store, invisible to `docker push`) has no first-class input here.
 
 inputs:
   binary:

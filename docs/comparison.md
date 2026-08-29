@@ -43,9 +43,10 @@ Scratchsmith owns the one input the others don't serve: **an arbitrary prebuilt 
 - **`dlopen` is best-effort.** Libraries loaded at runtime via `dlopen` are invisible to static
   analysis; Scratchsmith *warns* when it sees `dlopen` and lets you force-stage them with
   `--include <lib>`. It is not a blanket "any binary just works" guarantee.
-- **`docker load` is the *default* sink.** The default hands the image to a local Docker daemon
-  for convenience; go daemon-free with `--push <ref>` (straight to a registry), `--oci-archive
-  <file>` (an OCI archive), or `--no-build --output` (a rootfs).
+- **Loading into a container engine is the *default* sink.** The default hands the image to a
+  local engine for convenience — `docker` by default, or `--runtime podman|nerdctl` for those —
+  or go daemon-free entirely with `--push <ref>` (straight to a registry), `--oci-archive <file>`
+  (an OCI archive), or `--no-build --output` (a rootfs).
 - **Signing the image `pack` produces needs `--push`.** `pack --push --sign` cosign-signs the
   pushed image by digest (keyless), and `--sbom --sign` attaches the SBOM as a signed
   attestation; both only apply to the registry-push sink, since cosign signs a registry image.

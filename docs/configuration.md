@@ -29,6 +29,7 @@ file**.
 | `sign` | `--sign` | cosign-sign the pushed image (keyless, by digest). Requires a push target. |
 | `push` | `--push` | Push the image straight to this registry reference, daemonless. |
 | `max-size` | `--max-size` | Fail the pack if the packed image (the fully-staged rootfs — payload + NSS includes + runtime extras) exceeds this size — e.g. `12MB`, `512KiB`, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024). |
+| `runtime` | `--runtime` | Container engine for the default load sink and the `--smoke` run: `docker` (default), `podman`, or `nerdctl`. The daemonless sinks (`--oci-archive`, `--push`) never invoke a runtime, so this is ignored there. |
 
 A full config file, and how to run it:
 
@@ -57,6 +58,7 @@ include = ["libnss_myhostname.so.2"]
 sign = true
 push = "ghcr.io/you/app:latest"
 max-size = "50MB"
+runtime = "docker"
 ```
 
 ```sh

@@ -31,6 +31,7 @@
   --output -o  value=true  multiple=false  required=false
   --profile  value=true  multiple=false  required=false
   --push  value=true  multiple=false  required=false
+  --runtime  value=true  multiple=false  required=false  values=[docker,podman,nerdctl]
   --sbom  value=false  multiple=false  required=false
   --sbom-file  value=true  multiple=false  required=false
   --sbom-format  value=true  multiple=false  required=false  values=[cyclonedx-json,spdx-json]

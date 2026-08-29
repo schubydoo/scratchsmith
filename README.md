@@ -46,7 +46,7 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 
 | Capability | State |
 |---|---|
-| Pack a dynamic glibc ELF → runnable `FROM scratch` image | ✅ (loaded via `docker load`) |
+| Pack a dynamic glibc ELF → runnable `FROM scratch` image | ✅ (loaded via `docker`/`podman`/`nerdctl`) |
 | `ld.so`-faithful dependency resolution (RPATH/RUNPATH/`$ORIGIN`, interpreter, sonames) | ✅ |
 | glibc **NSS** support staged — name-service lookups like `getent hosts` work | ✅ |
 | **Non-root** by default (UID 65532), reproducible layers | ✅ |
@@ -59,6 +59,7 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 | Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`) | ✅ |
 | Image metadata — labels (`--label`), `HEALTHCHECK` (`--healthcheck`) | ✅ |
 | Config file (`scratchsmith.toml`) + named profiles (`--profile`), JSON output (`--format json`) | ✅ |
+| **Pluggable runtime** — `--runtime` (docker / podman / nerdctl) for the default load sink | ✅ |
 | Shell completions — `--completions <bash\|zsh\|fish>` | ✅ |
 | **Signed releases** — amd64 + arm64 binaries, cosign-signed checksums + SLSA provenance, signed multi-arch GHCR image | ✅ ([verify](docs/verifying.md)) |
 | Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc first; a musl backend is a future goal) |
