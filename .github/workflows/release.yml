@@ -230,10 +230,19 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: scratchsmith-toolbox:smoke
-      - name: Run the toolbox smoke (doctor + a real daemonless pack)
+      - name: Run the toolbox smoke (toolchain present + a real daemonless pack)
         run: |
           set -euo pipefail
-          docker run --rm scratchsmith-toolbox:smoke doctor >/dev/null
+          docker run --rm scratchsmith-toolbox:smoke doctor   # human-readable, for the log
+          # Assert every bundled tool is actually on PATH before signing/publishing. doctor always
+          # exits 0 and a plain pack only exercises ldconfig, so without this a Wolfi package split
+          # (apk succeeds, but a binary moves) could ship a signed toolbox missing a tool the docs
+          # advertise. (amd64 only — no arm64 runtime here without extra emulation; the arm64 leg is
+          # gated by `apk add` succeeding, same as the scratch image's arm64 `file`-only check.)
+          docker run --rm --entrypoint sh scratchsmith-toolbox:smoke -c '
+            for t in ldconfig docker strip syft grype cosign upx tini; do
+              command -v "$t" >/dev/null 2>&1 || { echo "::error::toolbox is missing $t"; exit 1; }
+            done'
           # Pack a glibc ELF present in the image, daemonless (no socket) — proves the whole
           # resolve → stage → assemble path plus ldconfig work inside the toolbox.
           docker run --rm scratchsmith-toolbox:smoke pack --oci-archive /tmp/out.oci.tar /usr/bin/id

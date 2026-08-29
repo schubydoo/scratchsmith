@@ -68,6 +68,12 @@ const TOOLS: &[Tool] = &[
         purpose: "--upx (compress the packed binary further)",
         hint: "install upx",
     },
+    Tool {
+        name: "tini",
+        version_args: &["--version"],
+        purpose: "--init (minimal pid-1 init wrapping the entrypoint)",
+        hint: "install tini",
+    },
 ];
 
 /// One tool's availability.
