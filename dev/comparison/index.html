@@ -841,9 +841,10 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.</p>
 <li><strong><code>dlopen</code> is best-effort.</strong> Libraries loaded at runtime via <code>dlopen</code> are invisible to static
   analysis; Scratchsmith <em>warns</em> when it sees <code>dlopen</code> and lets you force-stage them with
   <code>--include &lt;lib&gt;</code>. It is not a blanket "any binary just works" guarantee.</li>
-<li><strong><code>docker load</code> is the <em>default</em> sink.</strong> The default hands the image to a local Docker daemon
-  for convenience; go daemon-free with <code>--push &lt;ref&gt;</code> (straight to a registry), <code>--oci-archive
-  &lt;file&gt;</code> (an OCI archive), or <code>--no-build --output</code> (a rootfs).</li>
+<li><strong>Loading into a container engine is the <em>default</em> sink.</strong> The default hands the image to a
+  local engine for convenience — <code>docker</code> by default, or <code>--runtime podman|nerdctl</code> for those —
+  or go daemon-free entirely with <code>--push &lt;ref&gt;</code> (straight to a registry), <code>--oci-archive &lt;file&gt;</code>
+  (an OCI archive), or <code>--no-build --output</code> (a rootfs).</li>
 <li><strong>Signing the image <code>pack</code> produces needs <code>--push</code>.</strong> <code>pack --push --sign</code> cosign-signs the
   pushed image by digest (keyless), and <code>--sbom --sign</code> attaches the SBOM as a signed
   attestation; both only apply to the registry-push sink, since cosign signs a registry image.

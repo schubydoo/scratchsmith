@@ -783,7 +783,7 @@ a hardening report, a non-root image, and no Dockerfile. More: <a href="comparis
 <tbody>
 <tr>
 <td>Pack a dynamic glibc ELF → runnable <code>FROM scratch</code> image</td>
-<td>✅ (loaded via <code>docker load</code>)</td>
+<td>✅ (loaded via <code>docker</code>/<code>podman</code>/<code>nerdctl</code>)</td>
 </tr>
 <tr>
 <td><code>ld.so</code>-faithful dependency resolution (RPATH/RUNPATH/<code>$ORIGIN</code>, interpreter, sonames)</td>
@@ -831,6 +831,10 @@ a hardening report, a non-root image, and no Dockerfile. More: <a href="comparis
 </tr>
 <tr>
 <td>Config file (<code>scratchsmith.toml</code>) + named profiles (<code>--profile</code>), JSON output (<code>--format json</code>)</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><strong>Pluggable runtime</strong> — <code>--runtime</code> (docker / podman / nerdctl) for the default load sink</td>
 <td>✅</td>
 </tr>
 <tr>

@@ -834,6 +834,11 @@ file</strong>.</p>
 <td><code>--max-size</code></td>
 <td>Fail the pack if the packed image (the fully-staged rootfs — payload + NSS includes + runtime extras) exceeds this size — e.g. <code>12MB</code>, <code>512KiB</code>, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024).</td>
 </tr>
+<tr>
+<td><code>runtime</code></td>
+<td><code>--runtime</code></td>
+<td>Container engine for the default load sink and the <code>--smoke</code> run: <code>docker</code> (default), <code>podman</code>, or <code>nerdctl</code>. The daemonless sinks (<code>--oci-archive</code>, <code>--push</code>) never invoke a runtime, so this is ignored there.</td>
+</tr>
 </tbody>
 </table>
 <p>A full config file, and how to run it:</p>
@@ -861,6 +866,7 @@ file</strong>.</p>
 <a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
 <a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
 <a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="n">max-size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50MB"</span>
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"docker"</span>
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w">                 </span><span class="c1"># binary + all keys come from the file</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:dev<span class="w"> </span>./other<span class="w">   </span><span class="c1"># CLI overrides binary + push</span>
