@@ -9,8 +9,10 @@ branding:
 # which the FROM scratch release image deliberately lacks. So this downloads the signed release
 # binary for the runner arch, verifies it against the release checksums, and runs `pack` on the
 # GitHub-hosted runner (which has Docker). Inputs map to real `pack` flags; the `args` input is the
-# escape hatch for anything without a dedicated input. `--sign` is deliberately left to `args`: it
-# needs `pack --push --sign`, but this action publishes with `docker push`, not the daemonless push.
+# escape hatch for anything without a dedicated input. `--sign` and `--runtime` are deliberately left
+# to `args`: signing needs `pack --push --sign`, and this action publishes with `docker push` (not the
+# daemonless push) — which also means the load engine must be docker, so `--runtime podman|nerdctl`
+# (loads into that engine's store, invisible to `docker push`) has no first-class input here.
 
 inputs:
   binary:
@@ -111,12 +113,6 @@ inputs:
     description: >-
       Fail the pack if the fully-staged image exceeds this size — e.g. `12MB`, `512KiB`, or a bare
       byte count (K/M/G are x1000, Ki/Mi/Gi are x1024).
-    required: false
-    default: ""
-  runtime:
-    description: >-
-      Container engine for the default load sink and the smoke-run: `docker` (default), `podman`,
-      or `nerdctl`. Ignored when pushing or writing an OCI archive (those are daemonless).
     required: false
     default: ""
   args:
@@ -233,7 +229,6 @@ runs:
         IN_SCAN: ${{ inputs.scan }}
         IN_SCAN_FAIL_ON: ${{ inputs.scan-fail-on }}
         IN_MAX_SIZE: ${{ inputs.max-size }}
-        IN_RUNTIME: ${{ inputs.runtime }}
       run: |
         set -euo pipefail
         [ -n "$IN_BINARY" ] || { echo "::error::input 'binary' is required"; exit 1; }
@@ -262,7 +257,6 @@ runs:
         [ -n "$IN_ENTRYPOINT" ] && args+=("--entrypoint" "$IN_ENTRYPOINT")
         [ -n "$IN_WORKDIR" ] && args+=("--workdir" "$IN_WORKDIR")
         [ -n "$IN_MAX_SIZE" ] && args+=("--max-size" "$IN_MAX_SIZE")
-        [ -n "$IN_RUNTIME" ] && args+=("--runtime" "$IN_RUNTIME")
         [ "$IN_SCAN" = "true" ] && args+=("--scan")
         [ -n "$IN_SCAN_FAIL_ON" ] && args+=("--scan-fail-on" "$IN_SCAN_FAIL_ON")
         if [ "$IN_SBOM" = "true" ]; then

@@ -36,7 +36,7 @@ a hardening report, a non-root image, and no Dockerfile. More: [Comparison & lim
 
 | Capability | State |
 |---|---|
-| Pack a dynamic glibc ELF → runnable `FROM scratch` image | ✅ (loaded via `docker load`) |
+| Pack a dynamic glibc ELF → runnable `FROM scratch` image | ✅ (loaded via `docker`/`podman`/`nerdctl`) |
 | `ld.so`-faithful dependency resolution (RPATH/RUNPATH/`$ORIGIN`, interpreter, sonames) | ✅ |
 | glibc **NSS** support staged — name-service lookups like `getent hosts` work | ✅ |
 | **Non-root** by default (UID 65532), reproducible layers | ✅ |
