@@ -584,6 +584,33 @@
   
   
     <li class="md-nav__item">
+      <a href="https://github.com/schubydoo/scratchsmith/blob/main/COMPATIBILITY.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compatibility
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="https://github.com/schubydoo/scratchsmith/blob/main/CONTRIBUTING.md" class="md-nav__link">
         
   
@@ -723,8 +750,11 @@ stable contract — a breaking change to any of them requires a new major versio
 <li><strong>Exit codes</strong> — <code>0</code> on success, <code>2</code> on an argument-parse error, and non-zero on any other failure.</li>
 </ul>
 <p><strong>Not</strong> frozen (may change in any release): human-readable text and warning wording, log output, <code>doctor</code>'s
-exact phrasing, and the exact bytes of the produced image — layers stay reproducible for identical inputs,
-but that is a property, not a frozen API.</p>
+exact phrasing, the Rust <strong>library API</strong> (the crate's <code>pub</code> items exist for its own tests, not as a supported
+API), and the exact bytes of the produced image — layers stay reproducible for identical inputs, but that is a
+property, not a frozen API.</p>
+<p>For how the contract changes over time — the deprecation cycle (keep it working, warn on stderr, remove only in
+the next major) and how each surface is guarded by a test — see <strong><a href="https://github.com/schubydoo/scratchsmith/blob/main/COMPATIBILITY.md">COMPATIBILITY.md</a></strong>.</p>
 
 
 
