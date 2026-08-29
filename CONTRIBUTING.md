@@ -57,6 +57,10 @@ A change that breaks one of these is wrong even if tests pass:
 - **Non-root + reproducible by default.** Images default to a non-root user; layers are
   built deterministically.
 - **Don't overstate.** Docs must not claim a capability the code doesn't have.
+- **Don't break the contract silently.** The CLI flags, `scratchsmith.toml` keys, `--format
+  json` fields, and exit codes are SemVer-stable within a major version. Change them additively
+  in a minor; a removal, rename, or default change is a **major** change that first goes through
+  the deprecation cycle (keep it working, warn on stderr). See **[COMPATIBILITY.md](COMPATIBILITY.md)**.
 
 ## Making a change
 

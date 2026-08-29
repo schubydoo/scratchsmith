@@ -24,5 +24,9 @@ stable contract — a breaking change to any of them requires a new major versio
 - **Exit codes** — `0` on success, `2` on an argument-parse error, and non-zero on any other failure.
 
 **Not** frozen (may change in any release): human-readable text and warning wording, log output, `doctor`'s
-exact phrasing, and the exact bytes of the produced image — layers stay reproducible for identical inputs,
-but that is a property, not a frozen API.
+exact phrasing, the Rust **library API** (the crate's `pub` items exist for its own tests, not as a supported
+API), and the exact bytes of the produced image — layers stay reproducible for identical inputs, but that is a
+property, not a frozen API.
+
+For how the contract changes over time — the deprecation cycle (keep it working, warn on stderr, remove only in
+the next major) and how each surface is guarded by a test — see **[COMPATIBILITY.md](https://github.com/schubydoo/scratchsmith/blob/main/COMPATIBILITY.md)**.

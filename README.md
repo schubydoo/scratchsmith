@@ -128,7 +128,7 @@ a CycloneDX SBOM of its own dependency graph. The exact `gh attestation` / `cosi
 - **[Verifying releases](docs/verifying.md)** — cosign signatures, SLSA provenance, and the SBOM.
 - **[Comparison & limitations](docs/comparison.md)** — how Scratchsmith compares, and what it does not do.
 - **[Architecture](docs/architecture.md)** — how resolve → stage → assemble works, and the 1.0 stability contract.
-- **[Contributing](CONTRIBUTING.md)** · **[Security](SECURITY.md)** · **[Code of Conduct](CODE_OF_CONDUCT.md)**
+- **[Contributing](CONTRIBUTING.md)** · **[Compatibility](COMPATIBILITY.md)** · **[Security](SECURITY.md)** · **[Code of Conduct](CODE_OF_CONDUCT.md)**
 
 ## Contributing
 
