@@ -21,7 +21,8 @@ A breaking change to any of these requires a new **major** version. See the
 
 - **The Rust library API.** The `scratchsmith` crate exposes `pub` items so its own tests can
   reach them; it is **not** a supported library. Do not depend on `scratchsmith::…` as an API —
-  drive the CLI instead. (CI runs `cargo-semver-checks` only informationally, to surface changes.)
+  drive the CLI instead. (A `cargo-semver-checks` CI job surfaces `pub`-API changes informationally
+  — a heads-up, never a gate.)
 - Human-readable text: help wording, warnings, log output, `doctor`'s phrasing, error messages.
 - The exact bytes of the produced image (layers stay reproducible for identical inputs — that's a
   property, not a frozen API).
@@ -59,18 +60,20 @@ always a major change.** We don't try to warn our way around it.
 
 ## How this is enforced
 
-The contract is guarded by tests, so a breaking change can't land unnoticed — it makes a test
-fail, which is the cue to either fix the regression or make it a deliberate, reviewed major change:
+Each surface is guarded by a test — and, for the library API, an informational CI job — that lands
+with this policy. A breaking change fails a check rather than landing silently, which is the cue to
+either fix the regression or make it a deliberate, reviewed major change:
 
-- **CLI surface** — `tests/cli_surface.rs` snapshots the whole flag tree to `tests/cli_surface.txt`.
-  Any surface change fails until the golden is regenerated (`BLESS=1 cargo test --test cli_surface`).
+- **CLI surface** — a golden snapshot, `tests/cli_surface.rs` → `tests/cli_surface.txt`, of the
+  whole flag tree; any surface change fails until the golden is regenerated
+  (`BLESS=1 cargo test --test cli_surface`).
 - **Config keys** — `parses_a_full_config` exercises every key, and `#[serde(deny_unknown_fields)]`
   rejects a renamed/removed key.
 - **`--format json`** — `json_report_schema_is_stable` / `index_report_schema_is_stable` pin the
   exact key sets.
-- **Exit codes** — `exit_codes_follow_the_v1_contract` pins `0` / `2` / non-zero.
-- **Library API** — an informational `cargo-semver-checks` CI job surfaces `pub`-API changes (not
-  a gate; the library is out of contract).
+- **Exit codes** — the exit-code tests in `tests/cli.rs` pin `0` / `2` / non-zero.
+- **Library API** — a non-blocking `cargo-semver-checks` CI job surfaces `pub`-API changes as a
+  heads-up (not a gate; the library is out of contract).
 
 ## Reporting a compatibility regression
 
