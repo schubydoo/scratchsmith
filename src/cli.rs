@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 /// Output format for the pack report.
 #[derive(Clone, Copy, Debug, ValueEnum)]
+#[non_exhaustive] // may gain formats in a minor; not a stable exhaustive library API
 pub enum Format {
     Text,
     Json,
@@ -16,6 +17,7 @@ pub enum Format {
 /// three we document and exercise in CI, so `--help` lists exactly what is
 /// supported rather than clap_complete's wider (untested) set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+#[non_exhaustive] // may gain shells in a minor; not a stable exhaustive library API
 pub enum Shell {
     Bash,
     Zsh,
@@ -49,6 +51,9 @@ pub struct Cli {
 // Pack carries many flags, dwarfing Lint/Doctor. This enum is parsed once at startup,
 // so the size difference is irrelevant; boxing it would only add noise.
 #[allow(clippy::large_enum_variant)]
+// non_exhaustive: the library API is not a stable contract (COMPATIBILITY.md), and new
+// subcommands land in minor releases — marking it so keeps that a non-breaking library change.
+#[non_exhaustive]
 pub enum Command {
     /// Pack a dynamic ELF binary into a minimal scratch image.
     Pack {

@@ -13,6 +13,7 @@ use std::process::Command;
 /// SPDX is offered for license/compliance consumers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")] // match the CLI value names (cyclonedx-json / spdx-json)
+#[non_exhaustive] // may gain formats in a minor; not a stable exhaustive library API
 pub enum SbomFormat {
     CyclonedxJson,
     SpdxJson,
@@ -112,6 +113,7 @@ pub enum Severity {
 /// Where grype reads its packages from: the SBOM syft already wrote (reuse it), or the
 /// staged rootfs directly when no SBOM was generated.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive] // may gain scan sources in a minor; not a stable exhaustive library API
 pub enum ScanSource {
     Sbom(PathBuf),
     Rootfs(PathBuf),

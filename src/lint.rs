@@ -10,6 +10,7 @@ use std::path::Path;
 /// A hardening weakness that can gate a build (`--fail-on`). Each variant fails when
 /// the corresponding mitigation is missing (or, for `partial-relro`, not full).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[non_exhaustive] // may gain hardening gates in a minor; not a stable exhaustive library API
 pub enum Gate {
     NoPie,
     NoRelro,

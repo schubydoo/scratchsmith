@@ -161,6 +161,7 @@ pub struct PackOptions {
 /// Where a pack delivers its result. Every sink shares the resolve → stage pipeline and
 /// differs only in delivery, so adding one (the daemonless OCI archive / registry push
 /// are the next two) is a new variant + a `pack` arm, not a new top-level entry point.
+#[non_exhaustive] // new delivery sinks land in minors; not a stable exhaustive library API
 pub enum Sink {
     /// Stage the rootfs into this directory and build no image (`--no-build --output`).
     Rootfs(PathBuf),
