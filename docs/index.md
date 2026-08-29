@@ -55,6 +55,7 @@ a hardening report, a non-root image, and no Dockerfile. More: [Comparison & lim
 | **Daemonless OCI archive** — `--oci-archive <file>` (no daemon; skopeo/buildah/registry-ready) | ✅ |
 | **Daemonless registry push** — `--push <ref>` (no daemon; uses your docker credentials) | ✅ |
 | **Signing the image `pack` produces** — `--push --sign` (cosign keyless, by digest) | ✅ |
+| **Multi-arch image index** — `index` (combine per-arch pushes into one tag, daemonless) | ✅ |
 
 ## Next
 

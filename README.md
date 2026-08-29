@@ -65,6 +65,7 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 | **Daemonless OCI archive** — `--oci-archive <file>` (no daemon; skopeo/buildah/registry-ready) | ✅ |
 | **Daemonless registry push** — `--push <ref>` (no daemon; uses your docker credentials) | ✅ |
 | **Signing the image `pack` produces** — `--push --sign` (cosign keyless, by digest) | ✅ |
+| **Multi-arch image index** — `index` (combine per-arch pushes into one tag, daemonless) | ✅ |
 
 ## Install
 

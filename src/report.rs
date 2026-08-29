@@ -111,6 +111,43 @@ impl PackReport {
     }
 }
 
+/// One per-arch child listed in a pushed image index.
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexManifest {
+    /// The source reference the user supplied.
+    pub source: String,
+    /// The detected platform, e.g. `linux/amd64`.
+    pub platform: String,
+    /// The child manifest's digest (`sha256:…`).
+    pub digest: String,
+}
+
+/// The outcome of assembling a multi-arch image index (`index` subcommand). Fields are
+/// stable so the JSON can gate CI, like `PackReport`.
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexReport {
+    /// The index reference that was pushed (the target tag).
+    pub pushed: String,
+    /// The per-arch children assembled into the index, in input order.
+    pub manifests: Vec<IndexManifest>,
+    /// The signed by-digest reference, if `--sign` signed the pushed index.
+    pub signed: Option<String>,
+}
+
+impl IndexReport {
+    /// Human-readable rendering (the `--format text` output).
+    pub fn to_text(&self) -> String {
+        let mut out = format!("pushed index {}\n", self.pushed);
+        for m in &self.manifests {
+            out.push_str(&format!("  {} {} ({})\n", m.platform, m.digest, m.source));
+        }
+        if let Some(signed) = &self.signed {
+            out.push_str(&format!("signed {signed}\n"));
+        }
+        out.trim_end().to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,5 +361,60 @@ mod tests {
             signed: None,
         };
         assert!(report.to_text().contains("staged to /out/rootfs"));
+    }
+
+    #[test]
+    fn index_report_renders_text_and_json() {
+        let report = IndexReport {
+            pushed: "ghcr.io/you/app:1.0".into(),
+            manifests: vec![
+                IndexManifest {
+                    source: "ghcr.io/you/app:1.0-amd64".into(),
+                    platform: "linux/amd64".into(),
+                    digest: "sha256:aaa".into(),
+                },
+                IndexManifest {
+                    source: "ghcr.io/you/app:1.0-arm64".into(),
+                    platform: "linux/arm64".into(),
+                    digest: "sha256:bbb".into(),
+                },
+            ],
+            signed: Some("ghcr.io/you/app@sha256:idx".into()),
+        };
+        let text = report.to_text();
+        assert!(text.contains("pushed index ghcr.io/you/app:1.0"));
+        assert!(text.contains("linux/amd64 sha256:aaa (ghcr.io/you/app:1.0-amd64)"));
+        assert!(text.contains("signed ghcr.io/you/app@sha256:idx"));
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["pushed"], "ghcr.io/you/app:1.0");
+        assert_eq!(json["manifests"][1]["platform"], "linux/arm64");
+        assert_eq!(json["signed"], "ghcr.io/you/app@sha256:idx");
+    }
+
+    #[test]
+    fn index_report_schema_is_stable() {
+        // The `index --format json` output is a SemVer-covered contract (v1.1): CI can gate
+        // on it. Pin the top-level key set and the `manifests[]` sub-schema so any add,
+        // remove, or rename is a deliberate change caught here, never silent drift.
+        let report = IndexReport {
+            pushed: "reg/app:1".into(),
+            manifests: vec![IndexManifest {
+                source: "reg/app:1-amd64".into(),
+                platform: "linux/amd64".into(),
+                digest: "sha256:aaa".into(),
+            }],
+            signed: None,
+        };
+        let json = serde_json::to_value(&report).unwrap();
+        let sorted_keys = |v: &serde_json::Value| {
+            let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            k.sort();
+            k
+        };
+        assert_eq!(sorted_keys(&json), ["manifests", "pushed", "signed"]);
+        assert_eq!(
+            sorted_keys(&json["manifests"][0]),
+            ["digest", "platform", "source"]
+        );
     }
 }
