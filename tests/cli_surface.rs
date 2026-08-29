@@ -1,9 +1,15 @@
 //! Golden snapshot of the **full CLI surface** — every subcommand and every flag with its
-//! short alias, whether it takes a value, its default, whether it's required, and its enum
-//! values. This pins the v1.0 CLI contract: a removed or renamed flag, a dropped short
-//! alias, a changed default, a flipped required-ness, or a removed enum value all change
-//! this snapshot and fail the test — forcing a conscious review (and a major bump if the
-//! change is breaking). See `COMPATIBILITY.md`.
+//! short alias, whether it takes a value or is repeatable, whether it's required, its
+//! clap-declared default, and its enum values. This pins the v1.0 CLI contract: a removed or
+//! renamed flag, a dropped short alias, a changed clap default, a flipped required-ness, or a
+//! removed enum value all change this snapshot and fail the test — forcing a conscious review
+//! (and a major bump if the change is breaking). See the compatibility policy in
+//! COMPATIBILITY.md (it ships alongside this test).
+//!
+//! Scope caveat: this captures the surface clap *declares*. Effective defaults applied later
+//! in `dispatch()` via `.unwrap_or(...)` — e.g. `--sbom-format` defaulting to `cyclonedx-json`,
+//! or `--scan-fail-on` implying `--scan` — are NOT in this snapshot. A change to one of those
+//! dispatch-applied defaults won't trip this test, so review those deliberately.
 //!
 //! After an INTENTIONAL, reviewed surface change, regenerate the golden:
 //!   BLESS=1 cargo test --test cli_surface
