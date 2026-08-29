@@ -1,6 +1,7 @@
 /scratch/
 /target/
 /site/
+/dist/
 /.claude/
 /.worktreeinclude
 /CLAUDE.local.md
