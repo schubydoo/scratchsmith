@@ -838,6 +838,32 @@ fn index_assembles_a_pushed_image_into_an_index() {
         }
     }
 
+    // Drive the same thing through the CLI `index` subcommand (covers the dispatch arm,
+    // report building, and text output — the direct call above skips them).
+    let cli_target = "localhost:5098/scratchsmith/idx:cli";
+    let cli = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["index", cli_target, child])
+        .output()
+        .unwrap();
+    assert!(
+        cli.status.success(),
+        "cli index failed: {}",
+        String::from_utf8_lossy(&cli.stderr)
+    );
+    assert!(String::from_utf8_lossy(&cli.stdout).contains("pushed index"));
+
+    // Passing an index as a source is rejected — the pushed `:multi` is an index, so feeding
+    // it back in must fail with a clear message (covers the media-type guard).
+    let err = scratchsmith::registry::push_index(
+        "localhost:5098/scratchsmith/idx:nested",
+        &[target.to_string()],
+    )
+    .expect_err("an index passed as a source must be rejected");
+    assert!(
+        format!("{err:#}").contains("multi-arch index"),
+        "got: {err}"
+    );
+
     let _ = Command::new("docker")
         .args(["rm", "-f", "ss-test-reg-idx"])
         .output();

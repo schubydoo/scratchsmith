@@ -821,6 +821,21 @@ mod tests {
     }
 
     #[test]
+    fn build_index_rejects_a_duplicate_variant_and_names_it() {
+        // Same os/arch/variant is a duplicate; the message renders the variant via
+        // platform_label's Some(variant) arm (os/arch/variant).
+        let children = vec![
+            child_v("arm", "linux", Some("v7"), "sha256:a"),
+            child_v("arm", "linux", Some("v7"), "sha256:b"),
+        ];
+        let err = build_index(&children).expect_err("same os/arch/variant must be rejected");
+        assert!(
+            format!("{err:#}").contains("same platform linux/arm/v7"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
     fn push_index_rejects_a_cross_repository_source() {
         // A child in a sibling repo can't be referenced by an index in another repo. This
         // is caught synchronously, before any network call — so no registry is contacted.
