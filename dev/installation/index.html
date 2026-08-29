@@ -869,6 +869,10 @@ and provenance first (see <a href="../verifying/">Verifying releases</a>):</p>
 <p>Pull the signed image:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>docker<span class="w"> </span>pull<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:latest
 </code></pre></div>
+<p><code>:latest</code> is a minimal <code>FROM scratch</code> image — it runs <code>--version</code>, <code>lint</code>, <code>doctor</code>, and
+<code>--completions</code>, but <strong>not <code>pack</code></strong> (a scratch image has none of the toolchain <code>pack</code> needs). To run
+<code>pack</code> inside a container, pull the <strong><code>:toolbox</code></strong> image instead (Wolfi base + the full toolchain);
+see the <a href="../usage/">toolbox section in Usage</a>.</p>
 <h2 id="build-from-source">Build from source<a class="headerlink" href="#build-from-source" title="Permanent link">&para;</a></h2>
 <p>Rust <strong>1.96+</strong>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/schubydoo/scratchsmith

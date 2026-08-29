@@ -469,6 +469,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#run-pack-in-a-container-the-toolbox-image" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run pack in a container — the :toolbox image
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -774,6 +785,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#run-pack-in-a-container-the-toolbox-image" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run pack in a container — the :toolbox image
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -859,6 +881,24 @@ healthchecks.</p>
 <h2 id="in-ci">In CI<a class="headerlink" href="#in-ci" title="Permanent link">&para;</a></h2>
 <p>To pack in a GitHub Actions workflow with the composite action instead of shelling out to the CLI,
 see <strong><a href="../github-action/">GitHub Action</a></strong>.</p>
+<h2 id="run-pack-in-a-container-the-toolbox-image">Run <code>pack</code> in a container — the <code>:toolbox</code> image<a class="headerlink" href="#run-pack-in-a-container-the-toolbox-image" title="Permanent link">&para;</a></h2>
+<p>The <code>FROM scratch</code> release image can only run <code>--version</code> / <code>lint</code> / <code>doctor</code> / <code>--completions</code>. The <strong><code>:toolbox</code></strong>
+image bundles the full <code>pack</code> toolchain (ldconfig, strip, syft, grype, cosign, upx, tini, the
+docker CLI) on a Wolfi base, so <code>pack</code> itself runs inside a container:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Daemonless — no socket needed; write an OCI archive or push straight to a registry.</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span>pack<span class="w"> </span>--oci-archive<span class="w"> </span>app.oci.tar<span class="w"> </span>./app
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">  </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span>./app
+</code></pre></div>
+<p>Prefer the daemonless sinks (<code>--push</code> / <code>--oci-archive</code>) in CI. The <strong>default <code>docker load</code> sink</strong>
+needs a host engine, so mount its socket — <strong>which is root-equivalent on the host</strong>, so use it only
+where you trust the workflow:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/var/run/docker.sock:/var/run/docker.sock<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span>pack<span class="w"> </span>./app
+</code></pre></div>
+<p>Tags: <code>:toolbox</code> (latest), <code>:X.Y.Z-toolbox</code>, <code>:X.Y-toolbox</code>. Verify its signature exactly like the
+scratch image — see <a href="../verifying/">Verifying releases</a>.</p>
 
 
 
