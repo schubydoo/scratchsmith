@@ -621,10 +621,16 @@ mod tests {
 
     #[test]
     fn image_config_stamps_the_host_architecture() {
-        // The config must carry a real GOARCH value, never the old hardcoded "amd64" on a
-        // non-amd64 host. Assert it matches the host lookup and is one of the GOARCH names.
+        // Wiring check: the config carries the mapped host arch. Correctness of the mapping
+        // itself is pinned by `oci_arch_maps_*`; here we pin the concrete GOARCH on the
+        // arches CI runs, so a mis-mapping (or a revert to a wrong hardcode) is caught too.
         let cfg = image_config(Path::new("/app"), "abc", &ImageConfig::default());
-        assert_eq!(cfg["architecture"], host_architecture());
         assert_eq!(cfg["os"], "linux");
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(cfg["architecture"], "amd64");
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(cfg["architecture"], "arm64");
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        assert_eq!(cfg["architecture"], host_architecture());
     }
 }
