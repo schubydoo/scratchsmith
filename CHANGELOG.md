@@ -6,6 +6,43 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0:
 breaking changes bump the minor).
+## 1.1.0 (2026-08-30)
+
+### Features
+
+#### `index` — assemble a multi-arch image index, daemonless ([#94](https://github.com/schubydoo/scratchsmith/pull/94))
+
+New `scratchsmith index <target> <source>...` subcommand assembles the per-arch images a CI
+matrix already pushed into a multi-arch OCI image index and pushes it to `<target>` — the
+daemonless equivalent of `docker manifest create`, with no Docker or buildx involved. Each
+source's platform is read from its own image config. Add `--sign` to cosign-sign the index by
+digest.
+
+#### `--runtime` — pack with podman or nerdctl, not just docker ([#100](https://github.com/schubydoo/scratchsmith/pull/100))
+
+`pack --runtime <docker|podman|nerdctl>` (and the matching `runtime` key in `scratchsmith.toml`)
+selects the container engine for the default load sink and the `--smoke` run, so podman/nerdctl
+users can pack without Docker. It defaults to `docker`; the daemonless sinks (`--oci-archive`,
+`--push`) never invoke a runtime and are unaffected.
+
+#### `:toolbox` image — run `pack` inside a container ([#101](https://github.com/schubydoo/scratchsmith/pull/101))
+
+A new `ghcr.io/schubydoo/scratchsmith:toolbox` image bundles the full `pack` toolchain (ldconfig,
+strip, syft, grype, cosign, upx, tini, and the docker CLI) on a Wolfi base, so `scratchsmith pack`
+runs *inside* a container — unlike the minimal `FROM scratch` release image, which can only run
+`--version`/`lint`/`doctor`. It's cosign-signed and multi-arch, published on release with
+`:toolbox` / `:X.Y.Z-toolbox` tags. Prefer the daemonless `--push` / `--oci-archive` sinks in CI;
+the default `docker load` sink needs a mounted (root-equivalent) docker socket.
+
+### Fixes
+
+#### Stamp the host architecture into the image config ([#93](https://github.com/schubydoo/scratchsmith/pull/93))
+
+The generated image config previously always recorded `architecture: amd64`. Packing on an
+arm64 host therefore produced an image mislabeled as amd64, which runtimes could refuse to run
+and which broke multi-arch image indexes. Scratchsmith now records the real host architecture
+(`amd64`, `arm64`, …), so a per-arch CI matrix produces correctly-labeled images.
+
 ## 1.0.0 (2026-08-27)
 
 ### Features
