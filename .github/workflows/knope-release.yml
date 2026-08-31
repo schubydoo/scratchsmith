@@ -88,7 +88,7 @@ jobs:
           use-cache: false
       # Pinned prebuilt (not `cargo install`): cargo-zigbuild tracks zig's breaking
       # CLI, so a skew would only surface at release time. Renovate bumps the pin.
-      - uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7 # v2.86.8
+      - uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: cargo-zigbuild@0.23.0
       - name: Build (static musl via zig)
@@ -163,7 +163,7 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Install syft (release SBOM generator)
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        uses: anchore/sbom-action/download-syft@aa80c8c5bd439a416a62804f2151ab38c671a638 # v0.24.1
       - name: Assemble, checksum, and sign
         run: |
           set -euo pipefail
