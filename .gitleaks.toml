@@ -1,0 +1,16 @@
+# Gitleaks config. Picked up automatically (repo-root `.gitleaks.toml`) by the
+# `secret scan` job in .github/workflows/security.yml.
+#
+# The scan walks the full history of every ref, which includes `gh-pages` — the
+# mkdocs-material site `mike` deploys. Its `search/search_index.json` is the whole
+# docs set minified onto ONE line, so the `curl-auth-user` rule (curl ... -u X
+# within five lines) matches ACROSS unrelated pages: the match opens at the
+# install one-liner and closes ~4 kB later on `docker login ghcr.io -u
+# YOUR_GH_USERNAME`. Both are documentation; the "secret" is that placeholder.
+# The same prose in docs/*.md on main does not match — only the minified index.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated mkdocs-material search index (gh-pages): one line, no secrets"
+paths = ['''(^|/)search/search_index\.json$''']
