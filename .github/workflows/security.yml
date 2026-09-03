@@ -95,7 +95,7 @@ jobs:
       - name: Install zizmor
         # Pinned so a required check never depends on whatever zizmor ships that
         # hour, and so Renovate has a version to bump. Keep in step with the SHAs above.
-        run: uv tool install zizmor==1.29.0
+        run: uv tool install zizmor==1.30.0
       # Advisory: `|| true` swallows zizmor's non-zero exit (findings OR a tool
       # crash) so it never gates the merge. The upload then runs only when a SARIF
       # was actually written, so a crash that leaves a 0-byte file can't invert into
