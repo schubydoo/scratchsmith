@@ -30,10 +30,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-      # No rust-cache: this job builds a container image (a runtime artifact), and a shared
-      # build cache is a poisoning vector for it (zizmor cache-poisoning). A cold debug build
-      # is cheap enough for a path-triggered selftest.
+      # No rust-cache (cache: false): this job builds a container image (a runtime artifact),
+      # and a shared build cache is a poisoning vector for it (zizmor cache-poisoning). A cold
+      # debug build is cheap enough for a path-triggered selftest.
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          toolchain: stable
+          cache: false
+          rustflags: ""
       - name: Build scratchsmith (HEAD) and lay out dist/
         # A debug glibc build is enough to validate the image (Wolfi is glibc); the release
         # image packs the static musl release binary instead.
