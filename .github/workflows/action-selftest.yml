@@ -31,7 +31,7 @@ jobs:
       # whole resolve → stage → assemble path.
       - name: Pack a system binary → image
         id: image
-        uses: ./
+        uses: $/
         with:
           binary: /usr/bin/id
           strip: "true"
@@ -47,7 +47,7 @@ jobs:
           echo "packed and ran $IMAGE"
       - name: Pack the same binary → rootfs only (no daemon)
         id: rootfs
-        uses: ./
+        uses: $/
         with:
           binary: /usr/bin/id
           output: ./staged
@@ -65,7 +65,7 @@ jobs:
       # get their own pass/fail tests further down.
       - name: Pack with image-config inputs → image
         id: meta
-        uses: ./
+        uses: $/
         with:
           binary: /usr/bin/id
           entrypoint: /usr/bin/id
@@ -100,7 +100,7 @@ jobs:
       - name: Pack with an impossible max-size (must fail the build)
         id: maxsize
         continue-on-error: true
-        uses: ./
+        uses: $/
         with:
           binary: /usr/bin/id
           max-size: 1KB
@@ -124,7 +124,7 @@ jobs:
         run: dirname "$GRYPE_CMD" >> "$GITHUB_PATH"
       - name: Pack with the scan input → image
         id: scan
-        uses: ./
+        uses: $/
         with:
           binary: /usr/bin/id
           scan: "true"
