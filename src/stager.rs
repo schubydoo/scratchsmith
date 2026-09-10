@@ -569,6 +569,7 @@ mod tests {
             }),
             libs: vec![],
             missing: vec![],
+            edges: vec![],
         };
         stage_files(&binary, &res, &dest).unwrap();
 
@@ -596,6 +597,7 @@ mod tests {
                 path: real.clone(),
             }],
             missing: vec![],
+            edges: vec![],
         };
         stage_files(&binary, &res, &dest).unwrap();
 
@@ -633,6 +635,7 @@ mod tests {
             interpreter: None,
             libs: vec![],
             missing: vec!["libmissing.so".into()],
+            edges: vec![],
         };
         let err = stage_files(&binary, &res, &dest).unwrap_err();
         assert!(err.to_string().contains("libmissing.so"));
@@ -656,6 +659,7 @@ mod tests {
                 path: libc,
             }],
             missing: vec![],
+            edges: vec![],
         };
         let report = stage_default_includes(&res, &dest, &NssSelection::default()).unwrap();
 
@@ -691,6 +695,7 @@ mod tests {
                 path: libc,
             }],
             missing: vec![],
+            edges: vec![],
         };
         let report = stage_default_includes(&res, &dest, &NssSelection::default()).unwrap();
 
@@ -717,6 +722,7 @@ mod tests {
                 path: libc,
             }],
             missing: vec![],
+            edges: vec![],
         };
         (tmp, res, dest)
     }

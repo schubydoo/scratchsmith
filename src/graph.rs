@@ -1,45 +1,62 @@
 //! Print a binary's resolved dependency tree (the `graph` subcommand). Reuses the
-//! resolver's transitive resolution, then records each object's direct DT_NEEDED so
-//! the parent->child edges can be rendered. A read-only audit view: it stages nothing.
+//! resolver's transitive resolution and its recorded parent->child edges. A read-only
+//! audit view: it stages nothing.
 
 use crate::report::{DepGraphReport, DepNode};
 use crate::resolver::{self, Sysroot};
-use anyhow::{Context, Result};
+use anyhow::{bail, Result};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Resolve `binary` against the host root (honoring `--include` like `pack`) and build
-/// its dependency graph: one node per resolved object, each carrying its direct deps.
+/// its dependency graph: one node per resolved object, keyed by real path, with edges
+/// pointing at real paths. Keying by path (not soname) means every edge resolves to a
+/// node and two objects never collide on one key.
 pub fn build(binary: &Path, includes: &[String]) -> Result<DepGraphReport> {
     let resolution = resolver::resolve_with_includes(binary, &Sysroot::new("/"), includes)?;
 
-    // The binary's own direct deps, plus the --include additions the resolver treats as
-    // direct deps of the binary, so the root shows exactly what `pack` would stage.
-    let mut root_needed = resolver::read_elf_info(binary)
-        .with_context(|| format!("reading {}", binary.display()))?
-        .needed;
-    root_needed.extend(includes.iter().cloned());
+    // The resolver canonicalizes the binary; its edges' `from` uses that path, so match it.
+    let root_id = std::fs::canonicalize(binary)
+        .unwrap_or_else(|_| binary.to_path_buf())
+        .display()
+        .to_string();
 
-    let mut nodes = Vec::with_capacity(resolution.libs.len() + 1);
-    nodes.push(DepNode {
-        name: file_name(binary),
-        path: binary.display().to_string(),
-        needs: dedup(root_needed),
-    });
-    // Each resolved lib's own direct deps. A file that will not parse is a leaf, matching
-    // how the resolver treats it (it keeps such a file but walks no further).
+    // Display name per object id: the binary's file name for the root, else the soname the
+    // loader searched for (the name it is staged under).
+    let mut name_by_id: BTreeMap<String, String> = BTreeMap::new();
+    name_by_id.insert(root_id.clone(), file_name(binary));
     for lib in &resolution.libs {
-        let needs = resolver::read_elf_info(&lib.path)
-            .map(|i| i.needed)
-            .unwrap_or_default();
-        nodes.push(DepNode {
-            name: lib.soname.clone(),
-            path: lib.path.display().to_string(),
-            needs: dedup(needs),
-        });
+        name_by_id
+            .entry(lib.path.display().to_string())
+            .or_insert_with(|| lib.soname.clone());
     }
 
+    // Group edges by parent: resolved children become `needs` (child ids), unresolved
+    // sonames become that node's `missing`.
+    let mut needs: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut missing_by: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for e in &resolution.edges {
+        let from = e.from.display().to_string();
+        match &e.to {
+            Some(to) => push_unique(needs.entry(from).or_default(), to.display().to_string()),
+            None => push_unique(missing_by.entry(from).or_default(), e.soname.clone()),
+        }
+    }
+
+    let mut nodes: Vec<DepNode> = name_by_id
+        .into_iter()
+        .map(|(id, name)| DepNode {
+            needs: needs.remove(&id).unwrap_or_default(),
+            missing: missing_by.remove(&id).unwrap_or_default(),
+            name,
+            id,
+        })
+        .collect();
+    // Root first, then the rest by id — a stable, testable order.
+    nodes.sort_by(|a, b| (a.id != root_id, &a.id).cmp(&(b.id != root_id, &b.id)));
+
     Ok(DepGraphReport {
-        root: file_name(binary),
+        root: root_id,
         interpreter: resolution
             .interpreter
             .as_ref()
@@ -49,6 +66,17 @@ pub fn build(binary: &Path, includes: &[String]) -> Result<DepGraphReport> {
     })
 }
 
+/// Fail loudly when the graph has unresolved dependencies, so a text-mode CI gate
+/// (`scratchsmith graph app`) does not pass on an image that could not be built. Callers
+/// print the report first, then call this for the exit code.
+pub fn check_complete(report: &DepGraphReport) -> Result<()> {
+    if report.missing.is_empty() {
+        Ok(())
+    } else {
+        bail!("unresolved dependencies: {}", report.missing.join(", "));
+    }
+}
+
 // The final path component as a String; the whole path when it has none.
 fn file_name(path: &Path) -> String {
     path.file_name()
@@ -56,14 +84,11 @@ fn file_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-// Drop repeated sonames while keeping first-seen order — DT_NEEDED can list a soname
-// twice, and a duplicated edge only clutters the tree.
-fn dedup(sonames: Vec<String>) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    sonames
-        .into_iter()
-        .filter(|s| seen.insert(s.clone()))
-        .collect()
+// Append `item` to `v` unless already present (a parent can list a soname twice).
+fn push_unique(v: &mut Vec<String>, item: String) {
+    if !v.contains(&item) {
+        v.push(item);
+    }
 }
 
 #[cfg(test)]
@@ -71,17 +96,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dedup_keeps_first_seen_order() {
-        let out = dedup(vec![
-            "libc.so.6".into(),
-            "libm.so.6".into(),
-            "libc.so.6".into(),
-        ]);
-        assert_eq!(out, vec!["libc.so.6".to_string(), "libm.so.6".to_string()]);
+    fn push_unique_drops_repeats() {
+        let mut v = Vec::new();
+        push_unique(&mut v, "a".into());
+        push_unique(&mut v, "b".into());
+        push_unique(&mut v, "a".into());
+        assert_eq!(v, vec!["a".to_string(), "b".to_string()]);
     }
 
     #[test]
     fn file_name_falls_back_to_full_path() {
         assert_eq!(file_name(Path::new("/usr/bin/id")), "id");
+    }
+
+    #[test]
+    fn check_complete_fails_only_when_missing() {
+        let mut report = DepGraphReport {
+            root: "/app".into(),
+            interpreter: None,
+            nodes: vec![],
+            missing: vec![],
+        };
+        assert!(check_complete(&report).is_ok());
+        report.missing = vec!["libx.so".into()];
+        let err = check_complete(&report).unwrap_err();
+        assert!(err.to_string().contains("libx.so"), "{err}");
     }
 }

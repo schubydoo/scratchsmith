@@ -145,7 +145,12 @@ fn graph_json_is_valid_and_lists_nodes() {
         String::from_utf8_lossy(&out.stderr)
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid json");
-    assert_eq!(v["root"], "id");
+    // root is the binary's real path; the first node is the root, named by its file name.
+    assert!(
+        v["root"].as_str().unwrap().ends_with("id"),
+        "root should be the id binary path: {v}"
+    );
+    assert_eq!(v["nodes"][0]["name"], "id");
     assert!(
         v["nodes"].as_array().map(|a| a.len() >= 2).unwrap_or(false),
         "expected the binary plus libraries: {v}"

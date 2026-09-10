@@ -416,7 +416,9 @@ fn dispatch(cli: Cli) -> Result<()> {
                 Format::Text => println!("{}", report.to_text()),
                 Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
             }
-            Ok(())
+            // Print the graph first, then fail loudly on any unresolved dependency so a
+            // text-mode CI gate does not pass on a binary that could not be packed.
+            crate::graph::check_complete(&report)
         }
     }
 }
