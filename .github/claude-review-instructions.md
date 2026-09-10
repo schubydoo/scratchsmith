@@ -112,17 +112,55 @@ FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, pos
 
 ## Output
 
-- Post every line-specific finding as an **inline comment**, grouped into **exactly one
-  submitted review**. Not a separate review per finding.
-- Put the **summary table** (every finding with file + line) in the **body of the
-  submitted review**, nowhere else — it survives inline anchors going stale.
-- **Do not repeat findings elsewhere.** Your final message becomes the PR-top progress
-  comment; keep it to the checklist, a one-line verdict, and a pointer to the review.
-- Submit as a **COMMENT** review. Never `REQUEST_CHANGES` / `APPROVE` — advisory only.
-- Do not number findings as `#1` — GitHub turns `#`+digits into a link to an unrelated
-  issue/PR. Use "Finding 1" or a short description.
-- Link code with the **full** SHA + a line range:
+- Post every line-specific finding as an **inline comment**, and group them all into
+  **exactly one submitted review**. Do not submit a separate review per finding: each
+  inline comment becomes a thread the maintainer replies to and resolves, and one grouped
+  review is the difference between one pass over the PR and several.
+- **How to submit it, exactly.** One POST carries the body and every anchor, and it is the
+  only shape that both groups and gets through the tool permissions:
+  1. Use the `Write` tool to create `review.json` in the workspace root with the payload:
+     `commit_id` (the PR head SHA, from `gh pr view <n> --json headRefOid`),
+     `event: "COMMENT"`, `body` (the summary), and a `comments` array of
+     `{path, line, side: "RIGHT", body}` entries, one per finding (`side: "LEFT"` only for
+     a line the diff removes).
+  2. Run `gh api repos/<owner>/<repo>/pulls/<n>/reviews --input review.json`.
+
+  Every `line` must be a line the diff touches, on that side. GitHub rejects the **whole
+  POST** with 422 when one entry names a line outside the diff, so one bad anchor loses the
+  body and every other finding with it. To flag an unchanged line, anchor the comment to the
+  nearest changed line and name the real line in the comment body. If the POST returns 422,
+  re-read `review.json`, correct that entry with `Write`, and repeat the same POST. Never
+  fall back to a shape that posts findings one at a time.
+
+  **Never post a standalone inline comment.** GitHub wraps each standalone review comment
+  (`POST .../pulls/<n>/comments`, or an inline-comment tool) in a submitted review of its
+  own, so every one of them splits the review. Every anchor rides in the `comments` array of
+  the single POST above; a clarification after the fact is a reply on the thread, not a new
+  comment. These are refused, so do not reach for them: JSON inline on the command line,
+  shell redirects (`> file`), compound commands (`;`, `&&`, `||`), `python3`, `ls`, `git`.
+  `gh pr review` cannot attach inline comments. A refused attempt is a denial the workflow
+  counts.
+- Put the **summary table** — every finding with its file and line — in the **body of the
+  submitted review**, and nowhere else. It survives inline anchors going stale (once the PR
+  moves, GitHub marks them outdated and drops the line number).
+- **Do not repeat the findings anywhere else.** Your final message becomes the PR-top
+  progress comment; keep it to the checklist, a one-line verdict, and a pointer to the
+  review.
+- Submit as a **COMMENT** review. Never `REQUEST_CHANGES` and never `APPROVE` — advisory
+  only; it must not gate a merge.
+- Do not number findings as `#1`, `#2`. GitHub turns a hash followed by digits into a link
+  to an unrelated issue or PR. Use "Finding 1", "(1)", or a short description.
+- Link code with the **full** SHA and a line range:
   `https://github.com/schubydoo/scratchsmith/blob/<full-sha>/path/file.rs#L40-L46`
-- Lead the summary with a one-line tally (`2 important, 3 nits`); say "No important
-  findings" plainly when true.
-- Use a ```suggestion``` block only when committing it fixes the issue **entirely**.
+- The **first line** of the review body is the tally, in exactly this lowercase form:
+  `2 important, 3 nits` (singular when a count is 1: `1 important, 1 nit`), and
+  `0 important, 0 nits` for a clean review, optionally followed by "No important findings".
+  Nothing goes above it, not even a `## Previous findings` heading. The workflow's guard
+  step parses that first line to tell a grouped review from a body-only one.
+- Use a committable ```suggestion``` block only when committing it fixes the issue
+  **entirely**. If follow-up work is needed, describe the fix instead.
+- **Findings keep their calibration.** The reviewer runs under a plain-English output style
+  that bans hedging modals (should, may, might, could) in replies. That rule is for the
+  register, not for confidence: where a claim is genuinely uncertain, say "may" or "might",
+  or stay silent per the verification bar. Never promote a hedge to "must" to satisfy the
+  style.
