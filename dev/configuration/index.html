@@ -825,6 +825,16 @@ file</strong>.</p>
 <td>Name-service (NSS) modules to stage for glibc name lookups: <code>files</code>, <code>dns</code>, or <code>none</code> (list). Fewer modules trim CVE surface. A mode without <code>files</code> also drops <code>/etc/passwd</code> and <code>/etc/group</code>, which glibc reads through the <code>files</code> module. Default: <code>files</code> and <code>dns</code>.</td>
 </tr>
 <tr>
+<td><code>deny</code></td>
+<td><code>--deny</code></td>
+<td>Fail the pack if this library ships (list). Resolved libraries, the loader, and NSS modules are all in scope, matched by soname or staged file name. A CI policy gate; read sonames from <code>scratchsmith graph</code>.</td>
+</tr>
+<tr>
+<td><code>require</code></td>
+<td><code>--require</code></td>
+<td>Fail the pack if this library does not ship (list). Same scope as <code>deny</code>.</td>
+</tr>
+<tr>
 <td><code>sign</code></td>
 <td><code>--sign</code></td>
 <td>cosign-sign the pushed image (keyless, by digest). Requires a push target.</td>
@@ -869,10 +879,12 @@ file</strong>.</p>
 <a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="n">init</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
 <a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="n">include</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libnss_myhostname.so.2"</span><span class="p">]</span>
 <a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="n">nss</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"files"</span><span class="p">,</span><span class="w"> </span><span class="s2">"dns"</span><span class="p">]</span>
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
-<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="n">max-size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50MB"</span>
-<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"docker"</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="n">deny</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libssl.so.3"</span><span class="p">]</span>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="n">require</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libseccomp.so.2"</span><span class="p">]</span>
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="n">max-size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50MB"</span>
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"docker"</span>
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w">                 </span><span class="c1"># binary + all keys come from the file</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:dev<span class="w"> </span>./other<span class="w">   </span><span class="c1"># CLI overrides binary + push</span>

@@ -459,6 +459,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#gate-on-libraries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate on libraries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#multi-arch-images" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -797,6 +808,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#gate-on-libraries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Gate on libraries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#multi-arch-images" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -917,20 +939,29 @@ module, so user and group lookups do not work there.</p>
 <p>The tree shows each library in full the first time and marks a later repeat with <code>(*)</code>, so
 a shared dependency or a cycle does not print twice. A dependency that does not resolve is
 shown as <code>(missing)</code>. The last line names the loader (<code>PT_INTERP</code>).</p>
+<h2 id="gate-on-libraries">Gate on libraries<a class="headerlink" href="#gate-on-libraries" title="Permanent link">&para;</a></h2>
+<p>To enforce a library policy in CI, fail the pack when a forbidden library is present or a
+required one is absent:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--deny<span class="w"> </span>libssl.so.3<span class="w"> </span>./app<span class="w">        </span><span class="c1"># fail if OpenSSL is staged</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--require<span class="w"> </span>libseccomp.so.2<span class="w"> </span>./app<span class="w">  </span><span class="c1"># fail if seccomp is missing</span>
+</code></pre></div>
+<p>Both flags repeat and match exactly, by soname or staged file name. The resolved libraries,
+the loader, and the NSS modules are all in scope. Read the names from <code>scratchsmith graph</code>.
+The same keys work in <code>scratchsmith.toml</code> as <code>deny</code> and <code>require</code>.</p>
 <h2 id="multi-arch-images">Multi-arch images<a class="headerlink" href="#multi-arch-images" title="Permanent link">&para;</a></h2>
 <p>Scratchsmith resolves against the host's libraries, so it packs for the architecture it runs on.
 To publish a multi-arch image, run <code>pack --push</code> on each architecture (a CI matrix), then combine
 the per-arch images into one <strong>multi-arch OCI image index</strong> with <code>index</code> — the daemonless
 equivalent of <code>docker manifest create</code>, with no Docker or buildx:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># on the amd64 runner</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0-amd64<span class="w"> </span>./app
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="c1"># on the arm64 runner</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0-arm64<span class="w"> </span>./app
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="c1"># then, once both are pushed, assemble the index that consumers pull by one tag</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>scratchsmith<span class="w"> </span>index<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">  </span>ghcr.io/you/app:1.0-amd64<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">  </span>ghcr.io/you/app:1.0-arm64
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># on the amd64 runner</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0-amd64<span class="w"> </span>./app
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="c1"># on the arm64 runner</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0-arm64<span class="w"> </span>./app
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="c1"># then, once both are pushed, assemble the index that consumers pull by one tag</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>scratchsmith<span class="w"> </span>index<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span>ghcr.io/you/app:1.0-amd64<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">  </span>ghcr.io/you/app:1.0-arm64
 </code></pre></div>
 <p>Each source's platform is read from its own image config — nothing is rebuilt and no cross-arch
 resolution happens. The sources must already be pushed and must live in the <strong>target's repository</strong>
@@ -938,9 +969,9 @@ resolution happens. The sources must already be pushed and must live in the <str
 different tag, as above. Add <code>--sign</code> to cosign-sign the index by digest.</p>
 <h2 id="image-metadata-and-entrypoint">Image metadata and entrypoint<a class="headerlink" href="#image-metadata-and-entrypoint" title="Permanent link">&para;</a></h2>
 <p>Set what the image runs — entrypoint, arguments, environment, working directory, and user:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span>--entrypoint<span class="w"> </span>/app<span class="w"> </span>--cmd<span class="w"> </span>serve<span class="w"> </span>--env<span class="w"> </span><span class="nv">LANG</span><span class="o">=</span>C.UTF-8<span class="w"> </span>--workdir<span class="w"> </span>/data<span class="w"> </span>--user<span class="w"> </span><span class="m">65532</span>:65532<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>--label<span class="w"> </span><span class="nv">role</span><span class="o">=</span>api<span class="w"> </span>--healthcheck<span class="w"> </span>/app<span class="w"> </span>--healthcheck<span class="w"> </span>--health
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span>--entrypoint<span class="w"> </span>/app<span class="w"> </span>--cmd<span class="w"> </span>serve<span class="w"> </span>--env<span class="w"> </span><span class="nv">LANG</span><span class="o">=</span>C.UTF-8<span class="w"> </span>--workdir<span class="w"> </span>/data<span class="w"> </span>--user<span class="w"> </span><span class="m">65532</span>:65532<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span>--label<span class="w"> </span><span class="nv">role</span><span class="o">=</span>api<span class="w"> </span>--healthcheck<span class="w"> </span>/app<span class="w"> </span>--healthcheck<span class="w"> </span>--health
 </code></pre></div>
 <p><code>--healthcheck</code> (like <code>--cmd</code>) is repeatable, and each token is one argument of a single exec
 command — so <code>--healthcheck /app --healthcheck --health</code> is the one command <code>["/app", "--health"]</code>
@@ -953,17 +984,17 @@ see <strong><a href="../github-action/">GitHub Action</a></strong>.</p>
 <p>The <code>FROM scratch</code> release image can only run <code>--version</code> / <code>lint</code> / <code>doctor</code> / <code>--completions</code>. The <strong><code>:toolbox</code></strong>
 image bundles the full <code>pack</code> toolchain (ldconfig, strip, syft, grype, cosign, upx, tini, the
 docker CLI) on a Wolfi base, so <code>pack</code> itself runs inside a container:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Daemonless — no socket needed; write an OCI archive or push straight to a registry.</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span>pack<span class="w"> </span>--oci-archive<span class="w"> </span>app.oci.tar<span class="w"> </span>./app
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Daemonless — no socket needed; write an OCI archive or push straight to a registry.</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span>pack<span class="w"> </span>--oci-archive<span class="w"> </span>app.oci.tar<span class="w"> </span>./app
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">  </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span>./app
 </code></pre></div>
 <p>Prefer the daemonless sinks (<code>--push</code> / <code>--oci-archive</code>) in CI. The <strong>default <code>docker load</code> sink</strong>
 needs a host engine, so mount its socket — <strong>which is root-equivalent on the host</strong>, so use it only
 where you trust the workflow:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/var/run/docker.sock:/var/run/docker.sock<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span>pack<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/var/run/docker.sock:/var/run/docker.sock<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span>pack<span class="w"> </span>./app
 </code></pre></div>
 <p>Tags: <code>:toolbox</code> (latest), <code>:X.Y.Z-toolbox</code>, <code>:X.Y-toolbox</code>. Verify its signature exactly like the
 scratch image — see <a href="../verifying/">Verifying releases</a>.</p>
