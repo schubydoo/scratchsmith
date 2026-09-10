@@ -70,7 +70,9 @@ scratchsmith pack --nss none ./app      # no NSS modules, for a program that res
 `dns` covers hostname resolution only, not the network itself. A program that connects to a raw IP
 address needs no NSS module. A program that reaches a host by name over TLS also needs CA
 certificates, which you add separately with `--ca-certs`. `--nss none` also skips the generated
-`/etc/nsswitch.conf`, and `--nss files` writes one that lists local files alone.
+`/etc/nsswitch.conf`, and `--nss files` writes one that lists local files alone. A mode without
+`files` also drops `/etc/passwd` and `/etc/group`, because glibc reads them through the `files`
+module, so user and group lookups do not work there.
 
 ## Multi-arch images
 

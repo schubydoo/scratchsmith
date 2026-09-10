@@ -228,9 +228,9 @@ pub fn stage(binary: &Path, resolution: &Resolution, dest: &Path) -> Result<Stag
 
 /// Add the runtime files glibc loads outside the dependency graph so that DNS and
 /// user lookups work: a minimal nsswitch.conf, the NSS modules (version-matched to
-/// the staged libc), and a minimal passwd/group. `nss` selects which modules and
-/// nsswitch sources are staged (`--nss`). Missing NSS modules become warnings, not
-/// errors. TLS CA certs are a separate opt-in (`--ca-certs`, Task 4.5).
+/// the staged libc), and — when `files` is staged — a minimal passwd/group. `nss`
+/// selects which modules and nsswitch sources are staged (`--nss`). Missing NSS modules
+/// become warnings, not errors. TLS CA certs are a separate opt-in (`--ca-certs`, Task 4.5).
 pub fn stage_default_includes(
     resolution: &Resolution,
     dest: &Path,
@@ -269,14 +269,20 @@ pub fn stage_default_includes(
         }
     }
 
-    for (path, body) in [
-        ("/etc/passwd", MINIMAL_PASSWD),
-        ("/etc/group", MINIMAL_GROUP),
-    ] {
-        let target = under(dest, Path::new(path));
-        std::fs::create_dir_all(target.parent().unwrap())?;
-        std::fs::write(&target, body)?;
-        report.staged.push(PathBuf::from(path));
+    // passwd/group are read through the `files` NSS module. Without it (a `dns`-only or
+    // `none` selection) glibc cannot read them, so shipping them would be dead weight and
+    // a lie — an image with /etc/passwd whose getpwuid() still returns null. Stage them
+    // only when `files` is staged.
+    if nss.files {
+        for (path, body) in [
+            ("/etc/passwd", MINIMAL_PASSWD),
+            ("/etc/group", MINIMAL_GROUP),
+        ] {
+            let target = under(dest, Path::new(path));
+            std::fs::create_dir_all(target.parent().unwrap())?;
+            std::fs::write(&target, body)?;
+            report.staged.push(PathBuf::from(path));
+        }
     }
 
     Ok(report)
@@ -741,8 +747,9 @@ mod tests {
         assert!(!dest.join("etc/nsswitch.conf").exists());
         let dir = res.libs[0].path.parent().unwrap();
         assert!(!under(&dest, &dir.join("libnss_files.so.2")).exists());
-        // passwd/group are content files, not NSS modules, so they still ship.
-        assert!(dest.join("etc/passwd").exists());
+        // Without libnss_files, glibc cannot read passwd/group, so they are not shipped.
+        assert!(!dest.join("etc/passwd").exists());
+        assert!(!dest.join("etc/group").exists());
     }
 
     #[test]
@@ -761,6 +768,8 @@ mod tests {
         assert!(under(&dest, &dir.join("libnss_dns.so.2")).exists());
         assert!(under(&dest, &dir.join("libresolv.so.2")).exists());
         assert!(!under(&dest, &dir.join("libnss_files.so.2")).exists());
+        // dns-only drops the file databases, so the unreadable passwd/group are not shipped.
+        assert!(!dest.join("etc/passwd").exists());
     }
 
     #[test]
