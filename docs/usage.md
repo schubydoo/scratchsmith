@@ -88,6 +88,19 @@ The tree shows each library in full the first time and marks a later repeat with
 a shared dependency or a cycle does not print twice. A dependency that does not resolve is
 shown as `(missing)`. The last line names the loader (`PT_INTERP`).
 
+## Gate on libraries
+
+To enforce a library policy in CI, fail the pack when a forbidden library is present or a
+required one is absent:
+
+```sh
+scratchsmith pack --deny libssl.so.3 ./app        # fail if OpenSSL is staged
+scratchsmith pack --require libseccomp.so.2 ./app  # fail if seccomp is missing
+```
+
+Both flags take a soname, match exactly, and repeat. Read the sonames from
+`scratchsmith graph`. The same keys work in `scratchsmith.toml` as `deny` and `require`.
+
 ## Multi-arch images
 
 Scratchsmith resolves against the host's libraries, so it packs for the architecture it runs on.

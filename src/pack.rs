@@ -54,17 +54,49 @@ fn maybe_scan(
     Ok(Some(summary))
 }
 
+// Enforce the library allow/deny policy (`--require` / `--deny`) against the staged set,
+// keyed by soname — the name `graph` shows. A denied library present, or a required one
+// absent, fails the pack. Runs before staging so a policy violation fails fast.
+fn check_lib_policy(
+    libs: &[resolver::ResolvedLib],
+    require: &[String],
+    deny: &[String],
+) -> Result<()> {
+    if require.is_empty() && deny.is_empty() {
+        return Ok(());
+    }
+    let present: std::collections::HashSet<&str> = libs.iter().map(|l| l.soname.as_str()).collect();
+    let denied: Vec<&str> = deny
+        .iter()
+        .map(String::as_str)
+        .filter(|d| present.contains(d))
+        .collect();
+    let missing: Vec<&str> = require
+        .iter()
+        .map(String::as_str)
+        .filter(|r| !present.contains(r))
+        .collect();
+    let mut parts = Vec::new();
+    if !denied.is_empty() {
+        parts.push(format!("denied library present: {}", denied.join(", ")));
+    }
+    if !missing.is_empty() {
+        parts.push(format!("required library missing: {}", missing.join(", ")));
+    }
+    if parts.is_empty() {
+        Ok(())
+    } else {
+        bail!("library policy failed: {}", parts.join(" and "))
+    }
+}
+
 // Resolve `binary` and build its complete rootfs (libs, loader, cache, NSS/passwd
 // includes) under `dest`, optionally stripping. The shared core of every pack path.
 // Returns the tree, the size report, and any include warnings (no printing).
 fn build_rootfs(
     binary: &Path,
     dest: &Path,
-    strip: bool,
-    upx: bool,
-    smoke: bool,
-    includes: &[String],
-    nss: &NssSelection,
+    opts: &PackOptions,
 ) -> Result<(StagedTree, SizeReport, Vec<String>)> {
     let info = resolver::read_elf_info(binary)?;
     // Reject musl up front rather than staging a subtly broken image (Task 2.5).
@@ -82,29 +114,31 @@ fn build_rootfs(
     // UPX self-decompresses at runtime, but it can break a binary that dlopen's by path or
     // self-modifies — surface the caveat whenever compression is on, and point at --smoke
     // unless the caller already asked for it.
-    if upx {
+    if opts.upx {
         let mut msg = "--upx compresses the binary; it self-decompresses at runtime but can \
                        break a binary that dlopen's by path or self-modifies"
             .to_string();
-        if !smoke {
+        if !opts.smoke {
             msg.push_str(" — verify the packed image with --smoke");
         }
         warnings.push(msg);
     }
 
     // Resolve against the host root for now; a pinned sysroot is future work.
-    let resolution = resolver::resolve_with_includes(binary, &Sysroot::new("/"), includes)?;
+    let resolution = resolver::resolve_with_includes(binary, &Sysroot::new("/"), &opts.includes)?;
     if !resolution.missing.is_empty() {
         bail!(
             "cannot pack: unresolved dependencies: {}",
             resolution.missing.join(", ")
         );
     }
+    // Gate on the library policy before any staging work.
+    check_lib_policy(&resolution.libs, &opts.require, &opts.deny)?;
 
     let tree = stager::stage(binary, &resolution, dest)?;
-    let default_includes = stager::stage_default_includes(&resolution, dest, nss)?;
+    let default_includes = stager::stage_default_includes(&resolution, dest, &opts.nss)?;
     warnings.extend(default_includes.warnings);
-    let sizes = stager::strip_and_measure(dest, &tree, &resolution, strip, upx)?;
+    let sizes = stager::strip_and_measure(dest, &tree, &resolution, opts.strip, opts.upx)?;
     Ok((tree, sizes, warnings))
 }
 
@@ -154,6 +188,10 @@ pub struct PackOptions {
     pub includes: Vec<String>,
     /// Which name-service (NSS) modules to stage (`--nss`); default stages files + dns.
     pub nss: NssSelection,
+    /// Fail the pack if any of these libraries (by soname) is staged (`--deny`).
+    pub deny: Vec<String>,
+    /// Fail the pack if any of these libraries (by soname) is absent (`--require`).
+    pub require: Vec<String>,
     pub image: ImageConfig,
     /// Sign the pushed image with cosign (and attest the SBOM, if any). `--push` only.
     pub sign: bool,
@@ -197,15 +235,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
     if opts.smoke {
         bail!("--smoke needs a built image, so it isn't supported with --no-build; drop --smoke, or set `smoke = false` in the profile");
     }
-    let (tree, size, warnings) = build_rootfs(
-        binary,
-        out_dir,
-        opts.strip,
-        opts.upx,
-        opts.smoke,
-        &opts.includes,
-        &opts.nss,
-    )?;
+    let (tree, size, warnings) = build_rootfs(binary, out_dir, opts)?;
     stager::stage_runtime_extras(out_dir, &opts.extras)?;
     enforce_max_size(out_dir, opts.max_size)?;
     let sbom = maybe_sbom(out_dir, opts.sbom.as_ref())?;
@@ -242,15 +272,7 @@ struct StagedImage {
 fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
     let work = tempfile::tempdir()?;
     let dest = work.path().join("rootfs");
-    let (tree, size, warnings) = build_rootfs(
-        binary,
-        &dest,
-        opts.strip,
-        opts.upx,
-        opts.smoke,
-        &opts.includes,
-        &opts.nss,
-    )?;
+    let (tree, size, warnings) = build_rootfs(binary, &dest, opts)?;
     let extras = stager::stage_runtime_extras(&dest, &opts.extras)?;
     enforce_max_size(&dest, opts.max_size)?;
     // Generate the SBOM and scan while the staged rootfs still exists (dest is temporary).
@@ -410,6 +432,43 @@ fn image_tag(binary: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn libs(sonames: &[&str]) -> Vec<resolver::ResolvedLib> {
+        sonames
+            .iter()
+            .map(|s| resolver::ResolvedLib {
+                soname: (*s).to_string(),
+                path: std::path::PathBuf::from(format!("/lib/{s}")),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn lib_policy_passes_when_satisfied_and_when_empty() {
+        let staged = libs(&["libc.so.6", "libm.so.6"]);
+        // No policy: always ok.
+        assert!(check_lib_policy(&staged, &[], &[]).is_ok());
+        // require present + deny absent: ok.
+        assert!(check_lib_policy(&staged, &["libc.so.6".into()], &["libssl.so.3".into()]).is_ok());
+    }
+
+    #[test]
+    fn lib_policy_fails_on_denied_present_and_required_absent() {
+        let staged = libs(&["libc.so.6", "libssl.so.3"]);
+        let denied = check_lib_policy(&staged, &[], &["libssl.so.3".into()]).unwrap_err();
+        assert!(denied
+            .to_string()
+            .contains("denied library present: libssl.so.3"));
+        let missing = check_lib_policy(&staged, &["libseccomp.so.2".into()], &[]).unwrap_err();
+        assert!(missing
+            .to_string()
+            .contains("required library missing: libseccomp.so.2"));
+        // Both at once are reported together.
+        let both =
+            check_lib_policy(&staged, &["libx.so".into()], &["libssl.so.3".into()]).unwrap_err();
+        let msg = both.to_string();
+        assert!(msg.contains("denied library present") && msg.contains("required library missing"));
+    }
 
     #[test]
     fn tag_is_lowercase_and_namespaced() {

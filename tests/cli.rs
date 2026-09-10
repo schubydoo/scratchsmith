@@ -158,6 +158,36 @@ fn graph_json_is_valid_and_lists_nodes() {
 }
 
 #[test]
+fn pack_deny_gate_fails_when_library_present() {
+    // `id` links libc, so `--deny libc.so.6` must fail the pack (a CI policy gate). Uses the
+    // daemonless -n -o sink — the policy check runs before staging, so no Docker is needed.
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("rootfs");
+    let output = run(&[
+        "pack",
+        "--deny",
+        "libc.so.6",
+        "--no-build",
+        "-o",
+        out.to_str().unwrap(),
+        bin,
+    ]);
+    assert!(
+        !output.status.success(),
+        "deny of libc should fail the pack"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("library policy failed") && stderr.contains("libc.so.6"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn pack_oci_archive_writes_the_file() {
     // Exercises the `--oci-archive` sink through the CLI (daemonless — no Docker needed).
     let Some(bin) = small_fixture() else {
