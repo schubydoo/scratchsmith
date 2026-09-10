@@ -4,7 +4,7 @@
 use crate::image::{self, ImageConfig};
 use crate::report::PackReport;
 use crate::resolver::{self, Sysroot};
-use crate::stager::{self, RuntimeExtras, SizeReport, StagedTree};
+use crate::stager::{self, NssSelection, RuntimeExtras, SizeReport, StagedTree};
 use crate::supplychain::{self, SbomRequest, ScanRequest, ScanSource, ScanSummary};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
@@ -64,6 +64,7 @@ fn build_rootfs(
     upx: bool,
     smoke: bool,
     includes: &[String],
+    nss: &NssSelection,
 ) -> Result<(StagedTree, SizeReport, Vec<String>)> {
     let info = resolver::read_elf_info(binary)?;
     // Reject musl up front rather than staging a subtly broken image (Task 2.5).
@@ -101,7 +102,7 @@ fn build_rootfs(
     }
 
     let tree = stager::stage(binary, &resolution, dest)?;
-    let default_includes = stager::stage_default_includes(&resolution, dest)?;
+    let default_includes = stager::stage_default_includes(&resolution, dest, nss)?;
     warnings.extend(default_includes.warnings);
     let sizes = stager::strip_and_measure(dest, &tree, &resolution, strip, upx)?;
     Ok((tree, sizes, warnings))
@@ -151,6 +152,8 @@ pub struct PackOptions {
     pub extras: RuntimeExtras,
     /// Extra libraries (sonames or paths) to force-stage, e.g. dlopen'd plugins.
     pub includes: Vec<String>,
+    /// Which name-service (NSS) modules to stage (`--nss`); default stages files + dns.
+    pub nss: NssSelection,
     pub image: ImageConfig,
     /// Sign the pushed image with cosign (and attest the SBOM, if any). `--push` only.
     pub sign: bool,
@@ -201,6 +204,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
         opts.upx,
         opts.smoke,
         &opts.includes,
+        &opts.nss,
     )?;
     stager::stage_runtime_extras(out_dir, &opts.extras)?;
     enforce_max_size(out_dir, opts.max_size)?;
@@ -245,6 +249,7 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         opts.upx,
         opts.smoke,
         &opts.includes,
+        &opts.nss,
     )?;
     let extras = stager::stage_runtime_extras(&dest, &opts.extras)?;
     enforce_max_size(&dest, opts.max_size)?;

@@ -139,6 +139,35 @@ fn pack_oci_archive_writes_the_file() {
 }
 
 #[test]
+fn pack_nss_files_only_through_the_cli() {
+    // Exercises `--nss` from the command line (the CLI-supplied selection path in dispatch)
+    // via the daemonless -n -o sink — no Docker needed.
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("rootfs");
+    let output = run(&[
+        "pack",
+        "--nss",
+        "files",
+        "--no-build",
+        "-o",
+        out.to_str().unwrap(),
+        bin,
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let nsswitch = std::fs::read_to_string(out.join("etc/nsswitch.conf")).unwrap();
+    assert!(nsswitch.contains("hosts:          files\n"), "{nsswitch}");
+    assert!(!nsswitch.contains("dns"), "dns must be dropped: {nsswitch}");
+}
+
+#[test]
 fn profile_selects_options_and_reports_unknown() {
     let Some(bin) = small_fixture() else {
         eprintln!("skipping: no id binary to pack");

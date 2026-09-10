@@ -26,6 +26,7 @@ file**.
 | `tz` | `--tz` | Add the resolved local timezone (`/etc/localtime`). |
 | `init` | `--init` | Add a minimal init (`tini`) as pid 1 wrapping the entrypoint. |
 | `include` | `--include` | Force-stage extra libraries by soname or path — e.g. `dlopen`'d plugins (list). |
+| `nss` | `--nss` | Name-service (NSS) modules to stage for glibc name lookups: `files`, `dns`, or `none` (list). Fewer modules trim CVE surface. A mode without `files` also drops `/etc/passwd` and `/etc/group`, which glibc reads through the `files` module. Default: `files` and `dns`. |
 | `sign` | `--sign` | cosign-sign the pushed image (keyless, by digest). Requires a push target. |
 | `push` | `--push` | Push the image straight to this registry reference, daemonless. |
 | `max-size` | `--max-size` | Fail the pack if the packed image (the fully-staged rootfs — payload + NSS includes + runtime extras) exceeds this size — e.g. `12MB`, `512KiB`, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024). |
@@ -55,6 +56,7 @@ ca-certs = true
 tz = true
 init = true
 include = ["libnss_myhostname.so.2"]
+nss = ["files", "dns"]
 sign = true
 push = "ghcr.io/you/app:latest"
 max-size = "50MB"
