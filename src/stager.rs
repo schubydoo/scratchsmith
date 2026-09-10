@@ -746,6 +746,24 @@ mod tests {
     }
 
     #[test]
+    fn nss_dns_only_omits_file_databases() {
+        let (_tmp, res, dest) = nss_fixture();
+        let sel = NssSelection {
+            files: false,
+            dns: true,
+        };
+        stage_default_includes(&res, &dest, &sel).unwrap();
+
+        let nsswitch = std::fs::read_to_string(dest.join("etc/nsswitch.conf")).unwrap();
+        assert!(nsswitch.contains("hosts:          dns\n"), "{nsswitch}");
+        assert!(!nsswitch.contains("passwd:"), "file dbs gone: {nsswitch}");
+        let dir = res.libs[0].path.parent().unwrap();
+        assert!(under(&dest, &dir.join("libnss_dns.so.2")).exists());
+        assert!(under(&dest, &dir.join("libresolv.so.2")).exists());
+        assert!(!under(&dest, &dir.join("libnss_files.so.2")).exists());
+    }
+
+    #[test]
     fn nss_from_modules_maps_values_and_rejects_none_mix() {
         assert_eq!(
             NssSelection::from_modules(&[]).unwrap(),

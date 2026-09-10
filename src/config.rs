@@ -264,6 +264,22 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_overrides_nss() {
+        // A non-empty `nss` in the profile replaces the base's (the `else { over.nss }` arm).
+        let base: Config = toml::from_str(
+            r#"
+            binary = "/usr/bin/app"
+            nss = ["files", "dns"]
+            [profile.min]
+            nss = ["files"]
+        "#,
+        )
+        .unwrap();
+        let min = base.select_profile("min").unwrap();
+        assert_eq!(min.nss, vec![crate::stager::NssModule::Files]);
+    }
+
+    #[test]
     fn unknown_profile_is_a_clear_error() {
         let cfg: Config = toml::from_str("[profile.ci]\nstrip = true\n").unwrap();
         let err = cfg.select_profile("prod").unwrap_err();
