@@ -157,6 +157,13 @@ pub enum Command {
             value_name = "MODULES"
         )]
         nss: Vec<crate::stager::NssModule>,
+        /// Fail the pack if this library ships — resolved libs, the loader, and NSS
+        /// modules are all in scope. Matches a soname or staged file name; repeatable.
+        #[arg(long = "deny", value_name = "SONAME")]
+        deny: Vec<String>,
+        /// Fail the pack if this library does NOT ship (same scope as --deny); repeatable.
+        #[arg(long = "require", value_name = "SONAME")]
+        require: Vec<String>,
         /// Report format.
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
@@ -264,6 +271,8 @@ fn dispatch(cli: Cli) -> Result<()> {
             init,
             include,
             nss,
+            deny,
+            require,
             format,
         } => {
             // Load the config file (if any), apply a selected profile, then let CLI flags win.
@@ -313,6 +322,12 @@ fn dispatch(cli: Cli) -> Result<()> {
                 } else {
                     &nss
                 })?,
+                deny: if deny.is_empty() { file.deny } else { deny },
+                require: if require.is_empty() {
+                    file.require
+                } else {
+                    require
+                },
                 image: crate::image::ImageConfig {
                     entrypoint: entrypoint
                         .or(file.entrypoint)
@@ -458,6 +473,27 @@ mod tests {
                 assert!(matches!(format, Format::Json));
             }
             other => panic!("expected Graph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pack_parses_deny_and_require() {
+        let cli = Cli::try_parse_from([
+            "scratchsmith",
+            "pack",
+            "--deny",
+            "libssl.so.3",
+            "--require",
+            "libc.so.6",
+            "/bin/ls",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Pack { deny, require, .. }) => {
+                assert_eq!(deny, vec!["libssl.so.3".to_string()]);
+                assert_eq!(require, vec!["libc.so.6".to_string()]);
+            }
+            other => panic!("expected Pack, got {other:?}"),
         }
     }
 

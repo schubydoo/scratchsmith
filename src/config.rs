@@ -73,6 +73,12 @@ pub struct Config {
     /// Name-service (NSS) modules to stage (`files`, `dns`, or `none`); empty = files + dns.
     #[serde(default)]
     pub nss: Vec<crate::stager::NssModule>,
+    /// Fail the pack if any of these libraries (by soname) is staged (`--deny`).
+    #[serde(default)]
+    pub deny: Vec<String>,
+    /// Fail the pack if any of these libraries (by soname) is absent (`--require`).
+    #[serde(default)]
+    pub require: Vec<String>,
     /// Sign the pushed image with cosign (needs a push target).
     #[serde(default)]
     pub sign: bool,
@@ -152,6 +158,8 @@ impl Config {
             } else {
                 over.nss
             },
+            deny: vec_or(self.deny, over.deny),
+            require: vec_or(self.require, over.require),
             sign: self.sign || over.sign,
             push: over.push.or(self.push),
             max_size: over.max_size.or(self.max_size),
@@ -190,6 +198,8 @@ mod tests {
             init = true
             include = ["libfoo.so"]
             nss = ["files", "dns"]
+            deny = ["libssl.so.3"]
+            require = ["libc.so.6"]
             sign = true
             push = "ghcr.io/me/tool:latest"
             max-size = "12MB"
@@ -212,6 +222,8 @@ mod tests {
                 crate::stager::NssModule::Dns
             ]
         );
+        assert_eq!(cfg.deny, vec!["libssl.so.3".to_string()]);
+        assert_eq!(cfg.require, vec!["libc.so.6".to_string()]);
         assert_eq!(cfg.push.as_deref(), Some("ghcr.io/me/tool:latest"));
         assert_eq!(cfg.max_size.as_deref(), Some("12MB"));
         assert_eq!(cfg.runtime, Some(crate::image::Runtime::Podman));
