@@ -95,23 +95,113 @@ pub struct IncludeReport {
     pub warnings: Vec<String>,
 }
 
-// A scratch image has no name-service config, so glibc name lookups fail before
-// they even try. Ship a minimal one: local files plus DNS, which needs only the
-// libnss_files/libnss_dns modules — no systemd/mymachines NSS module to drag in.
-const MINIMAL_NSSWITCH: &str = "\
+// A scratch image has no name-service config, so glibc name lookups fail before they
+// even try. Ship a minimal one naming only the modules the selection stages — no
+// systemd/mymachines NSS module to drag in. The glibc modules are dlopen'd, so the
+// resolver never sees them; they must be pulled in explicitly, from the same directory
+// as libc so the versions match exactly.
+
+/// A name-service (NSS) module selectable with `--nss` / the `nss` config key. glibc
+/// uses these for name lookups; staging fewer trims CVE surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive] // may gain modules in a minor; not a stable exhaustive library API
+pub enum NssModule {
+    /// Local-file lookups (/etc/passwd, /etc/hosts, ...): the libnss_files module.
+    Files,
+    /// DNS host lookups: the libnss_dns + libresolv modules.
+    Dns,
+    /// Stage no NSS modules and no nsswitch.conf. Must be the only value.
+    None,
+}
+
+/// Which name-service modules to stage into the image. Built from `--nss`; the default
+/// (both on) reproduces the historical local-files-plus-DNS behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NssSelection {
+    pub files: bool,
+    pub dns: bool,
+}
+
+impl Default for NssSelection {
+    fn default() -> Self {
+        Self {
+            files: true,
+            dns: true,
+        }
+    }
+}
+
+impl NssSelection {
+    /// Stage nothing — no NSS modules and no nsswitch.conf.
+    pub const NONE: Self = Self {
+        files: false,
+        dns: false,
+    };
+
+    /// Build a selection from the `--nss` values. Empty means the default set. A `none`
+    /// value must stand alone; combining it with a module is a usage error.
+    pub fn from_modules(modules: &[NssModule]) -> Result<Self> {
+        if modules.is_empty() {
+            return Ok(Self::default());
+        }
+        if modules.contains(&NssModule::None) {
+            if modules.len() > 1 {
+                bail!("--nss none cannot be combined with other modules");
+            }
+            return Ok(Self::NONE);
+        }
+        Ok(Self {
+            files: modules.contains(&NssModule::Files),
+            dns: modules.contains(&NssModule::Dns),
+        })
+    }
+
+    fn is_none(self) -> bool {
+        !self.files && !self.dns
+    }
+
+    // The glibc modules this selection needs, version-matched beside libc.
+    fn modules(self) -> Vec<&'static str> {
+        let mut m = Vec::new();
+        if self.files {
+            m.push("libnss_files.so.2");
+        }
+        if self.dns {
+            m.push("libnss_dns.so.2");
+            m.push("libresolv.so.2");
+        }
+        m
+    }
+
+    // A minimal nsswitch.conf naming only the selected sources, or None when nothing is
+    // staged (a static image doing no name lookups). The file never names a source whose
+    // module is absent: the file-only databases appear only when `files` is staged.
+    fn nsswitch(self) -> Option<String> {
+        if self.is_none() {
+            return None;
+        }
+        let hosts = match (self.files, self.dns) {
+            (true, true) => "files dns",
+            (true, false) => "files",
+            (false, true) => "dns",
+            (false, false) => unreachable!("is_none returned early"),
+        };
+        let files_dbs = if self.files {
+            "\
 passwd:         files
 group:          files
 shadow:         files
-hosts:          files dns
 networks:       files
 protocols:      files
 services:       files
-";
-
-// The glibc NSS/resolver modules that `hosts: files dns` needs. They are dlopen'd,
-// so the resolver never sees them; they must be pulled in explicitly, and from the
-// same directory as libc so the versions match exactly.
-const NSS_MODULES: &[&str] = &["libnss_files.so.2", "libnss_dns.so.2", "libresolv.so.2"];
+"
+        } else {
+            ""
+        };
+        Some(format!("{files_dbs}hosts:          {hosts}\n"))
+    }
+}
 
 // A `passwd: files` nsswitch is a lie without a passwd database, and binaries that
 // call getpwuid() at startup (to find $HOME) get a null and may misbehave. Ship a
@@ -138,35 +228,45 @@ pub fn stage(binary: &Path, resolution: &Resolution, dest: &Path) -> Result<Stag
 
 /// Add the runtime files glibc loads outside the dependency graph so that DNS and
 /// user lookups work: a minimal nsswitch.conf, the NSS modules (version-matched to
-/// the staged libc), and a minimal passwd/group. Missing NSS modules become
-/// warnings, not errors. TLS CA certs are a separate opt-in (`--ca-certs`, Task 4.5).
-pub fn stage_default_includes(resolution: &Resolution, dest: &Path) -> Result<IncludeReport> {
+/// the staged libc), and a minimal passwd/group. `nss` selects which modules and
+/// nsswitch sources are staged (`--nss`). Missing NSS modules become warnings, not
+/// errors. TLS CA certs are a separate opt-in (`--ca-certs`, Task 4.5).
+pub fn stage_default_includes(
+    resolution: &Resolution,
+    dest: &Path,
+    nss: &NssSelection,
+) -> Result<IncludeReport> {
     let mut report = IncludeReport::default();
 
-    let nsswitch = under(dest, Path::new("/etc/nsswitch.conf"));
-    std::fs::create_dir_all(nsswitch.parent().unwrap())?;
-    std::fs::write(&nsswitch, MINIMAL_NSSWITCH)?;
-    report.staged.push(PathBuf::from("/etc/nsswitch.conf"));
+    if let Some(body) = nss.nsswitch() {
+        let nsswitch = under(dest, Path::new("/etc/nsswitch.conf"));
+        std::fs::create_dir_all(nsswitch.parent().unwrap())?;
+        std::fs::write(&nsswitch, body)?;
+        report.staged.push(PathBuf::from("/etc/nsswitch.conf"));
+    }
 
     // NSS modules live beside libc; without libc (a static binary) there is nothing
     // to match against, so there is nothing to do here.
-    match libc_dir(resolution) {
-        Some(dir) => {
-            for name in NSS_MODULES {
-                let src = dir.join(name);
-                if src.exists() {
-                    copy_into(&src, dest, &src)?;
-                    report.staged.push(src);
-                } else {
-                    report
-                        .warnings
-                        .push(format!("NSS module not found: {name}"));
+    let modules = nss.modules();
+    if !modules.is_empty() {
+        match libc_dir(resolution) {
+            Some(dir) => {
+                for name in modules {
+                    let src = dir.join(name);
+                    if src.exists() {
+                        copy_into(&src, dest, &src)?;
+                        report.staged.push(src);
+                    } else {
+                        report
+                            .warnings
+                            .push(format!("NSS module not found: {name}"));
+                    }
                 }
             }
+            None => report
+                .warnings
+                .push("no libc in resolution; skipped NSS modules".into()),
         }
-        None => report
-            .warnings
-            .push("no libc in resolution; skipped NSS modules".into()),
     }
 
     for (path, body) in [
@@ -551,7 +651,7 @@ mod tests {
             }],
             missing: vec![],
         };
-        let report = stage_default_includes(&res, &dest).unwrap();
+        let report = stage_default_includes(&res, &dest, &NssSelection::default()).unwrap();
 
         // Minimal nsswitch avoids systemd NSS modules: files + dns only.
         let nsswitch = std::fs::read_to_string(dest.join("etc/nsswitch.conf")).unwrap();
@@ -586,12 +686,84 @@ mod tests {
             }],
             missing: vec![],
         };
-        let report = stage_default_includes(&res, &dest).unwrap();
+        let report = stage_default_includes(&res, &dest, &NssSelection::default()).unwrap();
 
         // nsswitch/passwd are always written; absent NSS modules become warnings.
         assert!(dest.join("etc/nsswitch.conf").exists());
         assert!(dest.join("etc/passwd").exists());
         assert!(report.warnings.iter().any(|w| w.contains("libnss_files")));
+    }
+
+    // Build a resolution whose libc sits beside the three NSS modules, staged under a
+    // fresh temp dir. Returns (tempdir, resolution, dest) for a `--nss` staging test.
+    fn nss_fixture() -> (tempfile::TempDir, Resolution, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let libdir = tmp.path().join("usr/lib/x86_64-linux-gnu");
+        let dest = tmp.path().join("dest");
+        let libc = make_file(&libdir.join("libc.so.6"), b"LIBC");
+        for m in ["libnss_files.so.2", "libnss_dns.so.2", "libresolv.so.2"] {
+            make_file(&libdir.join(m), b"NSS");
+        }
+        let res = Resolution {
+            interpreter: None,
+            libs: vec![ResolvedLib {
+                soname: "libc.so.6".into(),
+                path: libc,
+            }],
+            missing: vec![],
+        };
+        (tmp, res, dest)
+    }
+
+    #[test]
+    fn nss_files_only_drops_dns_module_and_resolv() {
+        let (_tmp, res, dest) = nss_fixture();
+        let sel = NssSelection {
+            files: true,
+            dns: false,
+        };
+        stage_default_includes(&res, &dest, &sel).unwrap();
+
+        let nsswitch = std::fs::read_to_string(dest.join("etc/nsswitch.conf")).unwrap();
+        assert!(nsswitch.contains("hosts:          files\n"), "{nsswitch}");
+        assert!(!nsswitch.contains("dns"), "dns must be gone: {nsswitch}");
+        let dir = res.libs[0].path.parent().unwrap();
+        assert!(under(&dest, &dir.join("libnss_files.so.2")).exists());
+        assert!(!under(&dest, &dir.join("libnss_dns.so.2")).exists());
+        assert!(!under(&dest, &dir.join("libresolv.so.2")).exists());
+    }
+
+    #[test]
+    fn nss_none_writes_no_nsswitch_and_no_modules() {
+        let (_tmp, res, dest) = nss_fixture();
+        stage_default_includes(&res, &dest, &NssSelection::NONE).unwrap();
+
+        assert!(!dest.join("etc/nsswitch.conf").exists());
+        let dir = res.libs[0].path.parent().unwrap();
+        assert!(!under(&dest, &dir.join("libnss_files.so.2")).exists());
+        // passwd/group are content files, not NSS modules, so they still ship.
+        assert!(dest.join("etc/passwd").exists());
+    }
+
+    #[test]
+    fn nss_from_modules_maps_values_and_rejects_none_mix() {
+        assert_eq!(
+            NssSelection::from_modules(&[]).unwrap(),
+            NssSelection::default()
+        );
+        assert_eq!(
+            NssSelection::from_modules(&[NssModule::None]).unwrap(),
+            NssSelection::NONE
+        );
+        assert_eq!(
+            NssSelection::from_modules(&[NssModule::Files]).unwrap(),
+            NssSelection {
+                files: true,
+                dns: false
+            }
+        );
+        let err = NssSelection::from_modules(&[NssModule::None, NssModule::Files]).unwrap_err();
+        assert!(err.to_string().contains("cannot be combined"), "{err}");
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! Requires ldconfig (present on any glibc host, including CI).
 
 use scratchsmith::resolver::{resolve, Sysroot};
-use scratchsmith::stager::{stage, stage_default_includes, strip_and_measure};
+use scratchsmith::stager::{stage, stage_default_includes, strip_and_measure, NssSelection};
 use std::path::Path;
 use std::process::Command;
 
@@ -60,7 +60,8 @@ fn default_includes_add_nss_and_passwd_from_host() {
 
     let tmp = tempfile::tempdir().unwrap();
     let dest = tmp.path().join("rootfs");
-    let report = stage_default_includes(&resolution, &dest).expect("includes");
+    let report =
+        stage_default_includes(&resolution, &dest, &NssSelection::default()).expect("includes");
 
     assert!(dest.join("etc/nsswitch.conf").exists(), "nsswitch missing");
     assert!(dest.join("etc/passwd").exists(), "passwd missing");

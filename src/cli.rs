@@ -148,6 +148,15 @@ pub enum Command {
         /// repeatable.
         #[arg(long = "include", value_name = "LIB")]
         include: Vec<String>,
+        /// Name-service (NSS) modules to stage for glibc lookups (comma-separated:
+        /// files, dns; or none). Fewer modules trim CVE surface. Default: files,dns.
+        #[arg(
+            long = "nss",
+            value_enum,
+            value_delimiter = ',',
+            value_name = "MODULES"
+        )]
+        nss: Vec<crate::stager::NssModule>,
         /// Report format.
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
@@ -242,6 +251,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             tz,
             init,
             include,
+            nss,
             format,
         } => {
             // Load the config file (if any), apply a selected profile, then let CLI flags win.
@@ -286,6 +296,11 @@ fn dispatch(cli: Cli) -> Result<()> {
                 } else {
                     include
                 },
+                nss: crate::stager::NssSelection::from_modules(if nss.is_empty() {
+                    &file.nss
+                } else {
+                    &nss
+                })?,
                 image: crate::image::ImageConfig {
                     entrypoint: entrypoint
                         .or(file.entrypoint)

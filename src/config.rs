@@ -70,6 +70,9 @@ pub struct Config {
     /// Force-stage extra libraries (sonames or paths), e.g. dlopen'd plugins.
     #[serde(default)]
     pub include: Vec<String>,
+    /// Name-service (NSS) modules to stage (`files`, `dns`, or `none`); empty = files + dns.
+    #[serde(default)]
+    pub nss: Vec<crate::stager::NssModule>,
     /// Sign the pushed image with cosign (needs a push target).
     #[serde(default)]
     pub sign: bool,
@@ -144,6 +147,11 @@ impl Config {
             tz: self.tz || over.tz,
             init: self.init || over.init,
             include: vec_or(self.include, over.include),
+            nss: if over.nss.is_empty() {
+                self.nss
+            } else {
+                over.nss
+            },
             sign: self.sign || over.sign,
             push: over.push.or(self.push),
             max_size: over.max_size.or(self.max_size),
@@ -181,6 +189,7 @@ mod tests {
             tz = true
             init = true
             include = ["libfoo.so"]
+            nss = ["files", "dns"]
             sign = true
             push = "ghcr.io/me/tool:latest"
             max-size = "12MB"
@@ -196,6 +205,13 @@ mod tests {
         assert_eq!(cfg.scan_fail_on, Some(Severity::High));
         assert!(cfg.ca_certs && cfg.tz && cfg.init);
         assert_eq!(cfg.include, vec!["libfoo.so".to_string()]);
+        assert_eq!(
+            cfg.nss,
+            vec![
+                crate::stager::NssModule::Files,
+                crate::stager::NssModule::Dns
+            ]
+        );
         assert_eq!(cfg.push.as_deref(), Some("ghcr.io/me/tool:latest"));
         assert_eq!(cfg.max_size.as_deref(), Some("12MB"));
         assert_eq!(cfg.runtime, Some(crate::image::Runtime::Podman));

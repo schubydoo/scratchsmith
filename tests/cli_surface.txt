@@ -27,6 +27,7 @@
   --label  value=true  multiple=true  required=false
   --max-size  value=true  multiple=false  required=false
   --no-build -n  value=false  multiple=false  required=false
+  --nss  value=true  multiple=true  required=false  values=[files,dns,none]
   --oci-archive  value=true  multiple=false  required=false
   --output -o  value=true  multiple=false  required=false
   --profile  value=true  multiple=false  required=false

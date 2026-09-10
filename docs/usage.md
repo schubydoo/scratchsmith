@@ -54,6 +54,24 @@ scratchsmith pack --strip --max-size 8MB ./app        # fail the build if the st
 scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate for CI
 ```
 
+## Trim the NSS modules
+
+glibc loads name-service (NSS) modules at runtime to resolve names: hostnames to IP addresses,
+and user or group IDs to names. Scratchsmith stages a default set (local files plus DNS). If your
+program does fewer lookups, drop the modules it does not need with `--nss`. Fewer modules mean a
+smaller image and less code that could carry a CVE.
+
+```sh
+scratchsmith pack ./app                 # default: local files + DNS
+scratchsmith pack --nss files ./app     # local-file lookups only, no DNS
+scratchsmith pack --nss none ./app      # no NSS modules, for a program that resolves no names
+```
+
+`dns` covers hostname resolution only, not the network itself. A program that connects to a raw IP
+address needs no NSS module. A program that reaches a host by name over TLS also needs CA
+certificates, which you add separately with `--ca-certs`. `--nss none` also skips the generated
+`/etc/nsswitch.conf`, and `--nss files` writes one that lists local files alone.
+
 ## Multi-arch images
 
 Scratchsmith resolves against the host's libraries, so it packs for the architecture it runs on.
