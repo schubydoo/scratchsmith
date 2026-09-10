@@ -253,13 +253,13 @@ jobs:
           # --max-turns is a review-QUALITY setting (reading a multi-file diff + anchoring
           # findings + one grouped review costs many turns); 150 keeps headroom inside the
           # 30-min job timeout.
-          # --model: Opus 4.8 (maintainer preference; also less API contention than
-          # opus-5, which was erroring these reviews on transient Anthropic faults).
+          # --model: Opus 5 — matches the clauster review template (the shared source of
+          # this workflow), whose multi-day run history is on opus-5.
           # --plugin-dir loads the Simple English plugin checked out above (its output style
           # is selected by the `settings:` input); never set `--permission-mode` (see above).
           claude_args: |
             --max-turns 150
-            --model claude-opus-4-8
+            --model claude-opus-5
             --add-dir pr-head
             --add-dir ${{ steps.rules.outputs.dir }}
             --plugin-dir ${{ github.workspace }}/simple-english
@@ -336,33 +336,56 @@ jobs:
               fi
             fi
           fi
+          # Posted-something is necessary but not sufficient: a review that is blocked from
+          # SUBMITTING falls back to a plain comment, which passes the count check while
+          # quietly losing the inline anchors and the resolvable threads. Denials are the
+          # tell (a blocked run logs several of them, and the summary says so in prose). Warn
+          # rather than fail — a degraded review is still worth reading.
+          # ⚠️ Every branch below must SAY something. The first version of this read
+          #   if [ -n "$D" ] && [ "$D" != "0" ]
+          # which made "could not parse" indistinguishable from "no denials" — so a real run
+          # once stayed silent through several denials. That is precisely the can't-fail check
+          # this whole step exists to replace, reintroduced one step further in. An unreadable
+          # log is a finding, not a pass.
           LOG=/home/runner/work/_temp/claude-execution-output.json
           if [ ! -f "$LOG" ]; then
-            echo "::warning::no execution log at $LOG — cannot tell whether tool calls were denied"
+            echo "::warning::no execution log at $LOG — cannot tell whether tool calls were denied, so a degraded review would look identical to a clean one here"
           else
-            RESULT=$(jq -s -c 'flatten | map(select(type == "object" and .type == "result")) | last // empty' "$LOG" 2>/dev/null || true)
+            # Status outside the substitution on every fallback below (the shape the guard
+            # block above uses): `|| echo x` INSIDE `$( )` appends x to whatever the failing
+            # command already printed, so the variable never equals the fallback.
+            RESULT=$(jq -s -c 'flatten | map(select(type == "object" and .type == "result")) | last // empty' "$LOG" 2>/dev/null) || RESULT=""
             if [ -z "$RESULT" ]; then
-              echo "::warning::execution log present but no result record parsed — denial count unknown. Re-run with '@claude review debug'."
+              echo "::warning::execution log present but no result record parsed — denial count unknown. Re-run with '@claude review debug' to capture the log as an artifact."
             else
-              IS_ERR=$(printf '%s' "$RESULT" | jq -r '.is_error // false' 2>/dev/null || echo "false")
-              SUBTYPE=$(printf '%s' "$RESULT" | jq -r '.subtype // ""' 2>/dev/null || echo "")
+              # An errored/exhausted run (e.g. subtype=error_max_turns) still posts the
+              # action's early tracking comment, so the AFTER>BEFORE check below passes on a
+              # run that never actually reviewed. Detect it from the result record's own error
+              # fields — independent of whatever number the turn cap holds.
+              IS_ERR=$(printf '%s' "$RESULT" | jq -r '.is_error // false' 2>/dev/null) || IS_ERR="false"
+              SUBTYPE=$(printf '%s' "$RESULT" | jq -r '.subtype // ""' 2>/dev/null) || SUBTYPE=""
               if [ "$IS_ERR" = "true" ] || [ "${SUBTYPE#error}" != "$SUBTYPE" ]; then
-                echo "::error::the review did not complete (is_error=$IS_ERR subtype='${SUBTYPE:-none}') — it hit the turn cap, timed out, or errored. Re-run with '@claude review'."
+                echo "::error::the review did not complete (is_error=$IS_ERR subtype='${SUBTYPE:-none}') — it hit the turn cap, timed out, or errored. The tracking comment it left is NOT a review; re-run with '@claude review'."
                 exit 1
               fi
+              # The SAVED log carries denials as a `permission_denials` ARRAY, not the
+              # `permission_denials_count` scalar the console print shows — reading the scalar
+              # returns "?" while denials go unreported. Prefer the array's length, fall back
+              # to the scalar, and say "?" only when NEITHER field exists (has() tells an
+              # absent field apart from a genuine zero).
               D=$(printf '%s' "$RESULT" | jq -r '
                 if has("permission_denials") then (.permission_denials | length)
                 elif has("permission_denials_count") then .permission_denials_count
-                else "?" end' 2>/dev/null || echo "?")
+                else "?" end' 2>/dev/null) || D="?"
               case "$D" in
-                0) : ;;
-                "?") echo "::warning::result record parsed but carries no denial field — log format may have changed" ;;
-                *) echo "::warning::$D tool call(s) were denied — a blocked review falls back to standalone comments. Check --allowedTools." ;;
+                0) : ;;  # the only silent path: parsed, and genuinely zero
+                "?") echo "::warning::result record parsed but carries neither permission_denials nor permission_denials_count — the log format may have changed upstream" ;;
+                *) echo "::warning::$D tool call(s) were denied. Denials are routine on a GOOD run too (redirects, compound commands, tools outside --allowedTools: 2-7 per run measured), so this is not by itself a split review — the submitted-review delta above is the tell for that. Re-run with '@claude review debug' to see the denied commands." ;;
               esac
             fi
           fi
           if [ "$AFTER" -le "$BEFORE" ]; then
-            echo "::error::the review published nothing — re-run with '@claude review debug' to capture the execution log."
+            echo "::error::the review published nothing — the pull request gained no Claude comment. Do NOT trust a green check here; re-run with '@claude review debug' to capture the execution log."
             exit 1
           fi
 
