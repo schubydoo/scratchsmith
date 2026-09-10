@@ -157,11 +157,11 @@ pub enum Command {
             value_name = "MODULES"
         )]
         nss: Vec<crate::stager::NssModule>,
-        /// Fail the pack if this library (by soname) is staged; repeatable. A CI policy
-        /// gate — read sonames from `scratchsmith graph`.
+        /// Fail the pack if this library ships — resolved libs, the loader, and NSS
+        /// modules are all in scope. Matches a soname or staged file name; repeatable.
         #[arg(long = "deny", value_name = "SONAME")]
         deny: Vec<String>,
-        /// Fail the pack if this library (by soname) is NOT staged; repeatable.
+        /// Fail the pack if this library does NOT ship (same scope as --deny); repeatable.
         #[arg(long = "require", value_name = "SONAME")]
         require: Vec<String>,
         /// Report format.

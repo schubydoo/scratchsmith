@@ -54,27 +54,50 @@ fn maybe_scan(
     Ok(Some(summary))
 }
 
-// Enforce the library allow/deny policy (`--require` / `--deny`) against the staged set,
-// keyed by soname — the name `graph` shows. A denied library present, or a required one
-// absent, fails the pack. Runs before staging so a policy violation fails fast.
+// Enforce the library allow/deny policy (`--require` / `--deny`) against everything that
+// actually ships as a shared object: the resolved libraries, the loader, and the staged
+// NSS modules (which are copied in outside the dependency graph). Matches by soname — the
+// name `graph` shows — or by staged file name. A denied library present, or a required one
+// absent, fails the pack.
 fn check_lib_policy(
-    libs: &[resolver::ResolvedLib],
+    resolution: &resolver::Resolution,
+    staged_includes: &[PathBuf],
     require: &[String],
     deny: &[String],
 ) -> Result<()> {
     if require.is_empty() && deny.is_empty() {
         return Ok(());
     }
-    let present: std::collections::HashSet<&str> = libs.iter().map(|l| l.soname.as_str()).collect();
+    let mut present: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for lib in &resolution.libs {
+        present.insert(lib.soname.clone());
+        if let Some(name) = lib.path.file_name() {
+            present.insert(name.to_string_lossy().into_owned());
+        }
+    }
+    // The loader lives in `interpreter`, not `libs`, but it still ships.
+    if let Some(interp) = &resolution.interpreter {
+        if let Some(name) = interp.image_path.file_name() {
+            present.insert(name.to_string_lossy().into_owned());
+        }
+    }
+    // The default-includes report also carries nsswitch/passwd/group; keep shared objects.
+    for path in staged_includes {
+        if path.to_string_lossy().contains(".so") {
+            if let Some(name) = path.file_name() {
+                present.insert(name.to_string_lossy().into_owned());
+            }
+        }
+    }
     let denied: Vec<&str> = deny
         .iter()
         .map(String::as_str)
-        .filter(|d| present.contains(d))
+        .filter(|d| present.contains(*d))
         .collect();
     let missing: Vec<&str> = require
         .iter()
         .map(String::as_str)
-        .filter(|r| !present.contains(r))
+        .filter(|r| !present.contains(*r))
         .collect();
     let mut parts = Vec::new();
     if !denied.is_empty() {
@@ -132,12 +155,17 @@ fn build_rootfs(
             resolution.missing.join(", ")
         );
     }
-    // Gate on the library policy before any staging work.
-    check_lib_policy(&resolution.libs, &opts.require, &opts.deny)?;
-
     let tree = stager::stage(binary, &resolution, dest)?;
     let default_includes = stager::stage_default_includes(&resolution, dest, &opts.nss)?;
     warnings.extend(default_includes.warnings);
+    // Gate on the library policy over everything staged (resolved libs, the loader, and the
+    // NSS modules), so a denied library cannot slip in via the default-includes.
+    check_lib_policy(
+        &resolution,
+        &default_includes.staged,
+        &opts.require,
+        &opts.deny,
+    )?;
     let sizes = stager::strip_and_measure(dest, &tree, &resolution, opts.strip, opts.upx)?;
     Ok((tree, sizes, warnings))
 }
@@ -433,41 +461,70 @@ fn image_tag(binary: &Path) -> String {
 mod tests {
     use super::*;
 
-    fn libs(sonames: &[&str]) -> Vec<resolver::ResolvedLib> {
-        sonames
-            .iter()
-            .map(|s| resolver::ResolvedLib {
-                soname: (*s).to_string(),
-                path: std::path::PathBuf::from(format!("/lib/{s}")),
-            })
-            .collect()
+    fn resolution(sonames: &[&str]) -> resolver::Resolution {
+        resolver::Resolution {
+            interpreter: Some(resolver::ResolvedInterp {
+                image_path: std::path::PathBuf::from("/lib64/ld-linux-x86-64.so.2"),
+                source: std::path::PathBuf::from("/lib64/ld-linux-x86-64.so.2"),
+            }),
+            libs: sonames
+                .iter()
+                .map(|s| resolver::ResolvedLib {
+                    soname: (*s).to_string(),
+                    path: std::path::PathBuf::from(format!("/lib/{s}")),
+                })
+                .collect(),
+            missing: vec![],
+            edges: vec![],
+        }
     }
 
     #[test]
     fn lib_policy_passes_when_satisfied_and_when_empty() {
-        let staged = libs(&["libc.so.6", "libm.so.6"]);
+        let res = resolution(&["libc.so.6", "libm.so.6"]);
         // No policy: always ok.
-        assert!(check_lib_policy(&staged, &[], &[]).is_ok());
+        assert!(check_lib_policy(&res, &[], &[], &[]).is_ok());
         // require present + deny absent: ok.
-        assert!(check_lib_policy(&staged, &["libc.so.6".into()], &["libssl.so.3".into()]).is_ok());
+        assert!(
+            check_lib_policy(&res, &[], &["libc.so.6".into()], &["libssl.so.3".into()]).is_ok()
+        );
     }
 
     #[test]
     fn lib_policy_fails_on_denied_present_and_required_absent() {
-        let staged = libs(&["libc.so.6", "libssl.so.3"]);
-        let denied = check_lib_policy(&staged, &[], &["libssl.so.3".into()]).unwrap_err();
+        let res = resolution(&["libc.so.6", "libssl.so.3"]);
+        let denied = check_lib_policy(&res, &[], &[], &["libssl.so.3".into()]).unwrap_err();
         assert!(denied
             .to_string()
             .contains("denied library present: libssl.so.3"));
-        let missing = check_lib_policy(&staged, &["libseccomp.so.2".into()], &[]).unwrap_err();
+        let missing = check_lib_policy(&res, &[], &["libseccomp.so.2".into()], &[]).unwrap_err();
         assert!(missing
             .to_string()
             .contains("required library missing: libseccomp.so.2"));
         // Both at once are reported together.
         let both =
-            check_lib_policy(&staged, &["libx.so".into()], &["libssl.so.3".into()]).unwrap_err();
+            check_lib_policy(&res, &[], &["libx.so".into()], &["libssl.so.3".into()]).unwrap_err();
         let msg = both.to_string();
         assert!(msg.contains("denied library present") && msg.contains("required library missing"));
+    }
+
+    #[test]
+    fn lib_policy_covers_loader_and_staged_nss_modules() {
+        // The loader (interpreter) and NSS modules ship outside `resolution.libs`; the gate
+        // must still see them. `staged_includes` mirrors what stage_default_includes reports.
+        let res = resolution(&["libc.so.6"]);
+        let staged = vec![
+            std::path::PathBuf::from("/etc/nsswitch.conf"), // not a .so — ignored
+            std::path::PathBuf::from("/usr/lib/x86_64-linux-gnu/libresolv.so.2"),
+        ];
+        // The loader is denyable by its file name.
+        assert!(check_lib_policy(&res, &staged, &[], &["ld-linux-x86-64.so.2".into()]).is_err());
+        // A staged NSS module is denyable even though it is not a resolved dependency.
+        assert!(check_lib_policy(&res, &staged, &[], &["libresolv.so.2".into()]).is_err());
+        // ...and requiring it is satisfied, since it does ship.
+        assert!(check_lib_policy(&res, &staged, &["libresolv.so.2".into()], &[]).is_ok());
+        // A non-`.so` staged file is not a library target.
+        assert!(check_lib_policy(&res, &staged, &["nsswitch.conf".into()], &[]).is_err());
     }
 
     #[test]

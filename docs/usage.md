@@ -98,8 +98,9 @@ scratchsmith pack --deny libssl.so.3 ./app        # fail if OpenSSL is staged
 scratchsmith pack --require libseccomp.so.2 ./app  # fail if seccomp is missing
 ```
 
-Both flags take a soname, match exactly, and repeat. Read the sonames from
-`scratchsmith graph`. The same keys work in `scratchsmith.toml` as `deny` and `require`.
+Both flags repeat and match exactly, by soname or staged file name. The resolved libraries,
+the loader, and the NSS modules are all in scope. Read the names from `scratchsmith graph`.
+The same keys work in `scratchsmith.toml` as `deny` and `require`.
 
 ## Multi-arch images
 

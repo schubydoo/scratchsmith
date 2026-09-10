@@ -27,8 +27,8 @@ file**.
 | `init` | `--init` | Add a minimal init (`tini`) as pid 1 wrapping the entrypoint. |
 | `include` | `--include` | Force-stage extra libraries by soname or path — e.g. `dlopen`'d plugins (list). |
 | `nss` | `--nss` | Name-service (NSS) modules to stage for glibc name lookups: `files`, `dns`, or `none` (list). Fewer modules trim CVE surface. A mode without `files` also drops `/etc/passwd` and `/etc/group`, which glibc reads through the `files` module. Default: `files` and `dns`. |
-| `deny` | `--deny` | Fail the pack if a library with this soname is staged (list). A CI policy gate; read sonames from `scratchsmith graph`. |
-| `require` | `--require` | Fail the pack if a library with this soname is not staged (list). |
+| `deny` | `--deny` | Fail the pack if this library ships (list). Resolved libraries, the loader, and NSS modules are all in scope, matched by soname or staged file name. A CI policy gate; read sonames from `scratchsmith graph`. |
+| `require` | `--require` | Fail the pack if this library does not ship (list). Same scope as `deny`. |
 | `sign` | `--sign` | cosign-sign the pushed image (keyless, by digest). Requires a push target. |
 | `push` | `--push` | Push the image straight to this registry reference, daemonless. |
 | `max-size` | `--max-size` | Fail the pack if the packed image (the fully-staged rootfs — payload + NSS includes + runtime extras) exceeds this size — e.g. `12MB`, `512KiB`, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024). |

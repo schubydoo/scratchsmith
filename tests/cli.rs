@@ -188,6 +188,37 @@ fn pack_deny_gate_fails_when_library_present() {
 }
 
 #[test]
+fn pack_deny_gate_covers_nss_modules() {
+    // `id` does DNS lookups, so `libresolv.so.2` is staged as an NSS module — outside the
+    // resolved dependency graph. The gate must still catch it (regression for the split
+    // between resolution.libs and the default-includes).
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("rootfs");
+    let output = run(&[
+        "pack",
+        "--deny",
+        "libresolv.so.2",
+        "--no-build",
+        "-o",
+        out.to_str().unwrap(),
+        bin,
+    ]);
+    assert!(
+        !output.status.success(),
+        "deny of a staged NSS module should fail the pack"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("library policy failed") && stderr.contains("libresolv.so.2"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn pack_oci_archive_writes_the_file() {
     // Exercises the `--oci-archive` sink through the CLI (daemonless — no Docker needed).
     let Some(bin) = small_fixture() else {
