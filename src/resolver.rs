@@ -171,6 +171,20 @@ pub struct ResolvedInterp {
     pub source: PathBuf,
 }
 
+/// One resolved dependency edge: a parent object needed `soname`, which resolved to `to`
+/// (or `None` when it could not be located). Recorded for every DT_NEEDED entry, including
+/// repeats and already-visited targets, so the full graph can be reconstructed without the
+/// per-path deduplication that `libs` applies. Consumed by the `graph` subcommand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DepEdge {
+    /// The real path of the object that declared the dependency (the binary or a library).
+    pub from: PathBuf,
+    /// The DT_NEEDED soname as the loader searched for it.
+    pub soname: String,
+    /// The child's real path, or `None` when the soname did not resolve.
+    pub to: Option<PathBuf>,
+}
+
 /// The closed set of what a binary needs at runtime.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Resolution {
@@ -182,6 +196,9 @@ pub struct Resolution {
     /// Sonames that could not be located. Non-empty means the image would be broken,
     /// so callers must fail loudly rather than ship it.
     pub missing: Vec<String>,
+    /// Parent->child edges, keyed by real path, for graph reconstruction. Unlike `libs`,
+    /// this keeps every edge (repeats, diamonds, unresolved), so no edge dangles.
+    pub edges: Vec<DepEdge>,
 }
 
 /// Supplies the dynamic-linking facts for a file. Abstracted so the search order
@@ -279,9 +296,21 @@ pub fn resolve_with(
         for soname in &obj.needed {
             let Some(found) = find_lib(soname, &search, obj_dir, &sysroot.root) else {
                 push_unique(&mut resolution.missing, soname.clone());
+                resolution.edges.push(DepEdge {
+                    from: obj_path.clone(),
+                    soname: soname.clone(),
+                    to: None,
+                });
                 continue;
             };
             let real = canonical(&found);
+            // Record the edge before the visited check, so a diamond or a repeat keeps its
+            // edge even though the target is staged only once.
+            resolution.edges.push(DepEdge {
+                from: obj_path.clone(),
+                soname: soname.clone(),
+                to: Some(real.clone()),
+            });
             if !visited.insert(real.clone()) {
                 continue;
             }
@@ -652,6 +681,17 @@ mod tests {
             .filter(|l| l.soname == "libc_shared.so")
             .count();
         assert_eq!(count, 1, "shared dep must appear once, got {count}");
+        // ...but the graph edges keep BOTH parents' edge to it, so a diamond can be
+        // reconstructed even though the file is staged once.
+        let edges_to_c = res
+            .edges
+            .iter()
+            .filter(|e| e.to.as_deref() == Some(canonical(&c).as_path()))
+            .count();
+        assert_eq!(
+            edges_to_c, 2,
+            "both a and b must keep an edge to c, got {edges_to_c}"
+        );
     }
 
     #[test]

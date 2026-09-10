@@ -187,6 +187,18 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
     },
+    /// Print a binary's resolved dependency tree (what `pack` would stage).
+    Graph {
+        /// Path to the dynamically linked binary to inspect.
+        binary: PathBuf,
+        /// Also resolve these extra libraries (soname or path), like `pack --include`;
+        /// repeatable — e.g. a `dlopen`'d plugin.
+        #[arg(long = "include", value_name = "LIB")]
+        include: Vec<String>,
+        /// Report format.
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
+    },
 }
 
 /// Parse process arguments and run the chosen subcommand.
@@ -394,6 +406,20 @@ fn dispatch(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
+        Command::Graph {
+            binary,
+            include,
+            format,
+        } => {
+            let report = crate::graph::build(&binary, &include)?;
+            match format {
+                Format::Text => println!("{}", report.to_text()),
+                Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+            }
+            // Print the graph first, then fail loudly on any unresolved dependency so a
+            // text-mode CI gate does not pass on a binary that could not be packed.
+            crate::graph::check_complete(&report)
+        }
     }
 }
 
@@ -407,6 +433,32 @@ mod tests {
     fn cli_definition_is_valid() {
         // Catches malformed clap attributes (arg conflicts, bad names) at test time.
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn graph_parses_binary_include_and_format() {
+        let cli = Cli::try_parse_from([
+            "scratchsmith",
+            "graph",
+            "--include",
+            "libz.so.1",
+            "--format",
+            "json",
+            "/bin/ls",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Graph {
+                binary,
+                include,
+                format,
+            }) => {
+                assert_eq!(binary, PathBuf::from("/bin/ls"));
+                assert_eq!(include, vec!["libz.so.1".to_string()]);
+                assert!(matches!(format, Format::Json));
+            }
+            other => panic!("expected Graph, got {other:?}"),
+        }
     }
 
     #[test]
