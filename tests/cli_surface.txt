@@ -3,6 +3,11 @@
 
 [doctor]
 
+[graph]
+  <binary>  value=true  multiple=false  required=true
+  --format  value=true  multiple=false  required=false  default=text  values=[text,json]
+  --include  value=true  multiple=true  required=false
+
 [index]
   --format  value=true  multiple=false  required=false  default=text  values=[text,json]
   --sign  value=false  multiple=false  required=false

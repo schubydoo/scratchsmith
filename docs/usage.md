@@ -74,6 +74,20 @@ certificates, which you add separately with `--ca-certs`. `--nss none` also skip
 `files` also drops `/etc/passwd` and `/etc/group`, because glibc reads them through the `files`
 module, so user and group lookups do not work there.
 
+## Inspect the dependency graph
+
+To see what `pack` would stage without building an image, run `graph`:
+
+```sh
+scratchsmith graph ./app                            # ASCII tree of the resolved deps
+scratchsmith graph --format json ./app              # machine-readable adjacency list
+scratchsmith graph --include libplugin.so.1 ./app   # add a dlopen'd library, like pack
+```
+
+The tree shows each library in full the first time and marks a later repeat with `(*)`, so
+a shared dependency or a cycle does not print twice. A dependency that does not resolve is
+shown as `(missing)`. The last line names the loader (`PT_INTERP`).
+
 ## Multi-arch images
 
 Scratchsmith resolves against the host's libraries, so it packs for the architecture it runs on.

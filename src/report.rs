@@ -148,9 +148,174 @@ impl IndexReport {
     }
 }
 
+/// One object in a dependency graph (`graph` subcommand): a resolved file plus the
+/// sonames it directly needs (its outgoing edges).
+#[derive(Debug, Clone, Serialize)]
+pub struct DepNode {
+    /// The soname the loader searched for, or the binary's file name for the root.
+    pub name: String,
+    /// The real file it resolved to, symlinks followed.
+    pub path: String,
+    /// Direct DT_NEEDED sonames — the edges to this node's children.
+    pub needs: Vec<String>,
+}
+
+/// A binary's resolved dependency graph (`graph` subcommand). An adjacency list, not a
+/// duplicated tree: each object appears once in `nodes`, and `to_text` walks the edges
+/// into a tree, marking a repeat with `(*)` so diamonds and cycles terminate. Fields are
+/// stable so the JSON can gate CI, like `PackReport`.
+#[derive(Debug, Clone, Serialize)]
+pub struct DepGraphReport {
+    /// The root node's name (the binary's file name).
+    pub root: String,
+    /// The PT_INTERP loader's image path, if the binary is dynamic.
+    pub interpreter: Option<String>,
+    /// The root first, then every resolved library, deduplicated by real path.
+    pub nodes: Vec<DepNode>,
+    /// Sonames that could not be resolved — the image would be broken.
+    pub missing: Vec<String>,
+}
+
+impl DepGraphReport {
+    /// Human-readable rendering (the `--format text` output): an indented tree. A soname
+    /// already shown is printed once more as `(*)` and not expanded, so a diamond (a lib
+    /// needed by two parents) or a cycle terminates.
+    pub fn to_text(&self) -> String {
+        let by_name: std::collections::HashMap<&str, &DepNode> =
+            self.nodes.iter().map(|n| (n.name.as_str(), n)).collect();
+        let missing: std::collections::HashSet<&str> =
+            self.missing.iter().map(|s| s.as_str()).collect();
+
+        let mut out = String::new();
+        if let Some(root) = by_name.get(self.root.as_str()) {
+            out.push_str(&format!("{} ({})\n", root.name, root.path));
+            let mut seen = std::collections::HashSet::new();
+            seen.insert(root.name.as_str());
+            render_children(root, &by_name, &missing, &mut seen, "", &mut out);
+        }
+        if let Some(interp) = &self.interpreter {
+            out.push_str(&format!("interpreter: {interp}\n"));
+        }
+        out.trim_end().to_string()
+    }
+}
+
+// Render `node`'s children as an indented subtree. `seen` guards repeats: a soname shown
+// before is printed as `(*)` and not expanded (diamonds, cycles). A soname that is neither
+// a node nor in `missing` resolved to a file already staged under another soname, so it is
+// shown once as `(*)` too rather than invented as a new subtree.
+fn render_children<'a>(
+    node: &'a DepNode,
+    by_name: &std::collections::HashMap<&'a str, &'a DepNode>,
+    missing: &std::collections::HashSet<&'a str>,
+    seen: &mut std::collections::HashSet<&'a str>,
+    prefix: &str,
+    out: &mut String,
+) {
+    let n = node.needs.len();
+    for (i, soname) in node.needs.iter().enumerate() {
+        let last = i + 1 == n;
+        let branch = if last { "└── " } else { "├── " };
+        let child_prefix = if last { "    " } else { "│   " };
+        let s = soname.as_str();
+        if let Some(child) = by_name.get(s) {
+            if seen.contains(s) {
+                out.push_str(&format!("{prefix}{branch}{soname} (*)\n"));
+            } else {
+                out.push_str(&format!("{prefix}{branch}{soname} ({})\n", child.path));
+                seen.insert(child.name.as_str());
+                render_children(
+                    child,
+                    by_name,
+                    missing,
+                    seen,
+                    &format!("{prefix}{child_prefix}"),
+                    out,
+                );
+            }
+        } else if missing.contains(s) {
+            out.push_str(&format!("{prefix}{branch}{soname} (missing)\n"));
+        } else {
+            out.push_str(&format!("{prefix}{branch}{soname} (*)\n"));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn node(name: &str, path: &str, needs: &[&str]) -> DepNode {
+        DepNode {
+            name: name.into(),
+            path: path.into(),
+            needs: needs.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn dep_graph_text_renders_diamond_and_missing() {
+        // app -> libA -> libC and app -> libB -> libC (a diamond), plus a missing dep.
+        let report = DepGraphReport {
+            root: "app".into(),
+            interpreter: Some("/lib64/ld.so".into()),
+            nodes: vec![
+                node("app", "/app", &["libA.so", "libB.so", "libghost.so"]),
+                node("libA.so", "/libA", &["libC.so"]),
+                node("libB.so", "/libB", &["libC.so"]),
+                node("libC.so", "/libC", &[]),
+            ],
+            missing: vec!["libghost.so".into()],
+        };
+        let text = report.to_text();
+        // libC is expanded under its first parent, then marked a repeat under the second.
+        assert!(text.contains("libC.so (/libC)"), "{text}");
+        assert!(text.contains("libC.so (*)"), "diamond not marked: {text}");
+        assert!(text.contains("libghost.so (missing)"), "{text}");
+        assert!(text.contains("interpreter: /lib64/ld.so"), "{text}");
+    }
+
+    #[test]
+    fn dep_graph_text_terminates_on_cycle() {
+        // app -> libA -> libB -> libA. The `(*)` guard must break the cycle.
+        let report = DepGraphReport {
+            root: "app".into(),
+            interpreter: None,
+            nodes: vec![
+                node("app", "/app", &["libA.so"]),
+                node("libA.so", "/libA", &["libB.so"]),
+                node("libB.so", "/libB", &["libA.so"]),
+            ],
+            missing: vec![],
+        };
+        let text = report.to_text();
+        assert!(
+            text.contains("libA.so (/libA)") && text.contains("libB.so (/libB)"),
+            "{text}"
+        );
+        assert!(text.contains("libA.so (*)"), "cycle not marked: {text}");
+    }
+
+    #[test]
+    fn dep_graph_json_schema_is_stable() {
+        let report = DepGraphReport {
+            root: "app".into(),
+            interpreter: Some("/lib64/ld.so".into()),
+            nodes: vec![
+                node("app", "/app", &["libc.so.6"]),
+                node("libc.so.6", "/lib/libc.so.6", &[]),
+            ],
+            missing: vec!["libx.so".into()],
+        };
+        let v: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&report).unwrap()).unwrap();
+        assert_eq!(v["root"], "app");
+        assert_eq!(v["interpreter"], "/lib64/ld.so");
+        assert_eq!(v["missing"][0], "libx.so");
+        assert_eq!(v["nodes"][0]["name"], "app");
+        assert_eq!(v["nodes"][0]["path"], "/app");
+        assert_eq!(v["nodes"][0]["needs"][0], "libc.so.6");
+    }
 
     fn sample_report() -> PackReport {
         PackReport {

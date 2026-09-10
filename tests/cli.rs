@@ -35,7 +35,7 @@ fn help_lists_all_subcommands() {
     let out = run(&["--help"]);
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    for cmd in ["pack", "lint", "doctor", "index"] {
+    for cmd in ["pack", "lint", "doctor", "index", "graph"] {
         assert!(stdout.contains(cmd), "help missing `{cmd}`: {stdout}");
     }
 }
@@ -111,6 +111,45 @@ fn lint_reports_hardening_for_a_real_binary() {
     for field in ["PIE:", "RELRO:", "NX:", "Canary:", "Fortify:"] {
         assert!(stdout.contains(field), "missing {field} in: {stdout}");
     }
+}
+
+#[test]
+fn graph_prints_a_dependency_tree() {
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to inspect");
+        return;
+    };
+    let out = run(&["graph", bin]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The root is the binary, libc is a resolved dependency, and the loader is noted.
+    assert!(stdout.contains("id "), "root missing: {stdout}");
+    assert!(stdout.contains("libc.so"), "libc missing: {stdout}");
+    assert!(stdout.contains("interpreter:"), "loader missing: {stdout}");
+}
+
+#[test]
+fn graph_json_is_valid_and_lists_nodes() {
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to inspect");
+        return;
+    };
+    let out = run(&["graph", "--format", "json", bin]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid json");
+    assert_eq!(v["root"], "id");
+    assert!(
+        v["nodes"].as_array().map(|a| a.len() >= 2).unwrap_or(false),
+        "expected the binary plus libraries: {v}"
+    );
 }
 
 #[test]
