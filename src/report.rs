@@ -236,6 +236,65 @@ fn render_children<'a>(
     }
 }
 
+/// One file in a directory diff (`diff` subcommand): its path relative to the rootfs root
+/// and its size in bytes.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiffFile {
+    pub path: String,
+    pub size: u64,
+}
+
+/// The difference between two staged rootfs directories (`diff` subcommand): the files
+/// added, removed, and changed, plus each side's total file size. Fields are stable so the
+/// JSON can gate CI.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiffReport {
+    /// Files present in the second tree but not the first.
+    pub added: Vec<DiffFile>,
+    /// Files present in the first tree but not the second.
+    pub removed: Vec<DiffFile>,
+    /// Paths in both trees whose contents differ.
+    pub changed: Vec<String>,
+    /// Total regular-file bytes in the first tree.
+    pub size_before: u64,
+    /// Total regular-file bytes in the second tree.
+    pub size_after: u64,
+}
+
+impl DiffReport {
+    /// Whether the two trees differ at all — the signal for `diff --exit-code`.
+    pub fn has_changes(&self) -> bool {
+        !self.added.is_empty() || !self.removed.is_empty() || !self.changed.is_empty()
+    }
+
+    /// Human-readable rendering (the `--format text` output): `+` added, `-` removed,
+    /// `~` changed, then the size delta.
+    pub fn to_text(&self) -> String {
+        let mut out = String::new();
+        if !self.has_changes() {
+            out.push_str("no changes\n");
+        }
+        for f in &self.added {
+            out.push_str(&format!("+ {} ({})\n", f.path, human_size(f.size)));
+        }
+        for f in &self.removed {
+            out.push_str(&format!("- {} ({})\n", f.path, human_size(f.size)));
+        }
+        for path in &self.changed {
+            out.push_str(&format!("~ {path}\n"));
+        }
+        let delta = self.size_after as i64 - self.size_before as i64;
+        let sign = if delta >= 0 { "+" } else { "-" };
+        out.push_str(&format!(
+            "size: {} -> {} ({sign}{})",
+            human_size(self.size_before),
+            human_size(self.size_after),
+            human_size(delta.unsigned_abs())
+        ));
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +371,51 @@ mod tests {
         assert_eq!(v["nodes"][0]["name"], "app");
         assert_eq!(v["nodes"][0]["needs"][0], "/lib/libc.so.6");
         assert!(v["nodes"][0]["missing"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn diff_report_text_and_json() {
+        let report = DiffReport {
+            added: vec![DiffFile {
+                path: "lib/libnew.so.1".into(),
+                size: 10,
+            }],
+            removed: vec![DiffFile {
+                path: "lib/libgone.so.1".into(),
+                size: 4,
+            }],
+            changed: vec!["bin/app".into()],
+            size_before: 100,
+            size_after: 200,
+        };
+        assert!(report.has_changes());
+        let text = report.to_text();
+        assert!(text.contains("+ lib/libnew.so.1"), "{text}");
+        assert!(text.contains("- lib/libgone.so.1"), "{text}");
+        assert!(text.contains("~ bin/app"), "{text}");
+        assert!(text.contains("size:") && text.contains("(+"), "{text}");
+
+        let v: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&report).unwrap()).unwrap();
+        assert_eq!(v["added"][0]["path"], "lib/libnew.so.1");
+        assert_eq!(v["added"][0]["size"], 10);
+        assert_eq!(v["removed"][0]["path"], "lib/libgone.so.1");
+        assert_eq!(v["changed"][0], "bin/app");
+        assert_eq!(v["size_before"], 100);
+        assert_eq!(v["size_after"], 200);
+    }
+
+    #[test]
+    fn diff_report_no_changes_text() {
+        let report = DiffReport {
+            added: vec![],
+            removed: vec![],
+            changed: vec![],
+            size_before: 5,
+            size_after: 5,
+        };
+        assert!(!report.has_changes());
+        assert!(report.to_text().contains("no changes"));
     }
 
     fn sample_report() -> PackReport {

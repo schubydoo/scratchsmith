@@ -35,7 +35,7 @@ fn help_lists_all_subcommands() {
     let out = run(&["--help"]);
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    for cmd in ["pack", "lint", "doctor", "index", "graph"] {
+    for cmd in ["pack", "lint", "doctor", "index", "graph", "diff"] {
         assert!(stdout.contains(cmd), "help missing `{cmd}`: {stdout}");
     }
 }
@@ -155,6 +155,48 @@ fn graph_json_is_valid_and_lists_nodes() {
         v["nodes"].as_array().map(|a| a.len() >= 2).unwrap_or(false),
         "expected the binary plus libraries: {v}"
     );
+}
+
+#[test]
+fn diff_flags_drift_with_exit_code() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("a");
+    let b = tmp.path().join("b");
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    std::fs::write(a.join("f"), "one").unwrap();
+    std::fs::write(b.join("f"), "two").unwrap();
+    let out = run(&[
+        "diff",
+        "--exit-code",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    assert!(!out.status.success(), "--exit-code must fail on drift");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("~ f"), "{stdout}");
+}
+
+#[test]
+fn diff_identical_dirs_report_no_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("a");
+    let b = tmp.path().join("b");
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    std::fs::write(a.join("f"), "same").unwrap();
+    std::fs::write(b.join("f"), "same").unwrap();
+    let out = run(&[
+        "diff",
+        "--exit-code",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    assert!(
+        out.status.success(),
+        "identical dirs must pass even with --exit-code"
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("no changes"));
 }
 
 #[test]

@@ -1,6 +1,12 @@
 [scratchsmith]
   --completions  value=true  multiple=false  required=false  values=[bash,zsh,fish]
 
+[diff]
+  <after>  value=true  multiple=false  required=true
+  <before>  value=true  multiple=false  required=true
+  --exit-code  value=false  multiple=false  required=false
+  --format  value=true  multiple=false  required=false  default=text  values=[text,json]
+
 [doctor]
 
 [graph]
