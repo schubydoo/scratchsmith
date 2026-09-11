@@ -140,3 +140,52 @@ jobs:
           # an image check alone would not catch that regression.
           echo "$REPORT" | jq -e '.scan != null' >/dev/null || { echo "::error::report.scan is null — was --scan dropped from action.yml?"; exit 1; }
           echo "scan input wired (grype ran, pack succeeded)"
+      # deny / require are pack policy gates, like max-size: prove each is wired by tripping it.
+      # /usr/bin/id links libc.so.6, so denying it MUST fail; a dropped --deny would let it pass.
+      - name: Pack denying a library that ships (must fail the build)
+        id: deny
+        continue-on-error: true
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          deny: |
+            libc.so.6
+      - name: Assert the deny gate tripped
+        env:
+          OUTCOME: ${{ steps.deny.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$OUTCOME" = "failure" ] || { echo "::error::denying libc.so.6 should have failed the pack but it was '$OUTCOME' — is --deny wired in action.yml?"; exit 1; }
+          echo "deny gate verified"
+      # Requiring a library that does not ship MUST fail; a dropped --require would let it pass.
+      - name: Pack requiring a library that is absent (must fail the build)
+        id: require
+        continue-on-error: true
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          require: |
+            libnot-a-real-lib.so.99
+      - name: Assert the require gate tripped
+        env:
+          OUTCOME: ${{ steps.require.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$OUTCOME" = "failure" ] || { echo "::error::requiring an absent library should have failed the pack but it was '$OUTCOME' — is --require wired in action.yml?"; exit 1; }
+          echo "require gate verified"
+      # nss takes an enum value; an invalid one MUST fail at parse. A dropped --nss would never
+      # pass the value to the CLI, so the pack would succeed — this catches that regression.
+      - name: Pack with an invalid nss value (must fail the build)
+        id: nss
+        continue-on-error: true
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          nss: not-a-module
+      - name: Assert the nss input reached the CLI
+        env:
+          OUTCOME: ${{ steps.nss.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$OUTCOME" = "failure" ] || { echo "::error::an invalid nss value should have failed the pack but it was '$OUTCOME' — is --nss wired in action.yml?"; exit 1; }
+          echo "nss input verified"
