@@ -1,0 +1,52 @@
+name: Actionlint
+
+# Lints GitHub Actions workflows: YAML schema, `${{ }}` expression types, and — via
+# shellcheck — the shell in every `run:` block, which nothing else covered. Runs on every
+# pull request and on push to main with no `paths:` filter: actionlint over the tree takes
+# seconds, and a paths-filtered check that is also required hangs a non-workflow PR at
+# "Expected — waiting for status", so always-on keeps it safe to mark required. The `$/`
+# self-repository `uses:` false positive is suppressed in .github/actionlint.yaml.
+
+on:
+  pull_request:
+    # Explicit list = the implicit defaults (opened/synchronize/reopened) plus
+    # ready_for_review, which re-fires on the draft → ready flip.
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: actionlint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install + run actionlint (version + checksum pinned)
+        env:
+          # renovate: datasource=github-releases depName=rhysd/actionlint
+          ACTIONLINT_VERSION: "1.7.12"
+          # sha256 of actionlint_1.7.12_linux_amd64.tar.gz from the release's checksums.txt.
+          # Renovate can bump the pair; a moved artifact fails the -c.
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          set -euo pipefail
+          url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL "$url" -o actionlint.tar.gz
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          # The shellcheck binary is preinstalled on ubuntu-latest; fail loudly if that ever
+          # changes so run: blocks never go silently unlinted. (This comment avoids starting
+          # with the tool's name, which reads as an SC directive and errors SC1072/SC1073.)
+          shellcheck --version >/dev/null \
+            || { echo "::error::shellcheck missing — run: blocks would go unlinted"; exit 1; }
+          ./actionlint -color
