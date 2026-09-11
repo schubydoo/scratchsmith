@@ -21,6 +21,9 @@ struct Spec {
     include_dir_entry: bool,
     // Make the top manifest an image index (no `layers`) — exercises the index-detect branch.
     manifest_is_index: bool,
+    // Rare on purpose (like `tamper`): drop the first layer's `digest` field so unpack's
+    // "layer descriptor has no digest" error path runs, without starving the happy path.
+    drop_first_digest: u8,
 }
 
 #[derive(Arbitrary, Debug)]
@@ -174,7 +177,7 @@ fn build_archive(spec: &Spec) -> Vec<u8> {
     let mut blobs: Vec<(String, Vec<u8>)> = Vec::new(); // (digest_name, bytes) to write
     let mut layer_descs: Vec<serde_json::Value> = Vec::new();
 
-    for layer in spec.layers.iter().take(4) {
+    for (i, layer) in spec.layers.iter().take(4).enumerate() {
         let tar = layer_tar(layer);
         let (bytes, media) = match layer.media {
             Media::Gzip => (gzip(&tar), "application/vnd.oci.image.layer.v1.tar+gzip"),
@@ -182,11 +185,14 @@ fn build_archive(spec: &Spec) -> Vec<u8> {
             Media::Unsupported => (tar, "application/vnd.oci.image.layer.v1.tar+zstd"),
         };
         let digest = hex(Sha256::digest(&bytes));
-        layer_descs.push(serde_json::json!({
-            "mediaType": media,
-            "digest": format!("sha256:{digest}"),
-            "size": bytes.len(),
-        }));
+        let mut desc = serde_json::Map::new();
+        desc.insert("mediaType".into(), media.into());
+        desc.insert("size".into(), bytes.len().into());
+        // Omit the digest on the first layer ~1 in 16 inputs so the "no digest" bail runs.
+        if !(i == 0 && spec.drop_first_digest % 16 == 0) {
+            desc.insert("digest".into(), format!("sha256:{digest}").into());
+        }
+        layer_descs.push(serde_json::Value::Object(desc));
         blobs.push((digest, bytes));
     }
 

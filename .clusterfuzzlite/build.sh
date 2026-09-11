@@ -53,6 +53,7 @@ clang -Wl,--disable-new-dtags,-rpath,/opt/lib     -o "$elf_seed/elf-rpath"      
 clang -Wl,--enable-new-dtags,-rpath,'$ORIGIN/lib' -o "$elf_seed/elf-runpath-origin" "$elf_seed/s.c" # RUNPATH + $ORIGIN
 clang -shared -fPIC -Wl,-soname,libseed.so.1      -o "$elf_seed/elf-shared.so"      "$elf_seed/s.c" # ET_DYN + soname
 clang -static-pie                                 -o "$elf_seed/elf-static-pie"     "$elf_seed/s.c" # static PIE: no INTERP
+clang -Wl,-z,relro,-z,now                         -o "$elf_seed/elf-full-relro"     "$elf_seed/s.c" # PT_GNU_RELRO + BIND_NOW -> lint's Relro::Full
 rm -f "$elf_seed/s.c"
 
 # An OCI-archive seed for the raw `unpack` parser: a real layout whose blob digests match, so
