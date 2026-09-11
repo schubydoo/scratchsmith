@@ -102,6 +102,20 @@ Both flags repeat and match exactly, by soname or staged file name. The resolved
 the loader, and the NSS modules are all in scope. Read the names from `scratchsmith graph`.
 The same keys work in `scratchsmith.toml` as `deny` and `require`.
 
+## Diff two builds
+
+To catch image drift, stage two builds and compare their rootfs directories:
+
+```sh
+scratchsmith pack --no-build --output old ./app-v1
+scratchsmith pack --no-build --output new ./app-v2
+scratchsmith diff old new              # files added, removed, changed, and the size delta
+scratchsmith diff --exit-code old new  # exit non-zero on any difference (a CI gate)
+```
+
+`diff` marks an added file with `+`, a removed file with `-`, and a changed file with `~`,
+then prints the total size delta. `--format json` emits the same data for a machine.
+
 ## Multi-arch images
 
 Scratchsmith resolves against the host's libraries, so it packs for the architecture it runs on.

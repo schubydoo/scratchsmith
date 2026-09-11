@@ -206,6 +206,19 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
     },
+    /// Compare two staged rootfs directories: files added, removed, changed, size delta.
+    Diff {
+        /// The baseline rootfs directory (e.g. a previous `pack --no-build --output`).
+        before: PathBuf,
+        /// The new rootfs directory to compare against the baseline.
+        after: PathBuf,
+        /// Exit non-zero if the two directories differ (a CI drift gate).
+        #[arg(long = "exit-code")]
+        exit_code: bool,
+        /// Report format.
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
+    },
 }
 
 /// Parse process arguments and run the chosen subcommand.
@@ -435,6 +448,23 @@ fn dispatch(cli: Cli) -> Result<()> {
             // text-mode CI gate does not pass on a binary that could not be packed.
             crate::graph::check_complete(&report)
         }
+        Command::Diff {
+            before,
+            after,
+            exit_code,
+            format,
+        } => {
+            let report = crate::diff::build(&before, &after)?;
+            match format {
+                Format::Text => println!("{}", report.to_text()),
+                Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+            }
+            // With --exit-code, drift is a failure so CI can gate on it (like `git diff`).
+            if exit_code && report.has_changes() {
+                bail!("rootfs directories differ");
+            }
+            Ok(())
+        }
     }
 }
 
@@ -473,6 +503,25 @@ mod tests {
                 assert!(matches!(format, Format::Json));
             }
             other => panic!("expected Graph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn diff_parses_dirs_and_exit_code() {
+        let cli =
+            Cli::try_parse_from(["scratchsmith", "diff", "--exit-code", "old", "new"]).unwrap();
+        match cli.command {
+            Some(Command::Diff {
+                before,
+                after,
+                exit_code,
+                ..
+            }) => {
+                assert_eq!(before, PathBuf::from("old"));
+                assert_eq!(after, PathBuf::from("new"));
+                assert!(exit_code);
+            }
+            other => panic!("expected Diff, got {other:?}"),
         }
     }
 
