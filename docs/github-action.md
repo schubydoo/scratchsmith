@@ -24,7 +24,7 @@ To publish the built image, log in first and set `push`:
 ```
 
 Set image metadata, gate on vulnerabilities, or cap the size. The list-valued inputs (`cmd`, `env`,
-`label`, `healthcheck`, `include`) take **one value per line**:
+`label`, `healthcheck`, `include`, `deny`, `require`) take **one value per line**:
 
 ```yaml
 - uses: schubydoo/scratchsmith@v<ver>
@@ -81,7 +81,10 @@ verbatim escape hatch for any flag without a dedicated input (e.g. `--sign`, `--
 | `tz` | `false` | Add the resolved local timezone to the image. |
 | `init` | `false` | Add a minimal init (tini) as pid 1 wrapping the entrypoint. |
 | `include` | | Extra libraries to force-stage (e.g. `dlopen`'d plugins), one soname/path per line. |
+| `nss` | `files,dns` | NSS modules to stage for glibc lookups, comma-separated (`files,dns`, or `none`). Fewer modules trim CVE surface. |
 | `max-size` | | Fail if the fully-staged image exceeds this size — e.g. `25MB`, `512KiB`, or a byte count. |
+| `deny` | | If a listed library ships, fail the pack (soname or staged file name), one per line. |
+| `require` | | If a listed library does not ship, fail the pack (same scope as `deny`), one per line. |
 | `push` | | Tag the built image as this registry ref and `docker push` it (needs a prior registry login; not compatible with `output`). |
 | `args` | | Extra raw `pack` flags appended verbatim — the escape hatch for anything above. |
 

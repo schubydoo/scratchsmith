@@ -65,6 +65,12 @@ inputs:
     description: Extra libraries to force-stage (e.g. dlopen'd plugins), one soname/path per line.
     required: false
     default: ""
+  nss:
+    description: >-
+      NSS modules to stage for glibc lookups, comma-separated (`files,dns`, or `none`). Fewer
+      modules trim CVE surface. Empty keeps the default (`files,dns`).
+    required: false
+    default: ""
   entrypoint:
     description: Image ENTRYPOINT. Empty defaults to the packed binary's path.
     required: false
@@ -113,6 +119,14 @@ inputs:
     description: >-
       Fail the pack if the fully-staged image exceeds this size — e.g. `12MB`, `512KiB`, or a bare
       byte count (K/M/G are x1000, Ki/Mi/Gi are x1024).
+    required: false
+    default: ""
+  deny:
+    description: Fail the pack if a listed library ships (soname or staged file name), one per line.
+    required: false
+    default: ""
+  require:
+    description: Fail the pack if a listed library does NOT ship (same scope as `deny`), one per line.
     required: false
     default: ""
   args:
@@ -229,6 +243,9 @@ runs:
         IN_SCAN: ${{ inputs.scan }}
         IN_SCAN_FAIL_ON: ${{ inputs.scan-fail-on }}
         IN_MAX_SIZE: ${{ inputs.max-size }}
+        IN_NSS: ${{ inputs.nss }}
+        IN_DENY: ${{ inputs.deny }}
+        IN_REQUIRE: ${{ inputs.require }}
       run: |
         set -euo pipefail
         [ -n "$IN_BINARY" ] || { echo "::error::input 'binary' is required"; exit 1; }
@@ -257,6 +274,8 @@ runs:
         [ -n "$IN_ENTRYPOINT" ] && args+=("--entrypoint" "$IN_ENTRYPOINT")
         [ -n "$IN_WORKDIR" ] && args+=("--workdir" "$IN_WORKDIR")
         [ -n "$IN_MAX_SIZE" ] && args+=("--max-size" "$IN_MAX_SIZE")
+        # --nss takes a comma-separated value; pass it through as one token.
+        [ -n "$IN_NSS" ] && args+=("--nss" "$IN_NSS")
         [ "$IN_SCAN" = "true" ] && args+=("--scan")
         [ -n "$IN_SCAN_FAIL_ON" ] && args+=("--scan-fail-on" "$IN_SCAN_FAIL_ON")
         if [ "$IN_SBOM" = "true" ]; then
@@ -279,6 +298,12 @@ runs:
         while IFS= read -r hc; do
           [ -n "$hc" ] && args+=("--healthcheck" "$hc")
         done <<< "$IN_HEALTHCHECK"
+        while IFS= read -r d; do
+          [ -n "$d" ] && args+=("--deny" "$d")
+        done <<< "$IN_DENY"
+        while IFS= read -r r; do
+          [ -n "$r" ] && args+=("--require" "$r")
+        done <<< "$IN_REQUIRE"
         # Verbatim escape-hatch flags (word-split intentionally).
         # shellcheck disable=SC2206
         [ -n "$IN_ARGS" ] && args+=($IN_ARGS)
