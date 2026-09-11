@@ -159,9 +159,11 @@ jobs:
           echo "supported=$supported" >> "$GITHUB_OUTPUT"
           [ "$supported" = true ] \
             || echo "::notice::released CLI predates --nss/--deny/--require; their selftest cases are skipped until the next release carries them"
-      # Positive, not trip, tests: a wrong flag name in action.yml fails the pack on "unexpected
-      # argument", so a SUCCESS here proves the flag is wired. deny of a library that does NOT
-      # ship has nothing to trip on, so it must pack cleanly.
+      # deny/require each need TWO complementary cases. The positive one (an absent lib packs
+      # cleanly) pins the flag NAME: a wrong name in action.yml fails on "unexpected argument".
+      # The trip one (a shipping lib denied / an absent lib required) pins the WIRING:
+      # check_lib_policy short-circuits when both lists are empty, so a dropped loop makes the
+      # positive pass falsely, and only the trip catches it.
       - name: Pack denying an absent library (must succeed)
         id: deny
         if: steps.flags.outputs.supported == 'true'
@@ -177,7 +179,27 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "$IMAGE" ] || { echo "::error::deny of an absent library produced no image — is --deny wired in action.yml?"; exit 1; }
-          echo "deny input wired"
+          echo "deny name wired"
+      # Trip half: /usr/bin/id links libc.so.6, so denying it MUST fail the pack. If the --deny
+      # loop is dropped from action.yml, the list is empty, the policy is skipped, and the pack
+      # succeeds — caught here.
+      - name: Pack denying a library that ships (must fail)
+        id: deny-trip
+        if: steps.flags.outputs.supported == 'true'
+        continue-on-error: true
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          deny: |
+            libc.so.6
+      - name: Assert the deny gate tripped
+        if: steps.flags.outputs.supported == 'true'
+        env:
+          OUTCOME: ${{ steps.deny-trip.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$OUTCOME" = "failure" ] || { echo "::error::denying libc.so.6 packed anyway — was the --deny wiring dropped from action.yml?"; exit 1; }
+          echo "deny gate verified"
       # require of a library that DOES ship (/usr/bin/id links libc.so.6) is satisfied, so it
       # must pack cleanly; a wrong flag name would fail on "unexpected argument".
       - name: Pack requiring a library that ships (must succeed)
@@ -195,7 +217,26 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "$IMAGE" ] || { echo "::error::require of a shipping library produced no image — is --require wired in action.yml?"; exit 1; }
-          echo "require input wired"
+          echo "require name wired"
+      # Trip half: requiring a library that does NOT ship MUST fail the pack. A dropped --require
+      # loop leaves the list empty, the policy is skipped, and the pack succeeds — caught here.
+      - name: Pack requiring an absent library (must fail)
+        id: require-trip
+        if: steps.flags.outputs.supported == 'true'
+        continue-on-error: true
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          require: |
+            libnot-a-real-lib.so.99
+      - name: Assert the require gate tripped
+        if: steps.flags.outputs.supported == 'true'
+        env:
+          OUTCOME: ${{ steps.require-trip.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$OUTCOME" = "failure" ] || { echo "::error::requiring an absent library packed anyway — was the --require wiring dropped from action.yml?"; exit 1; }
+          echo "require gate verified"
       # nss=none stages no nsswitch.conf, while the default stages one. Pack to a rootfs and
       # assert the file is absent: this fails if the input is dropped (default stages it) and if
       # the value is mangled (the pack fails, so no rootfs).
