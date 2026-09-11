@@ -53,6 +53,7 @@ clang -Wl,--disable-new-dtags,-rpath,/opt/lib     -o "$elf_seed/elf-rpath"      
 clang -Wl,--enable-new-dtags,-rpath,'$ORIGIN/lib' -o "$elf_seed/elf-runpath-origin" "$elf_seed/s.c" # RUNPATH + $ORIGIN
 clang -shared -fPIC -Wl,-soname,libseed.so.1      -o "$elf_seed/elf-shared.so"      "$elf_seed/s.c" # ET_DYN + soname
 clang -static-pie                                 -o "$elf_seed/elf-static-pie"     "$elf_seed/s.c" # static PIE: no INTERP
+clang -Wl,-z,relro,-z,now                         -o "$elf_seed/elf-full-relro"     "$elf_seed/s.c" # PT_GNU_RELRO + BIND_NOW -> lint's Relro::Full
 rm -f "$elf_seed/s.c"
 
 # An OCI-archive seed for the raw `unpack` parser: a real layout whose blob digests match, so
@@ -79,11 +80,21 @@ printf '{"imageLayoutVersion":"1.0.0"}' > "$oci/oci-layout"
 ( cd "$oci" && tar -cf "$oci_seed/app.oci.tar" oci-layout index.json blobs )
 rm -f "$layer_tar"
 
+# JSON seeds for registry_parse: a valid child manifest, config blob, and token response, so
+# mutation reaches each field (mediaType/config.digest, architecture/os/variant, token/
+# access_token) from valid JSON instead of bouncing off the outer serde parse.
+json_seed="$(mktemp -d)"
+zero="0000000000000000000000000000000000000000000000000000000000000000"
+printf '{"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:%s"}}' "$zero" > "$json_seed/manifest.json"
+printf '{"architecture":"amd64","os":"linux","variant":"v8"}' > "$json_seed/config.json"
+printf '{"token":"t","access_token":"a"}' > "$json_seed/token.json"
+
 # Map each target to its seed set (empty = no seed), zip, and stage in $OUT.
 seed_dir_for() {
   case "$1" in
   parse_elf_info | analyze_hardening) printf '%s' "$elf_seed" ;;
   unpack) printf '%s' "$oci_seed" ;;
+  registry_parse) printf '%s' "$json_seed" ;;
   *) printf '' ;;
   esac
 }
@@ -95,4 +106,4 @@ for f in fuzz/fuzz_targets/*.rs; do
   rm -f "$dest" # zip appends; keep it idempotent if $OUT is reused
   ( cd "$src" && zip -q -r "$dest" . )
 done
-rm -rf "$elf_seed" "$oci_seed" "$oci"
+rm -rf "$elf_seed" "$oci_seed" "$oci" "$json_seed"
