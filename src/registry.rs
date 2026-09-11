@@ -897,4 +897,77 @@ mod tests {
             "application/vnd.docker.distribution.manifest.v2+json"
         ));
     }
+
+    #[test]
+    fn parse_child_manifest_reads_media_type_and_config_digest() {
+        let raw = br#"{"mediaType":"application/vnd.oci.image.manifest.v1+json",
+            "config":{"digest":"sha256:abc"}}"#;
+        let (media_type, digest) = parse_child_manifest(raw, "src").unwrap();
+        assert_eq!(media_type, "application/vnd.oci.image.manifest.v1+json");
+        assert_eq!(digest, "sha256:abc");
+    }
+
+    #[test]
+    fn parse_child_manifest_defaults_the_media_type_when_absent() {
+        // No mediaType: fall back to the OCI manifest type rather than fail.
+        let (media_type, digest) =
+            parse_child_manifest(br#"{"config":{"digest":"sha256:d"}}"#, "src").unwrap();
+        assert_eq!(media_type, "application/vnd.oci.image.manifest.v1+json");
+        assert_eq!(digest, "sha256:d");
+    }
+
+    #[test]
+    fn parse_child_manifest_rejects_a_multi_arch_index() {
+        let raw = br#"{"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}"#;
+        let err = parse_child_manifest(raw, "src").unwrap_err().to_string();
+        assert!(err.contains("multi-arch index"), "{err}");
+    }
+
+    #[test]
+    fn parse_child_manifest_errors_without_a_config_digest() {
+        let err = parse_child_manifest(br#"{"config":{}}"#, "src")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no config.digest"), "{err}");
+    }
+
+    #[test]
+    fn parse_child_manifest_errors_on_non_json() {
+        assert!(parse_child_manifest(b"not json", "src").is_err());
+    }
+
+    #[test]
+    fn parse_child_config_reads_architecture_os_and_variant() {
+        let raw = br#"{"architecture":"arm64","os":"linux","variant":"v8"}"#;
+        let (arch, os, variant) = parse_child_config(raw, "src").unwrap();
+        assert_eq!(arch, "arm64");
+        assert_eq!(os, "linux");
+        assert_eq!(variant.as_deref(), Some("v8"));
+    }
+
+    #[test]
+    fn parse_child_config_leaves_variant_none_when_absent() {
+        let (arch, os, variant) =
+            parse_child_config(br#"{"architecture":"amd64","os":"linux"}"#, "src").unwrap();
+        assert_eq!(arch, "amd64");
+        assert_eq!(os, "linux");
+        assert_eq!(variant, None);
+    }
+
+    #[test]
+    fn parse_child_config_errors_without_architecture() {
+        let err = parse_child_config(br#"{"os":"linux"}"#, "src")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no architecture"), "{err}");
+    }
+
+    #[test]
+    fn parse_child_config_errors_without_os() {
+        // A missing os must fail loud, never silently stamp linux on a foreign image.
+        let err = parse_child_config(br#"{"architecture":"amd64"}"#, "src")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no os"), "{err}");
+    }
 }
