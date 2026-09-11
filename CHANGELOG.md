@@ -6,6 +6,56 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0:
 breaking changes bump the minor).
+## 1.2.0 (2026-09-11)
+
+### Features
+
+#### `nss`, `deny`, and `require` GitHub Action inputs ([#142](https://github.com/schubydoo/scratchsmith/pull/142))
+
+The action now exposes three more pack options as first-class inputs. `nss` selects the NSS
+modules to stage. If a listed library ships, `deny` fails the pack. If a listed library is
+absent, `require` fails the pack. Each input maps to the pack flag of the same name.
+
+#### `graph` — print a binary's resolved dependency tree ([#133](https://github.com/schubydoo/scratchsmith/pull/133))
+
+`scratchsmith graph <binary>` prints the binary's dependency tree. It resolves the binary
+the same way `pack` does. The default output is an ASCII tree. `--format json` prints a
+machine-readable adjacency list. The command builds no image and stages nothing, so it
+audits an image fast. A repeated library is shown once in full and marked `(*)` after that.
+An unresolved dependency is shown as `(missing)`. `--include <lib>` adds a `dlopen`'d
+library, like `pack`.
+
+#### `diff` — compare two staged rootfs directories ([#136](https://github.com/schubydoo/scratchsmith/pull/136))
+
+`scratchsmith diff <before> <after>` reports the files added, removed, and changed between
+two staged rootfs directories, plus the total size delta. `--exit-code` makes it exit
+non-zero on any difference, so CI can gate on image drift. `--format json` emits the same
+data. Stage the directories with `pack --no-build --output`, or later from an unpacked image.
+
+#### `--deny` / `--require` — gate the pack on its libraries ([#135](https://github.com/schubydoo/scratchsmith/pull/135))
+
+`pack` can now enforce a library policy in CI. If a `--deny <soname>` library is staged,
+the pack fails. If a `--require <soname>` library is absent, the pack fails. Both flags take
+an exact soname, repeat, and have matching `deny` and `require` keys in `scratchsmith.toml`.
+Read the sonames from `scratchsmith graph`. This gate complements `lint`.
+
+#### `--nss` — choose which NSS modules the image carries ([#130](https://github.com/schubydoo/scratchsmith/pull/130))
+
+`pack --nss <files,dns,none>` (and the matching `nss` key in `scratchsmith.toml`) selects which
+glibc name-service (NSS) modules stage into the image. Pass a comma-separated list: `--nss files`
+keeps local-file lookups but drops DNS, and `--nss none` stages no modules and no `nsswitch.conf`.
+Fewer modules trim the image's CVE surface. The generated `nsswitch.conf` always matches the
+selection, and a mode without `files` also drops the now-unreadable `/etc/passwd` and `/etc/group`.
+The default stays `files,dns`, so existing packs are unchanged.
+
+#### `unpack` — extract an OCI image archive to a directory ([#137](https://github.com/schubydoo/scratchsmith/pull/137))
+
+`scratchsmith unpack <archive> <dir>` reads an OCI-layout archive (from `pack --oci-archive`,
+or any skopeo/buildah export), applies each layer in order into `<dir>`, and honors whiteouts.
+It refuses any path that escapes the target. `--format json` reports the source, the
+directory, and the layer and file counts. Combine it with `diff` to audit an image you did
+not build: unpack two images, then compare the directories.
+
 ## 1.1.0 (2026-08-30)
 
 ### Features
