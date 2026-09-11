@@ -116,6 +116,18 @@ scratchsmith diff --exit-code old new  # exit non-zero on any difference (a CI g
 `diff` marks an added file with `+`, a removed file with `-`, and a changed file with `~`,
 then prints the total size delta. `--format json` emits the same data for a machine.
 
+## Unpack an image
+
+To audit an image you did not build, extract its OCI archive to a directory:
+
+```sh
+scratchsmith unpack app.oci.tar ./rootfs   # apply the layers into ./rootfs
+```
+
+`unpack` reads an OCI-layout archive (what `pack --oci-archive` writes, or a skopeo/buildah
+export), applies each layer in order, and honors whiteouts. Combine it with `diff` to
+compare two images: unpack both, then run `scratchsmith diff old new`.
+
 ## Multi-arch images
 
 Scratchsmith resolves against the host's libraries, so it packs for the architecture it runs on.

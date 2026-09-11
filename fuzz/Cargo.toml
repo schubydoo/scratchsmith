@@ -40,3 +40,10 @@ path = "fuzz_targets/resolve_graph.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "unpack"
+path = "fuzz_targets/unpack.rs"
+test = false
+doc = false
+bench = false
