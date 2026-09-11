@@ -20,7 +20,8 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
     drop(f);
-    // A fresh dir per run; extraction is bounded by the (small) fuzz input.
+    // A fresh dir per run. Gzip layers are capped (unpack::MAX_LAYER_BYTES), so a small
+    // highly-compressible input cannot expand without bound.
     let dest = tmp.path().join("out");
     let _ = scratchsmith::unpack::run(&archive, &dest);
 });

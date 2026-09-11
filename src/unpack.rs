@@ -79,6 +79,12 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
         if path == "index.json" {
             index_bytes = Some(buf);
         } else if let Some(digest) = path.strip_prefix("blobs/sha256/") {
+            // The `blobs/` and `blobs/sha256/` directory entries carry a trailing slash and
+            // an empty body (a skopeo/buildah export tars the layout directory), so only
+            // digest-verify real blob files — not the directory entry itself.
+            if digest.is_empty() || !e.header().entry_type().is_file() {
+                continue;
+            }
             let actual = hex(Sha256::digest(&buf));
             if actual != digest {
                 bail!("blob sha256:{digest} does not match its content (got sha256:{actual}) — tampered archive");
@@ -328,6 +334,40 @@ mod tests {
             err.to_string().contains("does not match its content"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn read_archive_skips_the_blobs_directory_entry() {
+        // A real skopeo/buildah export tars the layout dir, emitting a `blobs/sha256/`
+        // directory entry (trailing slash, empty body). It must not be hashed as a blob.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("ok.tar");
+        let body = b"layerbytes";
+        let digest = hex(Sha256::digest(body));
+
+        let mut ar = tar::Builder::new(Vec::new());
+        let mut dir = tar::Header::new_gnu();
+        dir.set_entry_type(tar::EntryType::Directory);
+        dir.set_size(0);
+        dir.set_mode(0o755);
+        dir.set_cksum();
+        ar.append_data(&mut dir, "blobs/sha256/", &b""[..]).unwrap();
+        let mut bh = tar::Header::new_gnu();
+        bh.set_size(body.len() as u64);
+        bh.set_mode(0o644);
+        bh.set_cksum();
+        ar.append_data(&mut bh, format!("blobs/sha256/{digest}"), &body[..])
+            .unwrap();
+        let mut ih = tar::Header::new_gnu();
+        ih.set_size(2);
+        ih.set_mode(0o644);
+        ih.set_cksum();
+        ar.append_data(&mut ih, "index.json", &b"{}"[..]).unwrap();
+        std::fs::write(&path, ar.into_inner().unwrap()).unwrap();
+
+        let (blobs, _index) =
+            read_archive(&path).expect("a directory entry must not fail the archive");
+        assert!(blobs.contains_key(&digest), "the real blob is still read");
     }
 
     #[test]
