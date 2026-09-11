@@ -188,8 +188,10 @@ fn build_archive(spec: &Spec) -> Vec<u8> {
         let mut desc = serde_json::Map::new();
         desc.insert("mediaType".into(), media.into());
         desc.insert("size".into(), bytes.len().into());
-        // Omit the digest on the first layer ~1 in 16 inputs so the "no digest" bail runs.
-        if !(i == 0 && spec.drop_first_digest % 16 == 0) {
+        // Omit the digest on the first layer ~1 in 16 inputs so the "no digest" bail runs. Use
+        // a non-zero residue: Arbitrary zero-fills a short input's tail, so `== 0` would fire in
+        // lockstep with `tamper == 0`, whose earlier digest-mismatch bail preempts this path.
+        if !(i == 0 && spec.drop_first_digest % 16 == 7) {
             desc.insert("digest".into(), format!("sha256:{digest}").into());
         }
         layer_descs.push(serde_json::Value::Object(desc));
