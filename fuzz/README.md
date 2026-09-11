@@ -45,20 +45,21 @@ cp /usr/bin/id fuzz/corpus/parse_elf_info/
 cargo +nightly fuzz run parse_elf_info -- -max_total_time=60
 ```
 
-## Coverage of only `src/`
+## Coverage reports
 
 There are two coverage views: the weekly published report and a local replay.
 
 The weekly `cflite_cron` run builds an HTML report over the whole stored corpus, across every
-target. The report is scoped to `src/`. The coverage step passes `-ignore-filename-regex` through
-`COVERAGE_EXTRA_ARGS`. That drops the linked crates, the C dependencies, the toolchain, the
-libFuzzer runtime, and the fuzz targets. Only `src/scratchsmith/src/*.rs` remains. The corpus repo is private, so GitHub Pages cannot serve the report. The run
-uploads it as the `fuzz-coverage-report` artifact instead. To read it, open the latest
-`ClusterFuzzLite cron` run, download the artifact, unzip it, and open `index.html`.
+target. The report lists every linked file. Rust links each crate into the fuzzer, so the
+crates, the C dependencies, and the toolchain all appear next to our source. ClusterFuzzLite
+blanks `COVERAGE_EXTRA_ARGS` before it runs the coverage step, so there is no in-pipeline hook
+to narrow the report to `src/`. The corpus repo is private, so GitHub Pages cannot serve the
+report. The run uploads it as the `fuzz-coverage-report` artifact instead. To read it, open
+the latest `ClusterFuzzLite cron` run, download the artifact, unzip it, and open `index.html`.
 
-The local replay is faster and needs no ClusterFuzzLite run, but it covers only the byte-in
-targets. `cargo llvm-cov` excludes dependencies by default. Grow each corpus first, then read
-it:
+For a view of only `src/`, use the local replay. It needs no ClusterFuzzLite run, but it
+covers only the byte-in targets. `cargo llvm-cov` excludes dependencies by default. Grow each
+corpus first, then read it:
 
 ```sh
 cargo +nightly fuzz run parse_elf_info -- -max_total_time=60
