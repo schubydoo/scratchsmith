@@ -1,0 +1,9 @@
+# libFuzzer dictionary for unpack_structured: the OCI-layout and whiteout tokens the
+# unpacker matches. The harness builds the archive from Arbitrary, so these mainly help the
+# path/whiteout string branches.
+".wh."
+".wh..wh..opq"
+"blobs/sha256/"
+"sha256:"
+"application/vnd.oci.image.layer.v1.tar+gzip"
+"application/vnd.oci.image.layer.v1.tar+zstd"
