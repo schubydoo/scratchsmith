@@ -140,52 +140,79 @@ jobs:
           # an image check alone would not catch that regression.
           echo "$REPORT" | jq -e '.scan != null' >/dev/null || { echo "::error::report.scan is null — was --scan dropped from action.yml?"; exit 1; }
           echo "scan input wired (grype ran, pack succeeded)"
-      # deny / require are pack policy gates, like max-size: prove each is wired by tripping it.
-      # /usr/bin/id links libc.so.6, so denying it MUST fail; a dropped --deny would let it pass.
-      - name: Pack denying a library that ships (must fail the build)
+      # The action packs with the latest RELEASED binary, so the nss/deny/require cases below can
+      # only run once a release carries those flags (they merged after v1.1.0). Detect support
+      # and skip until then: a pack that failed on "unexpected argument" would pass a naive
+      # outcome check even when action.yml names the flag wrong. The CLI is installed at a fixed
+      # path that outlives the step.
+      - name: Detect whether the released CLI knows the new inputs' flags
+        id: flags
+        env:
+          CLI: ${{ runner.temp }}/scratchsmith-bin/scratchsmith
+        run: |
+          set -euo pipefail
+          help="$("$CLI" pack --help)"
+          supported=true
+          for f in --nss --deny --require; do
+            echo "$help" | grep -q -- "$f" || supported=false
+          done
+          echo "supported=$supported" >> "$GITHUB_OUTPUT"
+          [ "$supported" = true ] \
+            || echo "::notice::released CLI predates --nss/--deny/--require; their selftest cases are skipped until the next release carries them"
+      # Positive, not trip, tests: a wrong flag name in action.yml fails the pack on "unexpected
+      # argument", so a SUCCESS here proves the flag is wired. deny of a library that does NOT
+      # ship has nothing to trip on, so it must pack cleanly.
+      - name: Pack denying an absent library (must succeed)
         id: deny
-        continue-on-error: true
+        if: steps.flags.outputs.supported == 'true'
         uses: $/
         with:
           binary: /usr/bin/id
           deny: |
-            libc.so.6
-      - name: Assert the deny gate tripped
+            libnot-a-real-lib.so.99
+      - name: Assert the deny pack produced an image
+        if: steps.flags.outputs.supported == 'true'
         env:
-          OUTCOME: ${{ steps.deny.outcome }}
+          IMAGE: ${{ steps.deny.outputs.image }}
         run: |
           set -euo pipefail
-          [ "$OUTCOME" = "failure" ] || { echo "::error::denying libc.so.6 should have failed the pack but it was '$OUTCOME' — is --deny wired in action.yml?"; exit 1; }
-          echo "deny gate verified"
-      # Requiring a library that does not ship MUST fail; a dropped --require would let it pass.
-      - name: Pack requiring a library that is absent (must fail the build)
+          [ -n "$IMAGE" ] || { echo "::error::deny of an absent library produced no image — is --deny wired in action.yml?"; exit 1; }
+          echo "deny input wired"
+      # require of a library that DOES ship (/usr/bin/id links libc.so.6) is satisfied, so it
+      # must pack cleanly; a wrong flag name would fail on "unexpected argument".
+      - name: Pack requiring a library that ships (must succeed)
         id: require
-        continue-on-error: true
+        if: steps.flags.outputs.supported == 'true'
         uses: $/
         with:
           binary: /usr/bin/id
           require: |
-            libnot-a-real-lib.so.99
-      - name: Assert the require gate tripped
+            libc.so.6
+      - name: Assert the require pack produced an image
+        if: steps.flags.outputs.supported == 'true'
         env:
-          OUTCOME: ${{ steps.require.outcome }}
+          IMAGE: ${{ steps.require.outputs.image }}
         run: |
           set -euo pipefail
-          [ "$OUTCOME" = "failure" ] || { echo "::error::requiring an absent library should have failed the pack but it was '$OUTCOME' — is --require wired in action.yml?"; exit 1; }
-          echo "require gate verified"
-      # nss takes an enum value; an invalid one MUST fail at parse. A dropped --nss would never
-      # pass the value to the CLI, so the pack would succeed — this catches that regression.
-      - name: Pack with an invalid nss value (must fail the build)
+          [ -n "$IMAGE" ] || { echo "::error::require of a shipping library produced no image — is --require wired in action.yml?"; exit 1; }
+          echo "require input wired"
+      # nss=none stages no nsswitch.conf, while the default stages one. Pack to a rootfs and
+      # assert the file is absent: this fails if the input is dropped (default stages it) and if
+      # the value is mangled (the pack fails, so no rootfs).
+      - name: Pack with nss=none → rootfs
         id: nss
-        continue-on-error: true
+        if: steps.flags.outputs.supported == 'true'
         uses: $/
         with:
           binary: /usr/bin/id
-          nss: not-a-module
-      - name: Assert the nss input reached the CLI
+          output: ./staged-nss
+          nss: none
+      - name: Assert nss=none staged no nsswitch.conf
+        if: steps.flags.outputs.supported == 'true'
         env:
-          OUTCOME: ${{ steps.nss.outcome }}
+          ROOTFS: ${{ steps.nss.outputs.rootfs }}
         run: |
           set -euo pipefail
-          [ "$OUTCOME" = "failure" ] || { echo "::error::an invalid nss value should have failed the pack but it was '$OUTCOME' — is --nss wired in action.yml?"; exit 1; }
-          echo "nss input verified"
+          [ -n "$ROOTFS" ] || { echo "::error::nss=none pack produced no rootfs — is --nss wired in action.yml?"; exit 1; }
+          test ! -e "$ROOTFS/etc/nsswitch.conf" || { echo "::error::nss=none staged an nsswitch.conf — the --nss value did not reach the stager"; exit 1; }
+          echo "nss input wired (none staged no nsswitch.conf)"
