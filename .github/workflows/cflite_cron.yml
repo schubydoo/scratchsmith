@@ -67,3 +67,18 @@ jobs:
           storage-repo: https://${{ secrets.FUZZ_STORAGE_TOKEN }}@github.com/schubydoo/scratchsmith-fuzz-corpus.git
           storage-repo-branch: main
           storage-repo-branch-coverage: gh-pages
+      # Publish the report as a downloadable run artifact. GitHub Pages needs a public repo or a
+      # paid plan; the corpus repo is private, so a maintainer cannot browse gh-pages. cifuzz
+      # writes the report into the mounted workspace (coverage_report = $GITHUB_WORKSPACE/
+      # cifuzz-coverage) before it pushes to gh-pages, and the coverage script chmods the tree
+      # readable, so upload it straight from the runner — no clone, no second use of the storage
+      # PAT, no dependency on the push landing. Download the artifact, unzip, open index.html.
+      # The report lists every linked file (crates, C deps, toolchain), not just src/: cifuzz
+      # blanks COVERAGE_EXTRA_ARGS before running the coverage script, so there is no in-pipeline
+      # hook to scope it. For a src-only view use the local cargo llvm-cov replay (fuzz/README).
+      - name: Upload the coverage report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-coverage-report
+          path: cifuzz-coverage/report
+          if-no-files-found: error
