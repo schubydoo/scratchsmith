@@ -15,7 +15,9 @@ use std::io::Write as _;
 #[derive(Arbitrary, Debug)]
 struct Spec {
     layers: Vec<LayerSpec>,
-    tamper_a_blob: bool,
+    // Rare on purpose: a tampered blob makes `read_archive` bail before any layer runs, so
+    // keep it to ~1 in 32 inputs and let the rest reach the layer/whiteout code.
+    tamper: u8,
     include_dir_entry: bool,
     // Make the top manifest an image index (no `layers`) — exercises the index-detect branch.
     manifest_is_index: bool,
@@ -95,7 +97,13 @@ fn hex(d: impl AsRef<[u8]>) -> String {
 fn header(size: u64, kind: tar::EntryType) -> tar::Header {
     let mut h = tar::Header::new_gnu();
     h.set_size(size);
-    h.set_mode(0o644);
+    // A directory needs the execute bit or a non-root run cannot descend into it, and the
+    // layer aborts before the interesting entries.
+    h.set_mode(if kind == tar::EntryType::Directory {
+        0o755
+    } else {
+        0o644
+    });
     h.set_entry_type(kind);
     h
 }
@@ -205,7 +213,7 @@ fn build_archive(spec: &Spec) -> Vec<u8> {
 
     // Optionally corrupt one blob's stored name so its content no longer matches — this must
     // trip the digest-verification failure, not a panic.
-    if spec.tamper_a_blob {
+    if spec.tamper % 32 == 0 {
         if let Some(first) = blobs.first_mut() {
             first.0 = "deadbeef".into();
         }

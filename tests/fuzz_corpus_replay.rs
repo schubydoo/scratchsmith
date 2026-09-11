@@ -5,7 +5,7 @@
 //! or CI run skips them (a fresh checkout has no `fuzz/corpus`).
 //!
 //! Grow a corpus, then read it:
-//!   cargo +nightly fuzz run parse_elf_info fuzz/seeds/elf -- -max_total_time=60
+//!   cargo +nightly fuzz run parse_elf_info -- -max_total_time=60
 //!   cargo llvm-cov --test fuzz_corpus_replay -- --ignored
 //!
 //! Only the byte-in targets are replayable here; `resolve_graph` and `unpack_structured`

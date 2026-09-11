@@ -16,48 +16,57 @@ cargo +nightly fuzz run <target>
 | `analyze_hardening` | `lint::hardening_from_bytes` | ELF hardening read (PIE, RELRO, NX, canary, fortify). |
 | `resolve_graph` | `resolver::resolve_with` | `ld.so` search: RPATH, RUNPATH, `$ORIGIN`, soname lookup. Structured input. |
 | `unpack` | `unpack::run` | The outer OCI-archive parse (tar, gzip, JSON) on raw bytes. |
-| `unpack_structured` | `unpack::run` | Layer application, whiteouts, path containment, digest verify, media dispatch. Structured input. |
+| `unpack_structured` | `unpack::run` | Layer application, whiteout deletion and its symlink containment, digest checks, media dispatch. Structured input. |
 
-The `unpack` target feeds raw bytes, which rarely form a valid archive, so it exercises the
+The `unpack` target feeds raw bytes, which rarely form a valid archive, so it covers the
 outer parse. The `unpack_structured` target assembles a real OCI-layout archive from
-`Arbitrary` layers, so it reaches the layer and whiteout logic the raw target cannot. Keep
-both.
+`Arbitrary` layers, so it reaches the layer and whiteout code the raw target cannot. `tar`
+refuses to write a `..` entry, so neither builder reaches the escaping-entry bail in
+`unpack::run`. The unit tests cover that path instead. Keep both targets.
 
 ## Seeds
 
-`parse_elf_info` and `analyze_hardening` parse ELF bytes, and random input rarely forms a
-valid ELF, so seed them from a real ELF:
+A target whose entry point parses a concrete format starts from a seed corpus. The
+`Arbitrary`-driven targets (`resolve_graph`, `unpack_structured`) synthesize their own
+structure, so they take no seed. `.clusterfuzzlite/build.sh` generates the seeds in CI, and
+they are not committed:
+
+- `parse_elf_info` and `analyze_hardening`: a real dynamic executable plus link-variant ELFs
+  (RPATH, RUNPATH with `$ORIGIN`, a shared object, and a static PIE).
+- `unpack`: a real OCI-layout archive whose blob digests match.
+
+`fuzz/corpus/` is gitignored, and ClusterFuzzLite persists the accumulated corpus in the
+`scratchsmith-fuzz-corpus` repo. To seed a local run, copy inputs into the target's corpus
+first:
 
 ```sh
-cargo +nightly fuzz run parse_elf_info fuzz/seeds/elf
-cargo +nightly fuzz run analyze_hardening fuzz/seeds/elf
+mkdir -p fuzz/corpus/parse_elf_info
+cp /usr/bin/id fuzz/corpus/parse_elf_info/
+cargo +nightly fuzz run parse_elf_info -- -max_total_time=60
 ```
 
-`resolve_graph` and `unpack_structured` build their own structured input, so they need no
-seed. `fuzz/corpus/` is gitignored (ClusterFuzzLite persists the real corpus in the
-`scratchsmith-fuzz-corpus` repo), so committed seeds live in `fuzz/seeds/`.
-
-## Coverage, scoped to our source
+## Coverage of only `src/`
 
 The ClusterFuzzLite HTML report lists every dependency, because Rust links each crate into
-the fuzzer. For a view of only `src/`, replay a grown corpus under `cargo llvm-cov`,
-which excludes dependencies by default. First grow the corpus, then read it:
+the fuzzer. To see only `src/`, replay a grown corpus under `cargo llvm-cov`, which excludes
+dependencies. Grow each corpus first, then read it:
 
 ```sh
-cargo +nightly fuzz run parse_elf_info fuzz/seeds/elf -- -max_total_time=60
+cargo +nightly fuzz run parse_elf_info -- -max_total_time=60
 cargo +nightly fuzz run unpack -- -max_total_time=60
 cargo llvm-cov --test fuzz_corpus_replay -- --ignored
 ```
 
-`tests/fuzz_corpus_replay.rs` replays the byte-in corpora (it is `#[ignore]`d, so a normal
-`cargo test` and CI skip it). The `resolve_graph` and `unpack_structured` targets take
-structured input, so measure those with `cargo +nightly fuzz coverage <target>`.
+`tests/fuzz_corpus_replay.rs` replays the byte-in corpora from `fuzz/corpus/`. It is
+`#[ignore]`d, so a normal `cargo test` and CI skip it. The `resolve_graph` and
+`unpack_structured` targets take structured input, so measure those with
+`cargo +nightly fuzz coverage <target>`.
 
-## Does it still compile
+## Checking it compiles
 
-The required `fuzz harness check` CI job runs `cargo check` on this crate, which catches a
-target broken by an API change. Run it locally with:
+The required `fuzz harness check` CI job type-checks this crate, so an API change that breaks
+a target fails a required check. Run the same command locally:
 
 ```sh
-cd fuzz && cargo check
+RUSTFLAGS="-D warnings" cargo check --manifest-path fuzz/Cargo.toml
 ```
