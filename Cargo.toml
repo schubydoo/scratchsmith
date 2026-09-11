@@ -13,6 +13,16 @@ categories = ["command-line-utilities"]
 # so keep docs/, .github/, CLAUDE.md, Formula/, mkdocs.yml etc. out of the published crate.
 include = ["src/**/*.rs", "README.md", "LICENSE", "CHANGELOG.md"]
 
+# The Rust library API is deliberately NOT a stability contract (COMPATIBILITY.md); only the
+# CLI flags, scratchsmith.toml keys, --format json fields, and exit codes are. Adding a pack
+# option or config key (the `Command::Pack` variant, `PackOptions`, `Config`) or changing an
+# internal fn's arity is a breaking LIBRARY change but an additive PRODUCT change, so allow the
+# lints that fire on exactly those. semver-checks stays red only on genuinely surprising breaks.
+[package.metadata.cargo-semver-checks.lints]
+constructible_struct_adds_field = "allow"
+enum_struct_variant_field_added = "allow"
+function_parameter_count_changed = "allow"
+
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
 anyhow = "1.0"
