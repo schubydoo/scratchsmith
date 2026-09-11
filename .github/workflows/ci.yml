@@ -59,16 +59,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The action is SHA-pinned to a setup-rust-toolchain release (the `# v1.17.0`
+      # The action is SHA-pinned to a setup-rust-toolchain release (the `# v2.0.0`
       # comment is the pinned tag). The Rust TOOLCHAIN is pinned at the declared MSRV
       # via the `toolchain:` input (Cargo.toml rust-version = 1.96); Renovate is told
       # not to bump it by the schubydoo/renovate-config preset (`rust` dep off for
-      # this file). rustflags is cleared so the MSRV build is not held to the
-      # wrapper's default `-D warnings` (warnings are denied surgically elsewhere).
+      # this file). rustflags: "" and build-warnings: warn keep the action from
+      # forcing a blanket warning-deny (RUSTFLAGS in v1, CARGO_BUILD_WARNINGS=deny by
+      # default in v2) on the MSRV build — a future deprecation warning must not fail
+      # it; warnings are denied surgically elsewhere.
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           toolchain: 1.96.0
           rustflags: ""
+          build-warnings: warn
       - run: cargo build --all-features
 
   test:
