@@ -1,0 +1,13 @@
+# libFuzzer dictionary for registry_parse: the JSON keys the registry manifest, config, and
+# token responses branch on, plus the multi-arch media-type substrings the manifest parser
+# rejects. Seed them so the mutator reaches each field without rebuilding it byte-by-byte.
+"mediaType"
+"config"
+"digest"
+"architecture"
+"os"
+"variant"
+"token"
+"access_token"
+"index"
+"manifest.list"

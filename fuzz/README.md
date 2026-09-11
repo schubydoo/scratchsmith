@@ -17,6 +17,7 @@ cargo +nightly fuzz run <target>
 | `resolve_graph` | `resolver::resolve_with` | `ld.so` search: RPATH, RUNPATH, `$ORIGIN`, soname lookup. Structured input. |
 | `unpack` | `unpack::run` | The outer OCI-archive parse (tar, gzip, JSON) on raw bytes. |
 | `unpack_structured` | `unpack::run` | Layer application, whiteout deletion and its symlink containment, digest checks, media dispatch. Structured input. |
+| `registry_parse` | `registry::parse_child_manifest`, `parse_child_config`, `select_token` | Registry manifest, config blob, and token-response JSON parse. |
 
 The `unpack` target feeds raw bytes, which rarely form a valid archive, so it covers the
 outer parse. The `unpack_structured` target assembles a real OCI-layout archive from
@@ -32,8 +33,9 @@ structure, so they take no seed. `.clusterfuzzlite/build.sh` generates the seeds
 they are not committed:
 
 - `parse_elf_info` and `analyze_hardening`: a real dynamic executable plus link-variant ELFs
-  (RPATH, RUNPATH with `$ORIGIN`, a shared object, and a static PIE).
+  (RPATH, RUNPATH with `$ORIGIN`, a shared object, a static PIE, and a full-RELRO build).
 - `unpack`: a real OCI-layout archive whose blob digests match.
+- `registry_parse`: a valid child manifest, config blob, and token response.
 
 `fuzz/corpus/` is gitignored, and ClusterFuzzLite persists the accumulated corpus in the
 `scratchsmith-fuzz-corpus` repo. To seed a local run, copy inputs into the target's corpus

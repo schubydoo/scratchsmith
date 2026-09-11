@@ -60,3 +60,10 @@ path = "fuzz_targets/unpack_structured.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "registry_parse"
+path = "fuzz_targets/registry_parse.rs"
+test = false
+doc = false
+bench = false

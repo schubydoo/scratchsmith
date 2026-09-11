@@ -50,3 +50,13 @@ fn replay_unpack() {
         }
     }
 }
+
+#[test]
+#[ignore = "coverage audit; needs a grown fuzz/corpus"]
+fn replay_registry_parse() {
+    for b in corpus("registry_parse") {
+        let _ = scratchsmith::registry::parse_child_manifest(&b, "fuzz");
+        let _ = scratchsmith::registry::parse_child_config(&b, "fuzz");
+        let _ = scratchsmith::registry::select_token(&b, "fuzz");
+    }
+}

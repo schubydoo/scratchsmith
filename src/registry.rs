@@ -197,7 +197,32 @@ async fn fetch_child(
         .pull_manifest_raw(reference, auth, CHILD_MANIFEST_TYPES)
         .await
         .with_context(|| format!("pulling the manifest for {source}"))?;
-    let manifest: serde_json::Value = serde_json::from_slice(&raw)
+    let (media_type, config_digest) = parse_child_manifest(&raw, source)?;
+    // We already have the manifest bytes, so pull only the config blob it names — one GET
+    // instead of re-fetching the manifest. Addressing it by digest (from the manifest we
+    // just verified) keeps it immutable, so a tag re-pushed mid-run can't swap the platform
+    // under the size/digest recorded above. Auth was primed by the pull_manifest_raw above.
+    let mut config_bytes = Vec::new();
+    client
+        .pull_blob(reference, config_digest.as_str(), &mut config_bytes)
+        .await
+        .with_context(|| format!("pulling the config for {source}"))?;
+    let (architecture, os, variant) = parse_child_config(&config_bytes, source)?;
+    Ok(Child {
+        source: source.to_string(),
+        media_type,
+        digest,
+        size: raw.len() as i64,
+        architecture,
+        os,
+        variant,
+    })
+}
+
+/// Parse a child image's manifest bytes into `(media_type, config_digest)`. A byte-level entry
+/// point for fuzzing — the manifest is whatever a registry chose to serve, so it is untrusted.
+pub fn parse_child_manifest(raw: &[u8], source: &str) -> Result<(String, String)> {
+    let manifest: serde_json::Value = serde_json::from_slice(raw)
         .with_context(|| format!("parsing the manifest for {source}"))?;
     let media_type = manifest
         .get("mediaType")
@@ -210,21 +235,19 @@ async fn fetch_child(
              single-arch images, not an index"
         );
     }
-    // We already have the manifest bytes, so pull only the config blob it names — one GET
-    // instead of re-fetching the manifest. Addressing it by digest (from the manifest we
-    // just verified) keeps it immutable, so a tag re-pushed mid-run can't swap the platform
-    // under the size/digest recorded above. Auth was primed by the pull_manifest_raw above.
     let config_digest = manifest
         .get("config")
         .and_then(|c| c.get("digest"))
         .and_then(|v| v.as_str())
-        .with_context(|| format!("the manifest for {source} has no config.digest"))?;
-    let mut config_bytes = Vec::new();
-    client
-        .pull_blob(reference, config_digest, &mut config_bytes)
-        .await
-        .with_context(|| format!("pulling the config for {source}"))?;
-    let config: serde_json::Value = serde_json::from_slice(&config_bytes)
+        .with_context(|| format!("the manifest for {source} has no config.digest"))?
+        .to_string();
+    Ok((media_type, config_digest))
+}
+
+/// Parse a child image's config bytes into `(architecture, os, variant)`. A byte-level entry
+/// point for fuzzing — the config blob is registry-served, so it is untrusted.
+pub fn parse_child_config(bytes: &[u8], source: &str) -> Result<(String, String, Option<String>)> {
+    let config: serde_json::Value = serde_json::from_slice(bytes)
         .with_context(|| format!("parsing the config for {source}"))?;
     let architecture = config
         .get("architecture")
@@ -242,15 +265,7 @@ async fn fetch_child(
         .get("variant")
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    Ok(Child {
-        source: source.to_string(),
-        media_type,
-        digest,
-        size: raw.len() as i64,
-        architecture,
-        os,
-        variant,
-    })
+    Ok((architecture, os, variant))
 }
 
 // An OCI image index or a Docker manifest list — a multi-arch manifest, not a single image.
@@ -422,7 +437,13 @@ async fn exchange_identity_token(
     if !status.is_success() {
         anyhow::bail!("identity-token exchange at {realm} failed ({status}): {body}");
     }
-    let parsed: TokenResponse = serde_json::from_str(&body)
+    select_token(body.as_bytes(), &realm)
+}
+
+/// Pick the usable token from a token-endpoint response body. A byte-level entry point for
+/// fuzzing — the body comes from a third-party token host, so it is untrusted.
+pub fn select_token(body: &[u8], realm: &str) -> Result<String> {
+    let parsed: TokenResponse = serde_json::from_slice(body)
         .with_context(|| format!("decoding the token response from {realm}"))?;
     // Prefer a non-empty `access_token`, else a non-empty `token` — filter each candidate
     // before the fallback so an empty `access_token` can't mask a usable `token`.
