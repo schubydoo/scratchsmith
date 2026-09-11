@@ -56,7 +56,10 @@ jobs:
         with:
           toolchain: stable
           cache: false
+          # build-warnings: warn clears v2's default CARGO_BUILD_WARNINGS=deny so a
+          # stray warning cannot block publishing an already-tagged release.
           rustflags: ""
+          build-warnings: warn
       - name: Is this version already on crates.io?
         id: check
         run: |

@@ -83,7 +83,11 @@ jobs:
           toolchain: stable
           target: ${{ matrix.target }}
           cache: false
+          # build-warnings: warn clears v2's default CARGO_BUILD_WARNINGS=deny — a
+          # stray warning must not fail the release build (rustflags: "" clears the
+          # old RUSTFLAGS=-D warnings likewise).
           rustflags: ""
+          build-warnings: warn
       # zig is the cross linker for both musl targets.
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
