@@ -36,32 +36,63 @@ for d in fuzz/*.dict; do
   [ -e "$d" ] && cp "$d" "$OUT/"
 done
 
-# Seed corpus: bootstrap the fuzzers with valid ELFs so mutation reaches resolver's dependency
-# branches (interpreter, RPATH/RUNPATH/$ORIGIN, sonames) and lint's hardening branches — code that
-# random bytes never hit (parse_elf_info sat at ~10% before this). Generated here from the image,
-# never committed. Compiled with bare `clang` (NOT $CC/$CFLAGS) so the seeds stay small, clean ELFs
-# rather than sanitizer-instrumented ones. Both targets take arbitrary ELF bytes, so they share the
-# set. Consumed as OSS-Fuzz/ClusterFuzzLite `<target>_seed_corpus.zip`.
-seed_dir="$(mktemp -d)"
-cp /usr/bin/id "$seed_dir/real-id" # real dynamic exec: interpreter + DT_NEEDED + versioned sonames
-printf 'int main(void){return 0;}\n' > "$seed_dir/s.c"
-clang -Wl,--disable-new-dtags,-rpath,/opt/lib    -o "$seed_dir/elf-rpath"          "$seed_dir/s.c" # RPATH
+# Seed corpora, one per format. Only a target whose entry point parses a concrete format gains
+# from a seed; the Arbitrary-driven targets (resolve_graph, unpack_structured) synthesise their
+# own structure, so a raw seed is noise — leave them unseeded. Generated here from the image,
+# never committed. Consumed as OSS-Fuzz/ClusterFuzzLite `<target>_seed_corpus.zip`.
+
+# ELF seeds for the two goblin parsers: a real dynamic exec plus link-variant ELFs, so mutation
+# reaches resolver's interpreter/RPATH/RUNPATH/$ORIGIN/soname branches and lint's hardening
+# branches (parse_elf_info sat at ~10% without them). Bare `clang` (NOT $CC/$CFLAGS) keeps them
+# small, clean ELFs rather than sanitizer-instrumented ones.
+elf_seed="$(mktemp -d)"
+cp /usr/bin/id "$elf_seed/real-id" # real dynamic exec: interpreter + DT_NEEDED + versioned sonames
+printf 'int main(void){return 0;}\n' > "$elf_seed/s.c"
+clang -Wl,--disable-new-dtags,-rpath,/opt/lib     -o "$elf_seed/elf-rpath"          "$elf_seed/s.c" # RPATH
 # shellcheck disable=SC2016 # $ORIGIN is a literal ELF rpath token, not a shell expansion
-clang -Wl,--enable-new-dtags,-rpath,'$ORIGIN/lib' -o "$seed_dir/elf-runpath-origin" "$seed_dir/s.c" # RUNPATH + $ORIGIN
-clang -shared -fPIC -Wl,-soname,libseed.so.1     -o "$seed_dir/elf-shared.so"      "$seed_dir/s.c" # ET_DYN + soname
-clang -static-pie                                -o "$seed_dir/elf-static-pie"     "$seed_dir/s.c" # static PIE: no INTERP
-rm -f "$seed_dir/s.c"
-# The set is identical for every target, so zip once and copy. rm -f first because zip appends
-# to an existing archive, keeping the step idempotent if $OUT is ever reused.
-seed_zip=""
+clang -Wl,--enable-new-dtags,-rpath,'$ORIGIN/lib' -o "$elf_seed/elf-runpath-origin" "$elf_seed/s.c" # RUNPATH + $ORIGIN
+clang -shared -fPIC -Wl,-soname,libseed.so.1      -o "$elf_seed/elf-shared.so"      "$elf_seed/s.c" # ET_DYN + soname
+clang -static-pie                                 -o "$elf_seed/elf-static-pie"     "$elf_seed/s.c" # static PIE: no INTERP
+rm -f "$elf_seed/s.c"
+
+# An OCI-archive seed for the raw `unpack` parser: a real layout whose blob digests match, so
+# mutation explores the tar/gzip/index/manifest paths from a valid base instead of bouncing off
+# the outer parse. Built with coreutils (sha256sum/tar/gzip), so it needs no scratchsmith binary
+# at fuzz-build time. Verified locally: `scratchsmith unpack` accepts it.
+oci_seed="$(mktemp -d)"
+oci="$(mktemp -d)"
+mkdir -p "$oci/blobs/sha256"
+layer_tar="$(mktemp)"
+tar -cf "$layer_tar" -C "$elf_seed" real-id
+gzip -n -c "$layer_tar" > "$oci/layer.gz"
+ldig="$(sha256sum "$oci/layer.gz" | cut -d' ' -f1)"
+mv "$oci/layer.gz" "$oci/blobs/sha256/$ldig"
+printf '{}' > "$oci/cfg"
+cdig="$(sha256sum "$oci/cfg" | cut -d' ' -f1)"
+mv "$oci/cfg" "$oci/blobs/sha256/$cdig"
+mfst="$(printf '{"config":{"digest":"sha256:%s"},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"sha256:%s"}]}' "$cdig" "$ldig")"
+printf '%s' "$mfst" > "$oci/mfst"
+mdig="$(sha256sum "$oci/mfst" | cut -d' ' -f1)"
+mv "$oci/mfst" "$oci/blobs/sha256/$mdig"
+printf '{"manifests":[{"digest":"sha256:%s"}]}' "$mdig" > "$oci/index.json"
+printf '{"imageLayoutVersion":"1.0.0"}' > "$oci/oci-layout"
+( cd "$oci" && tar -cf "$oci_seed/app.oci.tar" oci-layout index.json blobs )
+rm -f "$layer_tar"
+
+# Map each target to its seed set (empty = no seed), zip, and stage in $OUT.
+seed_dir_for() {
+  case "$1" in
+  parse_elf_info | analyze_hardening) printf '%s' "$elf_seed" ;;
+  unpack) printf '%s' "$oci_seed" ;;
+  *) printf '' ;;
+  esac
+}
 for f in fuzz/fuzz_targets/*.rs; do
-  dest="$OUT/$(basename "${f%.*}")_seed_corpus.zip"
-  if [ -z "$seed_zip" ]; then
-    rm -f "$dest"
-    ( cd "$seed_dir" && zip -q -r "$dest" . )
-    seed_zip="$dest"
-  else
-    cp "$seed_zip" "$dest"
-  fi
+  target="$(basename "${f%.*}")"
+  src="$(seed_dir_for "$target")"
+  [ -n "$src" ] || continue
+  dest="$OUT/${target}_seed_corpus.zip"
+  rm -f "$dest" # zip appends; keep it idempotent if $OUT is reused
+  ( cd "$src" && zip -q -r "$dest" . )
 done
-rm -rf "$seed_dir"
+rm -rf "$elf_seed" "$oci_seed" "$oci"

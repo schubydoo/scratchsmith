@@ -1593,8 +1593,12 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arbitrary",
+ "flate2",
  "libfuzzer-sys",
  "scratchsmith",
+ "serde_json",
+ "sha2",
+ "tar",
  "tempfile",
 ]
 
