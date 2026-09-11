@@ -47,9 +47,18 @@ cargo +nightly fuzz run parse_elf_info -- -max_total_time=60
 
 ## Coverage of only `src/`
 
-The ClusterFuzzLite HTML report lists every dependency, because Rust links each crate into
-the fuzzer. To see only `src/`, replay a grown corpus under `cargo llvm-cov`, which excludes
-dependencies. Grow each corpus first, then read it:
+There are two coverage views: the weekly published report and a local replay.
+
+The weekly `cflite_cron` run builds an HTML report over the whole stored corpus, across every
+target. The report is scoped to `src/`. The coverage step passes `-ignore-filename-regex` through
+`COVERAGE_EXTRA_ARGS`. That drops the linked crates, the C dependencies, the toolchain, the
+libFuzzer runtime, and the fuzz targets. Only `src/scratchsmith/src/*.rs` remains. The corpus repo is private, so GitHub Pages cannot serve the report. The run
+uploads it as the `fuzz-coverage-report` artifact instead. To read it, open the latest
+`ClusterFuzzLite cron` run, download the artifact, unzip it, and open `index.html`.
+
+The local replay is faster and needs no ClusterFuzzLite run, but it covers only the byte-in
+targets. `cargo llvm-cov` excludes dependencies by default. Grow each corpus first, then read
+it:
 
 ```sh
 cargo +nightly fuzz run parse_elf_info -- -max_total_time=60
@@ -59,8 +68,8 @@ cargo llvm-cov --test fuzz_corpus_replay -- --ignored
 
 `tests/fuzz_corpus_replay.rs` replays the byte-in corpora from `fuzz/corpus/`. It is
 `#[ignore]`d, so a normal `cargo test` and CI skip it. The `resolve_graph` and
-`unpack_structured` targets take structured input, so measure those with
-`cargo +nightly fuzz coverage <target>`.
+`unpack_structured` targets take structured input, so the local replay skips them. The weekly
+report covers them, because it replays every target's stored corpus.
 
 ## Checking it compiles
 
