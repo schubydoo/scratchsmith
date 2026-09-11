@@ -295,6 +295,34 @@ impl DiffReport {
     }
 }
 
+/// The outcome of extracting an OCI image archive (`unpack` subcommand): where it came
+/// from, where it landed, and how much. Fields are stable so the JSON can gate CI.
+#[derive(Debug, Clone, Serialize)]
+pub struct UnpackReport {
+    /// The OCI archive that was extracted.
+    pub source: String,
+    /// The directory it was extracted into.
+    pub dir: String,
+    /// How many layers were applied.
+    pub layers: usize,
+    /// How many files and symlinks were written.
+    pub files: usize,
+}
+
+impl UnpackReport {
+    /// Human-readable rendering (the `--format text` output).
+    pub fn to_text(&self) -> String {
+        format!(
+            "unpacked {} layer{} ({} files) from {} into {}",
+            self.layers,
+            if self.layers == 1 { "" } else { "s" },
+            self.files,
+            self.source,
+            self.dir
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

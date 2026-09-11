@@ -58,3 +58,8 @@
   --upx  value=false  multiple=false  required=false
   --user  value=true  multiple=false  required=false
   --workdir  value=true  multiple=false  required=false
+
+[unpack]
+  <archive>  value=true  multiple=false  required=true
+  --format  value=true  multiple=false  required=false  default=text  values=[text,json]
+  <output>  value=true  multiple=false  required=true

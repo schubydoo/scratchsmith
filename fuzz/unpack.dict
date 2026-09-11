@@ -1,0 +1,17 @@
+# libFuzzer dictionary for unpack: the OCI-layout and whiteout tokens the unpacker matches.
+# Seeding them lets the engine reach the index/manifest/layer and whiteout branches directly
+# instead of discovering the literal strings byte-by-byte.
+"oci-layout"
+"index.json"
+"blobs/sha256/"
+"manifests"
+"mediaType"
+"digest"
+"sha256:"
+"layers"
+"config"
+"application/vnd.oci.image.index.v1+json"
+"application/vnd.oci.image.manifest.v1+json"
+"application/vnd.oci.image.layer.v1.tar+gzip"
+".wh."
+".wh..wh..opq"

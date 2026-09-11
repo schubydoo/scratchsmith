@@ -35,7 +35,7 @@ fn help_lists_all_subcommands() {
     let out = run(&["--help"]);
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    for cmd in ["pack", "lint", "doctor", "index", "graph", "diff"] {
+    for cmd in ["pack", "lint", "doctor", "index", "graph", "diff", "unpack"] {
         assert!(stdout.contains(cmd), "help missing `{cmd}`: {stdout}");
     }
 }
@@ -258,6 +258,47 @@ fn pack_deny_gate_covers_nss_modules() {
         stderr.contains("library policy failed") && stderr.contains("libresolv.so.2"),
         "{stderr}"
     );
+}
+
+// Whether any file under `root` is named `name`.
+fn tree_has(root: &std::path::Path, name: &str) -> bool {
+    walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .any(|e| e.file_name().to_string_lossy() == name)
+}
+
+#[test]
+fn unpack_round_trips_an_oci_archive() {
+    // Pack daemonlessly to an OCI archive, then unpack it and confirm the rootfs is back.
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let archive = tmp.path().join("img.oci.tar");
+    let packed = run(&["pack", "--oci-archive", archive.to_str().unwrap(), bin]);
+    assert!(
+        packed.status.success(),
+        "pack: {}",
+        String::from_utf8_lossy(&packed.stderr)
+    );
+    let dest = tmp.path().join("unpacked");
+    let out = run(&["unpack", archive.to_str().unwrap(), dest.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "unpack: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        tree_has(&dest, "id"),
+        "packed binary missing from unpacked rootfs"
+    );
+    assert!(
+        tree_has(&dest, "libc.so.6"),
+        "libc missing from unpacked rootfs"
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("unpacked"));
 }
 
 #[test]

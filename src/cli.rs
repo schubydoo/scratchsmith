@@ -219,6 +219,16 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
     },
+    /// Extract an OCI image archive back to a directory (audit an image you did not build).
+    Unpack {
+        /// The OCI-archive tarball to extract (e.g. from `pack --oci-archive`).
+        archive: PathBuf,
+        /// Directory to extract the image rootfs into (created if absent).
+        output: PathBuf,
+        /// Report format.
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
+    },
 }
 
 /// Parse process arguments and run the chosen subcommand.
@@ -465,6 +475,18 @@ fn dispatch(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
+        Command::Unpack {
+            archive,
+            output,
+            format,
+        } => {
+            let report = crate::unpack::run(&archive, &output)?;
+            match format {
+                Format::Text => println!("{}", report.to_text()),
+                Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+            }
+            Ok(())
+        }
     }
 }
 
@@ -522,6 +544,20 @@ mod tests {
                 assert!(exit_code);
             }
             other => panic!("expected Diff, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unpack_parses_archive_and_output() {
+        let cli = Cli::try_parse_from(["scratchsmith", "unpack", "img.tar", "out"]).unwrap();
+        match cli.command {
+            Some(Command::Unpack {
+                archive, output, ..
+            }) => {
+                assert_eq!(archive, PathBuf::from("img.tar"));
+                assert_eq!(output, PathBuf::from("out"));
+            }
+            other => panic!("expected Unpack, got {other:?}"),
         }
     }
 

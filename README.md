@@ -48,12 +48,14 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 |---|---|
 | Pack a dynamic glibc ELF → runnable `FROM scratch` image | ✅ (loaded via `docker`/`podman`/`nerdctl`) |
 | `ld.so`-faithful dependency resolution (RPATH/RUNPATH/`$ORIGIN`, interpreter, sonames) | ✅ |
-| glibc **NSS** support staged — name-service lookups like `getent hosts` work | ✅ |
+| glibc **NSS** support staged — name-service lookups like `getent hosts` work; trim the modules with `--nss` | ✅ |
 | **Non-root** by default (UID 65532), reproducible layers | ✅ |
 | **SBOM** generation — `--sbom` (CycloneDX or SPDX, via syft) | ✅ |
 | **Vulnerability scan** — `--scan` (grype), gate with `--scan-fail-on <severity>` | ✅ |
 | **ELF hardening lint** — `lint` (PIE/RELRO/NX/canary/FORTIFY), gate with `--fail-on` | ✅ |
+| **Library policy gate** — `pack --deny`/`--require <soname>` (fail on a forbidden or missing library) | ✅ |
 | `dlopen` gap **detection** + `--include` escape hatch | ✅ |
+| **Dependency graph** — `graph` (the resolved dependency tree, ASCII or `--format json`) | ✅ |
 | Symbol strip (`--strip`), UPX compression (`--upx`), size report, smoke-run (`--smoke`) | ✅ |
 | Image **size budget** — `--max-size <SIZE>` (fail the build when the staged image exceeds it) | ✅ |
 | Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`) | ✅ |
@@ -68,6 +70,8 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 | **Daemonless registry push** — `--push <ref>` (no daemon; uses your docker credentials) | ✅ |
 | **Signing the image `pack` produces** — `--push --sign` (cosign keyless, by digest) | ✅ |
 | **Multi-arch image index** — `index` (combine per-arch pushes into one tag, daemonless) | ✅ |
+| **Image diff** — `diff <a> <b>` (files added/removed/changed + size delta; `--exit-code` gates CI) | ✅ |
+| **Unpack an OCI image** — `unpack <archive> <dir>` (extract the layers to audit an image you didn't build) | ✅ |
 
 ## Install
 
