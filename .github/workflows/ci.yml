@@ -30,7 +30,7 @@ jobs:
           persist-credentials: false
       # Spell-check all text (comments included); false positives go in _typos.toml.
       - name: Typos
-        uses: crate-ci/typos@d43b6c087ac471e2ea7b8af622ff15f05c0c365b # v1.50.1
+        uses: crate-ci/typos@512fc24f32f44ab01972217aaaf3dc86ec234d53 # v1.50.2
       # Keep the curl|bash installer clean. shellcheck ships on the runner, so no action.
       - name: ShellCheck (install.sh)
         run: shellcheck install.sh
@@ -90,7 +90,7 @@ jobs:
       # nextest instead of `cargo test`: same gate, plus a junit.xml (the ci
       # profile in .config/nextest.toml) — the only format Codecov Test Analytics
       # ingests. Prebuilt binary via install-action.
-      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+      - uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
         with:
           tool: cargo-nextest
       # upx isn't preinstalled; the --upx pack tests skip without it (Task 5.3).
@@ -105,7 +105,7 @@ jobs:
       # writes junit.xml before exiting non-zero), which is when analytics matter.
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
+        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
         with:
           files: target/nextest/ci/junit.xml
           disable_search: true
@@ -124,7 +124,7 @@ jobs:
           toolchain: stable
           components: llvm-tools-preview
           rustflags: ""
-      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+      - uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
         with:
           tool: cargo-llvm-cov
       # Enforce the line floor (baseline ~94.5%) and emit lcov. cargo-llvm-cov
@@ -137,7 +137,7 @@ jobs:
         run: cargo llvm-cov --all-features --lcov --output-path lcov.info --fail-under-lines 90
       - name: Upload to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
+        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
         with:
           files: lcov.info
           fail_ci_if_error: false
@@ -149,7 +149,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+      - uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
         with:
           tool: cargo-audit,cargo-deny
       - name: Audit
@@ -212,7 +212,7 @@ jobs:
           # renovate: datasource=github-releases depName=ziglang/zig
           version: 0.15.1
           use-cache: false
-      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+      - uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
         with:
           tool: cargo-zigbuild@0.23.0
       # Debug build: the point is the link, not optimization — reuse the warm cache
