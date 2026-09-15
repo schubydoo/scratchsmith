@@ -154,6 +154,13 @@ jobs:
           tool: cargo-audit,cargo-deny
       - name: Audit
         run: cargo audit
+      # fuzz/ is a DETACHED workspace (empty [workspace] in fuzz/Cargo.toml), so it resolves
+      # its own graph and bare `cargo audit` above never reads fuzz/Cargo.lock. That blind spot
+      # left RUSTSEC-2026-0285 (rustls 0.23.44) sitting in fuzz/Cargo.lock after the main lock
+      # was patched, visible only as a weekly Scorecard alert. Renovate's Monday lockFileMaintenance
+      # does cover this file, but a required check must not wait a week for it.
+      - name: Audit fuzz lockfile
+        run: cargo audit --file fuzz/Cargo.lock
       - name: Deny
         run: cargo deny check
 
