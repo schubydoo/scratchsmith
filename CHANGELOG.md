@@ -6,6 +6,16 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0:
 breaking changes bump the minor).
+## 1.2.1 (2026-09-15)
+
+### Security
+
+#### rustls 0.23.45 (RUSTSEC-2026-0285) ([#168](https://github.com/schubydoo/scratchsmith/pull/168))
+
+The shipped binary now links rustls 0.23.45. Version 0.23.44 accepts TLS 1.3 handshake
+messages across encryption level boundaries (RUSTSEC-2026-0285, medium, 5.3). rustls
+arrives through `reqwest`, so only `Cargo.lock` changes.
+
 ## 1.2.0 (2026-09-11)
 
 ### Features
