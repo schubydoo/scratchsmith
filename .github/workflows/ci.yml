@@ -105,7 +105,7 @@ jobs:
       # writes junit.xml before exiting non-zero), which is when analytics matter.
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: target/nextest/ci/junit.xml
           disable_search: true
@@ -137,7 +137,7 @@ jobs:
         run: cargo llvm-cov --all-features --lcov --output-path lcov.info --fail-under-lines 90
       - name: Upload to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: lcov.info
           fail_ci_if_error: false
