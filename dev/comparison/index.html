@@ -752,20 +752,20 @@
 
 <h1 id="comparison-limitations">Comparison &amp; limitations<a class="headerlink" href="#comparison-limitations" title="Permanent link">&para;</a></h1>
 <h2 id="why-not-just-static-link-from-scratch">Why not just static-link + <code>FROM scratch</code>?<a class="headerlink" href="#why-not-just-static-link-from-scratch" title="Permanent link">&para;</a></h2>
-<p>If you can rebuild your service as a static binary (<code>CGO_ENABLED=0</code>, musl), <strong>do that</strong> — you
-need no packer. Scratchsmith is built for the binaries static linking <em>can't</em> help:</p>
+<p>If you can rebuild your service as a static binary (<code>CGO_ENABLED=0</code>, musl), <strong>do that</strong>. You
+need no packer. Scratchsmith is built for the binaries that static linking <em>cannot</em> help:</p>
 <ul>
-<li><strong>Closed-source / vendor binaries</strong> you can't recompile.</li>
-<li><strong>glibc binaries</strong> that rely on <strong>NSS</strong>, <strong><code>dlopen</code></strong>, or <strong>locale</strong> behaviour — static glibc
-  quietly breaks these, often only in production.</li>
-<li>Anything where "just rebuild it static" isn't on the table.</li>
+<li><strong>Closed-source or vendor binaries</strong> you cannot recompile.</li>
+<li><strong>glibc binaries</strong> that rely on <strong>NSS</strong>, <strong><code>dlopen</code></strong>, or <strong>locale</strong> behavior. Static glibc
+  breaks these quietly, often only in production.</li>
+<li>Anything where "just rebuild it static" is not on the table.</li>
 </ul>
-<p>That's the wedge. But it's not a fence: Scratchsmith <strong>already packs a static binary too</strong> (the
-resolver detects it and stages the single file), so it's equally handy when you just want an
-SBOM, a hardening report, a non-root image, and no Dockerfile — without hand-writing a
-multi-stage build. Purpose-built for the hard case; useful for the easy one.</p>
+<p>That is the wedge, and it is not a fence. Scratchsmith <strong>already packs a static binary too</strong>,
+because the resolver detects it and stages the single file. When you want an SBOM, a hardening
+report, a non-root image, and no Dockerfile, it is equally handy. You hand-write no multi-stage
+build. It is purpose-built for the hard case and useful for the easy one.</p>
 <h2 id="how-scratchsmith-compares">How Scratchsmith compares<a class="headerlink" href="#how-scratchsmith-compares" title="Permanent link">&para;</a></h2>
-<p>Every tool here builds smaller/safer images; they differ mainly in <strong>what you feed them</strong>.</p>
+<p>Every tool here builds smaller and safer images. They differ mainly in <strong>what you feed them</strong>.</p>
 <table>
 <thead>
 <tr>
@@ -828,27 +828,29 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.</p>
 </tr>
 </tbody>
 </table>
-<p>Scratchsmith owns the one input the others don't serve: <strong>an arbitrary prebuilt dynamic binary</strong>.</p>
-<p><sub><em>Snapshot as of 2026-08 — the other tools evolve; check their own docs for current behavior. Only Scratchsmith's row is kept current here.</em></sub></p>
+<p>Scratchsmith owns the one input the others do not serve: <strong>an arbitrary prebuilt dynamic binary</strong>.</p>
+<p><sub><em>Snapshot as of 2026-08. The other tools evolve, so read their own docs for current behavior. Only Scratchsmith's row is kept current here.</em></sub></p>
 <h2 id="limitations">Limitations<a class="headerlink" href="#limitations" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>glibc / host-arch only (for now).</strong> Dynamic musl/Alpine binaries are detected by their
-  interpreter and <strong>rejected with a clear error</strong> before anything is staged — never a silently
-  broken image. This is a v1 scope choice, not a permanent boundary: musl uses a different loader
-  model and has no NSS, so it needs its own resolver backend (a possible future addition).
-  (A <em>static</em> musl binary is a single self-contained file and packs fine today.) No cross-arch
-  resolution yet.</li>
-<li><strong><code>dlopen</code> is best-effort.</strong> Libraries loaded at runtime via <code>dlopen</code> are invisible to static
-  analysis; Scratchsmith <em>warns</em> when it sees <code>dlopen</code> and lets you force-stage them with
-  <code>--include &lt;lib&gt;</code>. It is not a blanket "any binary just works" guarantee.</li>
+  interpreter and <strong>rejected with a clear error</strong> before anything is staged. You never get a
+  silently broken image. This is a v1 scope choice, not a permanent boundary: musl uses a
+  different loader model and has no NSS, so it needs its own resolver backend (a possible
+  future addition). (A <em>static</em> musl binary is a single self-contained file and packs fine
+  today.) No cross-arch resolution yet.</li>
+<li><strong><code>dlopen</code> is best-effort.</strong> Libraries loaded at runtime via <code>dlopen</code> are invisible to
+  static analysis. Scratchsmith <em>warns</em> about a <code>dlopen</code> reference in the binary's dynamic
+  symbol table, and it lets you force-stage those libraries with <code>--include &lt;lib&gt;</code>. It is not
+  a blanket "any binary just works" guarantee.</li>
 <li><strong>Loading into a container engine is the <em>default</em> sink.</strong> The default hands the image to a
-  local engine for convenience — <code>docker</code> by default, or <code>--runtime podman|nerdctl</code> for those —
-  or go daemon-free entirely with <code>--push &lt;ref&gt;</code> (straight to a registry), <code>--oci-archive &lt;file&gt;</code>
-  (an OCI archive), or <code>--no-build --output</code> (a rootfs).</li>
+  local engine for convenience: <code>docker</code> by default, or <code>--runtime podman|nerdctl</code> for those.
+  You can also go daemon-free entirely with <code>--push &lt;ref&gt;</code> (straight to a registry),
+  <code>--oci-archive &lt;file&gt;</code> (an OCI archive), or <code>--no-build --output</code> (a rootfs).</li>
 <li><strong>Signing the image <code>pack</code> produces needs <code>--push</code>.</strong> <code>pack --push --sign</code> cosign-signs the
-  pushed image by digest (keyless), and <code>--sbom --sign</code> attaches the SBOM as a signed
-  attestation; both only apply to the registry-push sink, since cosign signs a registry image.
-  Release <em>artifacts</em> are separately cosign-signed with SLSA provenance (<a href="../verifying/">Verifying releases</a>).</li>
+  pushed image by digest (keyless). <code>--sbom --sign</code> attaches the SBOM as a signed attestation.
+  Both apply only to the registry-push sink, because cosign signs a registry image. Release
+  <em>artifacts</em> are separately cosign-signed with SLSA provenance
+  (<a href="../verifying/">Verifying releases</a>).</li>
 </ul>
 
 

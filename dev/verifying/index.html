@@ -708,12 +708,12 @@
 
 <h1 id="verifying-releases">Verifying releases<a class="headerlink" href="#verifying-releases" title="Permanent link">&para;</a></h1>
 <p>Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
-Each release also ships a CycloneDX SBOM of Scratchsmith's own dependency graph
-(<code>scratchsmith-v&lt;ver&gt;.cdx.json</code>), listed in <code>checksums.txt</code> so the signature and provenance
-cover it too. It reflects the full <code>Cargo.lock</code> graph, so it includes build- and
+Each release also ships a CycloneDX SBOM of Scratchsmith's own dependency graph. That file is
+<code>scratchsmith-v&lt;ver&gt;.cdx.json</code>, and it is listed in <code>checksums.txt</code>, so the signature and
+provenance cover it too. It reflects the full <code>Cargo.lock</code> graph, so it includes build- and
 dev-dependencies, not only the crates that link into the shipped binary.</p>
 <p>Replace <code>&lt;ver&gt;</code> with the bare version you downloaded, no leading <code>v</code> (the tarball adds the
-<code>v</code> prefix; the image tag doesn't).</p>
+<code>v</code> prefix, but the image tag does not).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># SLSA provenance — the simplest, ref-agnostic check</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>gh<span class="w"> </span>attestation<span class="w"> </span>verify<span class="w"> </span>scratchsmith-v&lt;ver&gt;-linux-amd64.tar.gz<span class="w"> </span>--repo<span class="w"> </span>schubydoo/scratchsmith
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
@@ -733,7 +733,7 @@ dev-dependencies, not only the crates that link into the shipped binary.</p>
 <p>The commands above verify Scratchsmith's own <strong>release artifacts</strong>. To sign an image Scratchsmith
 <em>builds</em> for you, <code>pack --push --sign</code> cosign-signs the pushed image by digest (keyless), and
 <code>--sbom --sign</code> attaches the SBOM as a signed attestation. Both only apply to the registry-push
-sink, since cosign signs a registry image — see <a href="../usage/">Usage</a>.</p>
+sink, since cosign signs a registry image. See <a href="../usage/">Usage</a>.</p>
 
 
 

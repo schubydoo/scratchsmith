@@ -839,16 +839,16 @@
 
 
 <h1 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">&para;</a></h1>
-<p>Scratchsmith is <strong>Linux only</strong> (amd64/arm64) — it stages a Linux glibc rootfs, so it does not run on
-macOS or native Windows; use a Linux container or WSL2 there.</p>
+<p>Scratchsmith is <strong>Linux only</strong> (amd64/arm64). It stages a Linux glibc rootfs, so it does not run
+on macOS or native Windows. Use a Linux container or WSL2 there.</p>
 <h2 id="one-line-install">One-line install<a class="headerlink" href="#one-line-install" title="Permanent link">&para;</a></h2>
 <p>Downloads the signed release binary, verifies it against the cosign-signed <code>checksums.txt</code>, and
 installs it to <code>~/.local/bin</code> (or <code>/usr/local/bin</code> as root):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install.sh<span class="w"> </span><span class="p">|</span><span class="w"> </span>bash
 </code></pre></div>
-<p>Piping to <code>bash</code> runs <a href="https://github.com/schubydoo/scratchsmith/blob/main/install.sh"><code>install.sh</code></a> —
-read it first if you prefer. <code>VERSION</code> and <code>BIN_DIR</code> env vars override the tag and install directory.
-Uninstall with <code>--uninstall</code>:</p>
+<p>Piping to <code>bash</code> runs <a href="https://github.com/schubydoo/scratchsmith/blob/main/install.sh"><code>install.sh</code></a>.
+You can read it first. <code>VERSION</code> and <code>BIN_DIR</code> env vars override the tag and install
+directory. Uninstall with <code>--uninstall</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install.sh<span class="w"> </span><span class="p">|</span><span class="w"> </span>bash<span class="w"> </span>-s<span class="w"> </span>--<span class="w"> </span>--uninstall
 </code></pre></div>
 <h2 id="homebrew">Homebrew<a class="headerlink" href="#homebrew" title="Permanent link">&para;</a></h2>
@@ -859,8 +859,8 @@ Uninstall with <code>--uninstall</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>cargo<span class="w"> </span>install<span class="w"> </span>scratchsmith
 </code></pre></div>
 <h2 id="release-binary">Release binary<a class="headerlink" href="#release-binary" title="Permanent link">&para;</a></h2>
-<p>Download a release binary — Linux <strong>amd64</strong> or <strong>arm64</strong> — from the
-<a href="https://github.com/schubydoo/scratchsmith/releases/latest">latest release</a>. Check the signature
+<p>Download a release binary, Linux <strong>amd64</strong> or <strong>arm64</strong>, from the
+<a href="https://github.com/schubydoo/scratchsmith/releases/latest">latest release</a>. Verify the signature
 and provenance first (see <a href="../verifying/">Verifying releases</a>):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>tar<span class="w"> </span>-xzf<span class="w"> </span>scratchsmith-*-linux-amd64.tar.gz<span class="w">   </span><span class="c1"># or -linux-arm64</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>./scratchsmith-*/scratchsmith<span class="w"> </span>--version
@@ -869,10 +869,10 @@ and provenance first (see <a href="../verifying/">Verifying releases</a>):</p>
 <p>Pull the signed image:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>docker<span class="w"> </span>pull<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:latest
 </code></pre></div>
-<p><code>:latest</code> is a minimal <code>FROM scratch</code> image — it runs <code>--version</code>, <code>lint</code>, <code>doctor</code>, and
-<code>--completions</code>, but <strong>not <code>pack</code></strong> (a scratch image has none of the toolchain <code>pack</code> needs). To run
-<code>pack</code> inside a container, pull the <strong><code>:toolbox</code></strong> image instead (Wolfi base + the full toolchain);
-see the <a href="../usage/">toolbox section in Usage</a>.</p>
+<p><code>:latest</code> is a minimal <code>FROM scratch</code> image. It runs <code>--version</code>, <code>lint</code>, <code>doctor</code>, and
+<code>--completions</code>, but <strong>not <code>pack</code></strong> (a scratch image has none of the toolchain <code>pack</code> needs).
+To run <code>pack</code> inside a container, pull the <strong><code>:toolbox</code></strong> image instead (Wolfi base + the full
+toolchain). See the <a href="../usage/">toolbox section in Usage</a>.</p>
 <h2 id="build-from-source">Build from source<a class="headerlink" href="#build-from-source" title="Permanent link">&para;</a></h2>
 <p>Rust <strong>1.96+</strong>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/schubydoo/scratchsmith

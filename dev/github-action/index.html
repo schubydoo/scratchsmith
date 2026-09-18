@@ -765,15 +765,16 @@ runner, verifies it against the release checksums, and runs <code>pack</code>:</
 <a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">    </span><span class="nt">scan-fail-on</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">high</span><span class="w">        </span><span class="c1"># needs grype on the runner</span>
 <a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">    </span><span class="nt">max-size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">25MB</span>
 </code></pre></div>
-<p>Pin <code>@v&lt;ver&gt;</code> to a specific release tag (or a commit SHA) — the same supply-chain hygiene the tool
-itself practices. <code>version:</code> overrides which scratchsmith release the action runs (defaults to the
-pinned tag, else <code>latest</code>).</p>
+<p>Pin <code>@v&lt;ver&gt;</code> to a specific release tag (or a commit SHA). That is the same supply-chain hygiene the
+tool itself practices. <code>version:</code> overrides which scratchsmith release the action runs (defaults to
+the pinned tag, else <code>latest</code>).</p>
 <h2 id="inputs">Inputs<a class="headerlink" href="#inputs" title="Permanent link">&para;</a></h2>
-<p>Most inputs map to the <code>pack</code> flag of the same name — see <a href="../configuration/">Configuration</a> for what
-each does and <a href="../usage/">Usage</a> for the equivalent command-line recipes. A few are action-specific:
-<code>version</code> picks which release to download, <code>output</code> maps to <code>--no-build --output</code>, and <code>args</code> is a
-verbatim escape hatch for any flag without a dedicated input (e.g. <code>--sign</code>, <code>--oci-archive</code>). Note
-<code>push</code> publishes with <code>docker tag</code>/<code>docker push</code>, <strong>not</strong> pack's daemonless, cosign-signable <code>--push</code>.</p>
+<p>Most inputs map to the <code>pack</code> flag of the same name. See <a href="../configuration/">Configuration</a> for what
+each does, and <a href="../usage/">Usage</a> for the equivalent command-line recipes. A few inputs are
+action-specific. <code>version</code> picks which release to download. <code>output</code> maps to <code>--no-build --output</code>.
+<code>args</code> is a verbatim escape hatch for any flag without a dedicated input, for example <code>--sign</code> or
+<code>--oci-archive</code>. Note that <code>push</code> publishes with <code>docker tag</code>/<code>docker push</code>, <strong>not</strong> pack's
+daemonless, cosign-signable <code>--push</code>.</p>
 <table>
 <thead>
 <tr>
@@ -791,7 +792,7 @@ verbatim escape hatch for any flag without a dedicated input (e.g. <code>--sign<
 <tr>
 <td><code>version</code></td>
 <td><em>(the pinned tag, else <code>latest</code>)</em></td>
-<td>Which scratchsmith release to download — a tag like <code>v1.0.0</code>, or <code>latest</code>.</td>
+<td>Which scratchsmith release to download: a tag like <code>v1.0.0</code>, or <code>latest</code>.</td>
 </tr>
 <tr>
 <td><code>output</code></td>
@@ -821,7 +822,7 @@ verbatim escape hatch for any flag without a dedicated input (e.g. <code>--sign<
 <tr>
 <td><code>user</code></td>
 <td><code>65532</code></td>
-<td>Image user <code>UID[:GID]</code>; <code>0</code> warns.</td>
+<td>Image user <code>UID[:GID]</code>. <code>0</code> warns.</td>
 </tr>
 <tr>
 <td><code>label</code></td>
@@ -831,7 +832,7 @@ verbatim escape hatch for any flag without a dedicated input (e.g. <code>--sign<
 <tr>
 <td><code>healthcheck</code></td>
 <td></td>
-<td><code>HEALTHCHECK</code> in exec form, one token per line; must name an executable in the image.</td>
+<td><code>HEALTHCHECK</code> in exec form, one token per line. It must name an executable in the image.</td>
 </tr>
 <tr>
 <td><code>strip</code></td>
@@ -846,7 +847,7 @@ verbatim escape hatch for any flag without a dedicated input (e.g. <code>--sign<
 <tr>
 <td><code>smoke</code></td>
 <td><code>false</code></td>
-<td>After building, run the image once and fail if the binary can't start.</td>
+<td>After the build, run the image once. If the binary cannot start, the job fails.</td>
 </tr>
 <tr>
 <td><code>sbom</code></td>
@@ -856,7 +857,7 @@ verbatim escape hatch for any flag without a dedicated input (e.g. <code>--sign<
 <tr>
 <td><code>sbom-file</code></td>
 <td><code>sbom.json</code></td>
-<td>SBOM output path. Requires <code>sbom</code> — ignored on its own.</td>
+<td>SBOM output path. Requires <code>sbom</code>, and is ignored on its own.</td>
 </tr>
 <tr>
 <td><code>sbom-format</code></td>
@@ -866,7 +867,7 @@ verbatim escape hatch for any flag without a dedicated input (e.g. <code>--sign<
 <tr>
 <td><code>scan</code></td>
 <td><code>false</code></td>
-<td>Vulnerability-scan the rootfs with grype (needs <code>grype</code>; reuses the SBOM if <code>sbom</code> is set).</td>
+<td>Vulnerability-scan the rootfs with grype (needs <code>grype</code> on the runner). When <code>sbom</code> is set, it reuses that SBOM.</td>
 </tr>
 <tr>
 <td><code>scan-fail-on</code></td>
@@ -891,7 +892,7 @@ verbatim escape hatch for any flag without a dedicated input (e.g. <code>--sign<
 <tr>
 <td><code>include</code></td>
 <td></td>
-<td>Extra libraries to force-stage (e.g. <code>dlopen</code>'d plugins), one soname/path per line.</td>
+<td>Extra libraries to force-stage, for example <code>dlopen</code>'d plugins, one soname/path per line.</td>
 </tr>
 <tr>
 <td><code>nss</code></td>
@@ -901,7 +902,7 @@ verbatim escape hatch for any flag without a dedicated input (e.g. <code>--sign<
 <tr>
 <td><code>max-size</code></td>
 <td></td>
-<td>Fail if the fully-staged image exceeds this size — e.g. <code>25MB</code>, <code>512KiB</code>, or a byte count.</td>
+<td>If the fully-staged image exceeds this size, the job fails. Write the size as <code>25MB</code>, <code>512KiB</code>, or a byte count.</td>
 </tr>
 <tr>
 <td><code>deny</code></td>
@@ -916,12 +917,12 @@ verbatim escape hatch for any flag without a dedicated input (e.g. <code>--sign<
 <tr>
 <td><code>push</code></td>
 <td></td>
-<td>Tag the built image as this registry ref and <code>docker push</code> it (needs a prior registry login; not compatible with <code>output</code>).</td>
+<td>Tag the built image as this registry ref and <code>docker push</code> it. Needs a prior registry login. Not compatible with <code>output</code>.</td>
 </tr>
 <tr>
 <td><code>args</code></td>
 <td></td>
-<td>Extra raw <code>pack</code> flags appended verbatim — the escape hatch for anything above.</td>
+<td>Extra raw <code>pack</code> flags appended verbatim: the escape hatch for anything above.</td>
 </tr>
 </tbody>
 </table>
@@ -936,11 +937,11 @@ verbatim escape hatch for any flag without a dedicated input (e.g. <code>--sign<
 <tbody>
 <tr>
 <td><code>image</code></td>
-<td>The loaded image tag (empty when <code>output</code> staged a rootfs instead).</td>
+<td>The loaded image tag. When <code>output</code> staged a rootfs instead, this is empty.</td>
 </tr>
 <tr>
 <td><code>rootfs</code></td>
-<td>The staged rootfs directory (empty when an image was built).</td>
+<td>The staged rootfs directory. When an image was built instead, this is empty.</td>
 </tr>
 <tr>
 <td><code>report</code></td>

@@ -754,24 +754,25 @@
 <h1 id="scratchsmith">Scratchsmith<a class="headerlink" href="#scratchsmith" title="Permanent link">&para;</a></h1>
 <p><strong>The daemonless supply-chain packager for prebuilt dynamic Linux binaries.</strong></p>
 <p>Point Scratchsmith at a dynamically linked glibc ELF binary and get a minimal <code>FROM scratch</code>
-OCI image — no Dockerfile, no static-linking prerequisite. It resolves the binary's shared
-libraries the way <code>ld.so</code> does (RPATH/RUNPATH/<code>$ORIGIN</code>, the interpreter, versioned soname
-symlinks), stages the glibc pieces nothing else remembers (NSS modules, a working
-<code>nsswitch.conf</code>, minimal <code>passwd</code>/<code>group</code>), and assembles a <strong>non-root</strong> image with reproducible
-layers.</p>
-<p><img alt="Scratchsmith packing a dynamic glibc binary into a minimal FROM scratch image with an SBOM and a smoke-run, then running it" src="demo/scratchsmith.svg" /></p>
+OCI image. You need no Dockerfile and no static-linking prerequisite. It resolves the binary's
+shared libraries the way <code>ld.so</code> does (RPATH/RUNPATH/<code>$ORIGIN</code>, the interpreter, versioned
+soname symlinks). It stages the glibc pieces nothing else remembers (NSS modules, a working
+<code>nsswitch.conf</code>, minimal <code>passwd</code>/<code>group</code>). Then it assembles a <strong>non-root</strong> image with
+reproducible layers.</p>
+<p><img src="demo/scratchsmith.svg" alt="Scratchsmith packing a dynamic glibc binary into a minimal FROM scratch image with an SBOM and a smoke-run, then running it"></p>
 <h2 id="why-not-just-static-link-from-scratch">Why not just static-link + <code>FROM scratch</code>?<a class="headerlink" href="#why-not-just-static-link-from-scratch" title="Permanent link">&para;</a></h2>
-<p>If you can rebuild your service as a static binary (<code>CGO_ENABLED=0</code>, musl), <strong>do that</strong> — you need
-no packer. Scratchsmith is built for the binaries static linking <em>can't</em> help:</p>
+<p>If you can rebuild your service as a static binary (<code>CGO_ENABLED=0</code>, musl), <strong>do that</strong>. You
+need no packer. Scratchsmith is built for the binaries that static linking <em>cannot</em> help:</p>
 <ul>
-<li><strong>Closed-source / vendor binaries</strong> you can't recompile.</li>
-<li><strong>glibc binaries</strong> that rely on <strong>NSS</strong>, <strong><code>dlopen</code></strong>, or <strong>locale</strong> behaviour — static glibc
-  quietly breaks these, often only in production.</li>
-<li>Anything where "just rebuild it static" isn't on the table.</li>
+<li><strong>Closed-source or vendor binaries</strong> you cannot recompile.</li>
+<li><strong>glibc binaries</strong> that rely on <strong>NSS</strong>, <strong><code>dlopen</code></strong>, or <strong>locale</strong> behavior. Static glibc
+  breaks these quietly, often only in production.</li>
+<li>Anything where "just rebuild it static" is not on the table.</li>
 </ul>
-<p>That's the wedge. But it's not a fence: Scratchsmith <strong>already packs a static binary too</strong> (the
-resolver detects it and stages the single file), so it's equally handy when you just want an SBOM,
-a hardening report, a non-root image, and no Dockerfile. More: <a href="comparison/">Comparison &amp; limitations</a>.</p>
+<p>That is the wedge, and it is not a fence. Scratchsmith <strong>already packs a static binary too</strong>,
+because the resolver detects it and stages the single file. When you want an SBOM, a hardening
+report, a non-root image, and no Dockerfile, it is equally handy. More:
+<a href="comparison/">Comparison &amp; limitations</a>.</p>
 <h2 id="what-works-today">What works today<a class="headerlink" href="#what-works-today" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -790,7 +791,7 @@ a hardening report, a non-root image, and no Dockerfile. More: <a href="comparis
 <td>✅</td>
 </tr>
 <tr>
-<td>glibc <strong>NSS</strong> support staged — name-service lookups like <code>getent hosts</code> work; trim the modules with <code>--nss</code></td>
+<td>glibc <strong>NSS</strong> support staged, so name-service lookups like <code>getent hosts</code> work. Trim the modules with <code>--nss</code></td>
 <td>✅</td>
 </tr>
 <tr>
@@ -798,19 +799,19 @@ a hardening report, a non-root image, and no Dockerfile. More: <a href="comparis
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>SBOM</strong> generation — <code>--sbom</code> (CycloneDX or SPDX, via syft)</td>
+<td><strong>SBOM</strong> generation: <code>--sbom</code> (CycloneDX or SPDX, via syft)</td>
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>Vulnerability scan</strong> — <code>--scan</code> (grype), gate with <code>--scan-fail-on &lt;severity&gt;</code></td>
+<td><strong>Vulnerability scan</strong>: <code>--scan</code> (grype), gate with <code>--scan-fail-on &lt;severity&gt;</code></td>
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>ELF hardening lint</strong> — <code>lint</code> (PIE/RELRO/NX/canary/FORTIFY), gate with <code>--fail-on</code></td>
+<td><strong>ELF hardening lint</strong>: <code>lint</code> (PIE/RELRO/NX/canary/FORTIFY), gate with <code>--fail-on</code></td>
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>Library policy gate</strong> — <code>pack --deny</code>/<code>--require &lt;soname&gt;</code> (fail on a forbidden or missing library)</td>
+<td><strong>Library policy gate</strong>: <code>pack --deny</code>/<code>--require &lt;soname&gt;</code> (a forbidden or missing library fails the pack)</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -818,7 +819,7 @@ a hardening report, a non-root image, and no Dockerfile. More: <a href="comparis
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>Dependency graph</strong> — <code>graph</code> (the resolved dependency tree, ASCII or <code>--format json</code>)</td>
+<td><strong>Dependency graph</strong>: <code>graph</code> (the resolved dependency tree, ASCII or <code>--format json</code>)</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -826,7 +827,7 @@ a hardening report, a non-root image, and no Dockerfile. More: <a href="comparis
 <td>✅</td>
 </tr>
 <tr>
-<td>Image <strong>size budget</strong> — <code>--max-size &lt;SIZE&gt;</code> (fail the build when the staged image exceeds it)</td>
+<td>Image <strong>size budget</strong>: <code>--max-size &lt;SIZE&gt;</code> (if the staged image exceeds the budget, the build fails)</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -834,72 +835,72 @@ a hardening report, a non-root image, and no Dockerfile. More: <a href="comparis
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>Add host files</strong> — <code>--add-file SRC[:DST]</code> (copy any host file into the image)</td>
+<td><strong>Add host files</strong>: <code>--add-file SRC[:DST]</code> (copy any host file into the image)</td>
 <td>✅</td>
 </tr>
 <tr>
-<td>Image metadata — labels (<code>--label</code>), <code>HEALTHCHECK</code> (<code>--healthcheck</code>)</td>
+<td>Image metadata: labels (<code>--label</code>), <code>HEALTHCHECK</code> (<code>--healthcheck</code>)</td>
 <td>✅</td>
 </tr>
 <tr>
-<td>Config file (<code>scratchsmith.toml</code>) + named profiles (<code>--profile</code>), JSON output (<code>--format json</code>)</td>
+<td>Configuration file (<code>scratchsmith.toml</code>) + named profiles (<code>--profile</code>), JSON output (<code>--format json</code>)</td>
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>Pluggable runtime</strong> — <code>--runtime</code> (docker / podman / nerdctl) for the default load sink</td>
+<td><strong>Pluggable runtime</strong>: <code>--runtime</code> (docker / podman / nerdctl) for the default load sink</td>
 <td>✅</td>
 </tr>
 <tr>
-<td>Shell completions — <code>--completions &lt;bash\|zsh\|fish&gt;</code></td>
+<td>Shell completions: <code>--completions &lt;bash\|zsh\|fish&gt;</code></td>
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>Signed releases</strong> — amd64 + arm64 binaries, cosign-signed checksums + SLSA provenance, signed multi-arch GHCR image</td>
+<td><strong>Signed releases</strong>: amd64 + arm64 binaries, cosign-signed <code>checksums.txt</code> + SLSA provenance, signed multi-arch GHCR image</td>
 <td>✅ (<a href="verifying/">verify</a>)</td>
 </tr>
 <tr>
-<td><strong><code>:toolbox</code> image</strong> — a runnable image (Wolfi + the full toolchain) that runs <code>pack</code> <em>inside</em> a container</td>
+<td><strong><code>:toolbox</code> image</strong>: a runnable image (Wolfi + the full toolchain) that runs <code>pack</code> <em>inside</em> a container</td>
 <td>✅ (<a href="usage/">usage</a>)</td>
 </tr>
 <tr>
 <td>Dynamic musl/Alpine binaries</td>
-<td>❌ rejected loudly (glibc first; a musl backend is a future goal)</td>
+<td>❌ rejected loudly (glibc comes first, and a musl backend is a future goal)</td>
 </tr>
 <tr>
-<td><strong>Daemonless OCI archive</strong> — <code>--oci-archive &lt;file&gt;</code> (no daemon; skopeo/buildah/registry-ready)</td>
+<td><strong>Daemonless OCI archive</strong>: <code>--oci-archive &lt;file&gt;</code> (no daemon, and skopeo/buildah/registry-ready)</td>
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>Daemonless registry push</strong> — <code>--push &lt;ref&gt;</code> (no daemon; uses your docker credentials)</td>
+<td><strong>Daemonless registry push</strong>: <code>--push &lt;ref&gt;</code> (no daemon, and it uses your docker credentials)</td>
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>Signing the image <code>pack</code> produces</strong> — <code>--push --sign</code> (cosign keyless, by digest)</td>
+<td><strong>Signing the image <code>pack</code> produces</strong>: <code>--push --sign</code> (cosign keyless, by digest)</td>
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>Multi-arch image index</strong> — <code>index</code> (combine per-arch pushes into one tag, daemonless)</td>
+<td><strong>Multi-arch image index</strong>: <code>index</code> (combine per-arch pushes into one tag, daemonless)</td>
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>Image diff</strong> — <code>diff &lt;a&gt; &lt;b&gt;</code> (files added/removed/changed + size delta; <code>--exit-code</code> gates CI)</td>
+<td><strong>Image diff</strong>: <code>diff &lt;a&gt; &lt;b&gt;</code> (files added, removed and changed, plus the size delta, and <code>--exit-code</code> gates CI)</td>
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>Unpack an OCI image</strong> — <code>unpack &lt;archive&gt; &lt;dir&gt;</code> (extract the layers to audit an image you didn't build)</td>
+<td><strong>Unpack an OCI image</strong>: <code>unpack &lt;archive&gt; &lt;dir&gt;</code> (extract the layers to audit an image you did not build)</td>
 <td>✅</td>
 </tr>
 </tbody>
 </table>
 <h2 id="next">Next<a class="headerlink" href="#next" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="installation/">Installation</a> — one-line install, packages, release binaries, and completions.</li>
-<li><a href="usage/">Usage</a> — pack recipes and daemonless output.</li>
-<li><a href="github-action/">GitHub Action</a> — pack in a CI workflow with the composite action.</li>
-<li><a href="configuration/">Configuration</a> — the <code>scratchsmith.toml</code> key reference and profiles.</li>
-<li><a href="verifying/">Verifying releases</a> — cosign signatures, SLSA provenance, and the SBOM.</li>
-<li><a href="comparison/">Comparison &amp; limitations</a> — how it compares, and what it does not do.</li>
-<li><a href="architecture/">Architecture</a> — how resolve → stage → assemble works, and the 1.0 stability contract.</li>
+<li><a href="installation/">Installation</a>: one-line install, packages, release binaries, and completions.</li>
+<li><a href="usage/">Usage</a>: pack recipes and daemonless output.</li>
+<li><a href="github-action/">GitHub Action</a>: pack in a CI workflow with the composite action.</li>
+<li><a href="configuration/">Configuration</a>: the <code>scratchsmith.toml</code> key reference and profiles.</li>
+<li><a href="verifying/">Verifying releases</a>: cosign signatures, SLSA provenance, and the SBOM.</li>
+<li><a href="comparison/">Comparison &amp; limitations</a>: how it compares, and what it does not do.</li>
+<li><a href="architecture/">Architecture</a>: how resolve → stage → assemble works, and the 1.0 stability contract.</li>
 </ul>
 
 

@@ -729,33 +729,34 @@
 <h1 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h1>
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <ol>
-<li><strong>Resolve</strong> — emulate the <code>ld.so</code> search order from the ELF itself (RPATH is transitive,
+<li><strong>Resolve</strong>: emulate the <code>ld.so</code> search order from the ELF itself (RPATH is transitive,
    RUNPATH is not, <code>$ORIGIN</code> is per-object). It never scrapes the host's <code>ldd</code>, <code>ld.so.cache</code>,
    or <code>LD_LIBRARY_PATH</code>, so the result is deterministic.</li>
-<li><strong>Stage</strong> — copy the interpreter to its verbatim path, mirror the libraries, recreate
+<li><strong>Stage</strong>: copy the interpreter to its verbatim path, mirror the libraries, recreate
    versioned-soname symlinks, regenerate <code>ld.so.cache</code>, and add the glibc NSS pieces.</li>
-<li><strong>Assemble</strong> — build a non-root image with reproducible layers (sorted entries, zeroed
-   mtime/uid/gid; the uncompressed <code>diff_id</code> and the gzip layer digest are computed separately,
-   avoiding the classic unpullable-image bug).</li>
+<li><strong>Assemble</strong>: build a non-root image with reproducible layers (sorted entries, zeroed
+   mtime/uid/gid). The uncompressed <code>diff_id</code> and the gzip layer digest are computed
+   separately, which avoids the classic unpullable-image bug.</li>
 </ol>
 <h2 id="stability">Stability<a class="headerlink" href="#stability" title="Permanent link">&para;</a></h2>
 <p>Scratchsmith follows <a href="https://semver.org/">Semantic Versioning</a>. As of <strong>1.0</strong>, these surfaces are a
-stable contract — a breaking change to any of them requires a new major version:</p>
+stable contract. A breaking change to any of them requires a new major version:</p>
 <ul>
-<li><strong>CLI flags</strong> — the names and meaning of <code>pack</code> / <code>lint</code> / <code>doctor</code> / <code>index</code> / <code>graph</code> / <code>diff</code> /
-  <code>unpack</code> flags, and the top-level <code>--completions</code>. New flags arrive in minor releases; a removed
+<li><strong>CLI flags</strong>: the names and meaning of <code>pack</code> / <code>lint</code> / <code>doctor</code> / <code>index</code> / <code>graph</code> / <code>diff</code> /
+  <code>unpack</code> flags, and the top-level <code>--completions</code>. New flags arrive in minor releases. A removed
   or renamed flag, or a changed default, is a major change.</li>
-<li><strong><code>scratchsmith.toml</code></strong> — the config keys and their types (the <a href="../configuration/">Configuration</a> reference).</li>
-<li><strong><code>--format json</code></strong> — the field names and types of the <code>pack</code>, <code>index</code>, <code>graph</code>, <code>diff</code>, and <code>unpack</code>
+<li><strong><code>scratchsmith.toml</code></strong>: the configuration keys and their types (the <a href="../configuration/">Configuration</a> reference).</li>
+<li><strong><code>--format json</code></strong>: the field names and types of the <code>pack</code>, <code>index</code>, <code>graph</code>, <code>diff</code>, and <code>unpack</code>
   reports (the schema CI gates consume). Each is pinned by a golden test, so a change is always deliberate.</li>
-<li><strong>Exit codes</strong> — <code>0</code> on success, <code>2</code> on an argument-parse error, and non-zero on any other failure.</li>
+<li><strong>Exit codes</strong>: <code>0</code> on success, <code>2</code> on an argument-parse error, and non-zero on any other failure.</li>
 </ul>
-<p><strong>Not</strong> frozen (may change in any release): human-readable text and warning wording, log output, <code>doctor</code>'s
-exact phrasing, the Rust <strong>library API</strong> (the crate's <code>pub</code> items exist for its own tests, not as a supported
-API), and the exact bytes of the produced image — layers stay reproducible for identical inputs, but that is a
-property, not a frozen API.</p>
-<p>For how the contract changes over time — the deprecation cycle (keep it working, warn on stderr, remove only in
-the next major) and how each surface is guarded by a test — see <strong><a href="https://github.com/schubydoo/scratchsmith/blob/main/COMPATIBILITY.md">COMPATIBILITY.md</a></strong>.</p>
+<p><strong>Not</strong> frozen (these can change in any release): human-readable text and warning wording, log
+output, <code>doctor</code>'s exact phrasing, the Rust <strong>library API</strong>, and the exact bytes of the produced
+image. The crate's <code>pub</code> items exist for its own tests, not as a supported API. Layers stay
+reproducible for identical inputs, but that is a property, not a frozen API.</p>
+<p><strong><a href="https://github.com/schubydoo/scratchsmith/blob/main/COMPATIBILITY.md">COMPATIBILITY.md</a></strong> covers
+how the contract changes over time. It describes the deprecation cycle (keep it working, warn on
+stderr, remove only in the next major), and how a test guards each surface.</p>
 
 
 

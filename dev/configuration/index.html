@@ -732,7 +732,7 @@ file</strong>.</p>
 <tr>
 <td><code>cmd</code></td>
 <td><code>--cmd</code></td>
-<td>Default arguments appended to the entrypoint (list; <code>--cmd</code> is repeatable).</td>
+<td>Default arguments appended to the entrypoint (list, and <code>--cmd</code> is repeatable).</td>
 </tr>
 <tr>
 <td><code>env</code></td>
@@ -747,17 +747,17 @@ file</strong>.</p>
 <tr>
 <td><code>user</code></td>
 <td><code>--user</code></td>
-<td>Image user <code>UID[:GID]</code>. Defaults to a non-root UID; <code>0</code>/root prints a warning.</td>
+<td>Image user <code>UID[:GID]</code>. Defaults to a non-root UID. <code>0</code>/root prints a warning.</td>
 </tr>
 <tr>
 <td><code>label</code></td>
 <td><code>--label</code></td>
-<td>OCI image label <code>KEY=VALUE</code> (list; <code>--label</code> is repeatable).</td>
+<td>OCI image label <code>KEY=VALUE</code> (list, and <code>--label</code> is repeatable).</td>
 </tr>
 <tr>
 <td><code>healthcheck</code></td>
 <td><code>--healthcheck</code></td>
-<td>Container <code>HEALTHCHECK</code> in exec form (list; repeatable). It runs inside the scratch image, so it must name an executable present there — typically the packed binary.</td>
+<td>Container <code>HEALTHCHECK</code> in exec form (list, and repeatable). It runs inside the scratch image, so it must name an executable present there, typically the packed binary.</td>
 </tr>
 <tr>
 <td><code>strip</code></td>
@@ -772,7 +772,7 @@ file</strong>.</p>
 <tr>
 <td><code>smoke</code></td>
 <td><code>--smoke</code></td>
-<td>Run the built image once and fail if the binary can't start.</td>
+<td>Run the built image once. If the binary cannot start, the pack fails.</td>
 </tr>
 <tr>
 <td><code>sbom</code></td>
@@ -792,12 +792,12 @@ file</strong>.</p>
 <tr>
 <td><code>scan</code></td>
 <td><code>--scan</code></td>
-<td>Vulnerability-scan the packed rootfs with grype (reuses the SBOM if <code>--sbom</code> is set, else scans the rootfs).</td>
+<td>Vulnerability-scan the packed rootfs with grype. When <code>--sbom</code> is set, it reuses that SBOM. Otherwise it scans the rootfs.</td>
 </tr>
 <tr>
 <td><code>scan-fail-on</code></td>
 <td><code>--scan-fail-on</code></td>
-<td>Fail the pack on a grype finding at or above this severity: <code>negligible</code>/<code>low</code>/<code>medium</code>/<code>high</code>/<code>critical</code> (implies <code>--scan</code>). <code>negligible</code> blocks everything, including findings grype couldn't rank; stricter levels ignore unrankable findings.</td>
+<td>Fail the pack on a grype finding at or above this severity: <code>negligible</code>/<code>low</code>/<code>medium</code>/<code>high</code>/<code>critical</code> (implies <code>--scan</code>). <code>negligible</code> blocks everything, including findings grype cannot rank. Stricter levels ignore unrankable findings.</td>
 </tr>
 <tr>
 <td><code>ca-certs</code></td>
@@ -817,12 +817,12 @@ file</strong>.</p>
 <tr>
 <td><code>add-file</code></td>
 <td><code>--add-file</code></td>
-<td>Copy a host file into the image (list). Each entry is <code>SRC:DST</code>, or a bare absolute <code>SRC</code> to keep the host path. Regular files only. A missing source, a directory, or a <code>DST</code> already in the image fails the pack. In an image the file lands owned by uid 0 at mode <code>0644</code> (<code>0755</code> if executable), because the layer writer canonicalizes modes, so do not add a secret this way.</td>
+<td>Copy a host file into the image (list). Each entry is <code>SRC:DST</code>, or a bare absolute <code>SRC</code> to keep the host path. Regular files only. A missing source, a directory, or a <code>DST</code> already in the image fails the pack. In an image the file lands owned by uid 0 at mode <code>0644</code>, or <code>0755</code> for an executable source. The layer writer canonicalizes modes, so do not add a secret this way.</td>
 </tr>
 <tr>
 <td><code>include</code></td>
 <td><code>--include</code></td>
-<td>Force-stage extra libraries by soname or path — e.g. <code>dlopen</code>'d plugins (list).</td>
+<td>Force-stage extra libraries by soname or path, for example <code>dlopen</code>'d plugins (list).</td>
 </tr>
 <tr>
 <td><code>nss</code></td>
@@ -832,12 +832,12 @@ file</strong>.</p>
 <tr>
 <td><code>deny</code></td>
 <td><code>--deny</code></td>
-<td>Fail the pack if this library ships (list). Resolved libraries, the loader, and NSS modules are all in scope, matched by soname or staged file name. A CI policy gate; read sonames from <code>scratchsmith graph</code>.</td>
+<td>If this library ships, the pack fails (list). Resolved libraries, the loader, and NSS modules are all in scope, matched by soname or staged file name. This is a CI policy gate. Read sonames from <code>scratchsmith graph</code>.</td>
 </tr>
 <tr>
 <td><code>require</code></td>
 <td><code>--require</code></td>
-<td>Fail the pack if this library does not ship (list). Same scope as <code>deny</code>.</td>
+<td>If this library does not ship, the pack fails (list). Same scope as <code>deny</code>.</td>
 </tr>
 <tr>
 <td><code>sign</code></td>
@@ -852,7 +852,7 @@ file</strong>.</p>
 <tr>
 <td><code>max-size</code></td>
 <td><code>--max-size</code></td>
-<td>Fail the pack if the packed image (the fully-staged rootfs — payload + NSS includes + runtime extras) exceeds this size — e.g. <code>12MB</code>, <code>512KiB</code>, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024).</td>
+<td>If the packed image exceeds this size, the pack fails. The packed image is the fully-staged rootfs: payload + NSS includes + runtime extras. Write the size as <code>12MB</code>, <code>512KiB</code>, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024).</td>
 </tr>
 <tr>
 <td><code>runtime</code></td>
@@ -896,9 +896,9 @@ file</strong>.</p>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:dev<span class="w"> </span>./other<span class="w">   </span><span class="c1"># CLI overrides binary + push</span>
 </code></pre></div>
 <p>The delivery sinks <code>--oci-archive &lt;file&gt;</code> and <code>--no-build</code> / <code>--output &lt;dir&gt;</code>, and the display-only
-<code>--format</code>, stay command-line-only — they are not config keys.</p>
+<code>--format</code>, stay command-line-only. They are not config keys.</p>
 <h2 id="profiles">Profiles<a class="headerlink" href="#profiles" title="Permanent link">&para;</a></h2>
-<p>Group settings under <code>[profile.&lt;name&gt;]</code> and pick one with <code>--profile &lt;name&gt;</code> (which requires
+<p>Group keys under <code>[profile.&lt;name&gt;]</code> and pick one with <code>--profile &lt;name&gt;</code> (which requires
 <code>--config</code>). A profile <strong>layers over the base config</strong>, so shared keys live at the top level and
 per-environment overrides go in the profile:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">binary</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"./dist/app"</span>
@@ -910,8 +910,8 @@ per-environment overrides go in the profile:</p>
 <a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
 </code></pre></div>
 <p>Values layer in this order, <strong>last wins</strong>: base config → the selected <code>[profile.&lt;name&gt;]</code> → any
-command-line flag. Booleans OR together (a profile can switch something <strong>on</strong> but not off), a
-scalar is replaced by the more specific layer, and a non-empty list replaces the one beneath it.</p>
+command-line flag. Booleans OR together, so a profile can switch something <strong>on</strong> but not off.
+A scalar is replaced by the more specific layer. A non-empty list replaces the one beneath it.</p>
 
 
 
