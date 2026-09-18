@@ -140,25 +140,6 @@ jobs:
           # an image check alone would not catch that regression.
           echo "$REPORT" | jq -e '.scan != null' >/dev/null || { echo "::error::report.scan is null — was --scan dropped from action.yml?"; exit 1; }
           echo "scan input wired (grype ran, pack succeeded)"
-      # The action packs with the latest RELEASED binary, so the nss/deny/require cases below can
-      # only run once a release carries those flags (they merged after v1.1.0). Detect support
-      # and skip until then: a pack that failed on "unexpected argument" would pass a naive
-      # outcome check even when action.yml names the flag wrong. The CLI is installed at a fixed
-      # path that outlives the step.
-      - name: Detect whether the released CLI knows the new inputs' flags
-        id: flags
-        env:
-          CLI: ${{ runner.temp }}/scratchsmith-bin/scratchsmith
-        run: |
-          set -euo pipefail
-          help="$("$CLI" pack --help)"
-          supported=true
-          for f in --nss --deny --require; do
-            echo "$help" | grep -q -- "$f" || supported=false
-          done
-          echo "supported=$supported" >> "$GITHUB_OUTPUT"
-          [ "$supported" = true ] \
-            || echo "::notice::released CLI predates --nss/--deny/--require; their selftest cases are skipped until the next release carries them"
       # deny/require each need TWO complementary cases. The positive one (an absent lib packs
       # cleanly) pins the flag NAME: a wrong name in action.yml fails on "unexpected argument".
       # The trip one (a shipping lib denied / an absent lib required) pins the WIRING:
@@ -166,14 +147,12 @@ jobs:
       # positive pass falsely, and only the trip catches it.
       - name: Pack denying an absent library (must succeed)
         id: deny
-        if: steps.flags.outputs.supported == 'true'
         uses: $/
         with:
           binary: /usr/bin/id
           deny: |
             libnot-a-real-lib.so.99
       - name: Assert the deny pack produced an image
-        if: steps.flags.outputs.supported == 'true'
         env:
           IMAGE: ${{ steps.deny.outputs.image }}
         run: |
@@ -185,7 +164,6 @@ jobs:
       # succeeds — caught here.
       - name: Pack denying a library that ships (must fail)
         id: deny-trip
-        if: steps.flags.outputs.supported == 'true'
         continue-on-error: true
         uses: $/
         with:
@@ -193,7 +171,6 @@ jobs:
           deny: |
             libc.so.6
       - name: Assert the deny gate tripped
-        if: steps.flags.outputs.supported == 'true'
         env:
           OUTCOME: ${{ steps.deny-trip.outcome }}
         run: |
@@ -204,14 +181,12 @@ jobs:
       # must pack cleanly; a wrong flag name would fail on "unexpected argument".
       - name: Pack requiring a library that ships (must succeed)
         id: require
-        if: steps.flags.outputs.supported == 'true'
         uses: $/
         with:
           binary: /usr/bin/id
           require: |
             libc.so.6
       - name: Assert the require pack produced an image
-        if: steps.flags.outputs.supported == 'true'
         env:
           IMAGE: ${{ steps.require.outputs.image }}
         run: |
@@ -222,7 +197,6 @@ jobs:
       # loop leaves the list empty, the policy is skipped, and the pack succeeds — caught here.
       - name: Pack requiring an absent library (must fail)
         id: require-trip
-        if: steps.flags.outputs.supported == 'true'
         continue-on-error: true
         uses: $/
         with:
@@ -230,7 +204,6 @@ jobs:
           require: |
             libnot-a-real-lib.so.99
       - name: Assert the require gate tripped
-        if: steps.flags.outputs.supported == 'true'
         env:
           OUTCOME: ${{ steps.require-trip.outcome }}
         run: |
@@ -242,14 +215,12 @@ jobs:
       # the value is mangled (the pack fails, so no rootfs).
       - name: Pack with nss=none → rootfs
         id: nss
-        if: steps.flags.outputs.supported == 'true'
         uses: $/
         with:
           binary: /usr/bin/id
           output: ./staged-nss
           nss: none
       - name: Assert nss=none staged no nsswitch.conf
-        if: steps.flags.outputs.supported == 'true'
         env:
           ROOTFS: ${{ steps.nss.outputs.rootfs }}
         run: |
