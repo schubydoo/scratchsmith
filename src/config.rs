@@ -67,6 +67,9 @@ pub struct Config {
     /// Add a minimal init (`tini`) as pid 1.
     #[serde(default)]
     pub init: bool,
+    /// Host files to copy into the image, each `SRC:DST` or bare `SRC` (`--add-file`).
+    #[serde(default, rename = "add-file")]
+    pub add_file: Vec<String>,
     /// Force-stage extra libraries (sonames or paths), e.g. dlopen'd plugins.
     #[serde(default)]
     pub include: Vec<String>,
@@ -152,6 +155,7 @@ impl Config {
             ca_certs: self.ca_certs || over.ca_certs,
             tz: self.tz || over.tz,
             init: self.init || over.init,
+            add_file: vec_or(self.add_file, over.add_file),
             include: vec_or(self.include, over.include),
             nss: if over.nss.is_empty() {
                 self.nss
@@ -196,6 +200,7 @@ mod tests {
             ca-certs = true
             tz = true
             init = true
+            add-file = ["./app.conf:/etc/app.conf", "/etc/motd"]
             include = ["libfoo.so"]
             nss = ["files", "dns"]
             deny = ["libssl.so.3"]
@@ -214,6 +219,13 @@ mod tests {
         assert_eq!(cfg.sbom_format, Some(SbomFormat::SpdxJson));
         assert_eq!(cfg.scan_fail_on, Some(Severity::High));
         assert!(cfg.ca_certs && cfg.tz && cfg.init);
+        assert_eq!(
+            cfg.add_file,
+            vec![
+                "./app.conf:/etc/app.conf".to_string(),
+                "/etc/motd".to_string()
+            ]
+        );
         assert_eq!(cfg.include, vec!["libfoo.so".to_string()]);
         assert_eq!(
             cfg.nss,

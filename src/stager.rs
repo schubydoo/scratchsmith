@@ -86,6 +86,69 @@ fn find_tini() -> Result<PathBuf> {
     bail!("no tini binary found")
 }
 
+/// A host file to copy into the image (`--add-file SRC[:DST]`). `--ca-certs` and `--tz`
+/// each stage one fixed path; this is the arbitrary-file escape hatch beside them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddFile {
+    /// The host file to copy.
+    pub src: PathBuf,
+    /// Where it lands inside the image (absolute).
+    pub dst: PathBuf,
+}
+
+impl AddFile {
+    /// Parse a `SRC[:DST]` spec. Without `:DST` the file lands at its own path, so
+    /// `--add-file /etc/motd` mirrors the host. The split is on the LAST colon, so a
+    /// source path containing one still parses as long as the destination does not.
+    pub fn parse(spec: &str) -> Result<AddFile> {
+        let (src, dst) = spec.rsplit_once(':').unwrap_or((spec, spec));
+        if src.is_empty() || dst.is_empty() {
+            bail!("--add-file '{spec}': expected SRC or SRC:DST, both non-empty");
+        }
+        let dst = Path::new(dst);
+        if !dst.is_absolute() {
+            bail!("--add-file '{spec}': the image path must be absolute, e.g. /etc/app.conf");
+        }
+        // The image path is joined under the staging root, so a `..` would write outside it.
+        if dst
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
+            bail!("--add-file '{spec}': the image path must not contain '..'");
+        }
+        Ok(AddFile {
+            src: PathBuf::from(src),
+            dst: dst.to_path_buf(),
+        })
+    }
+}
+
+/// Copy each `--add-file` source into the staged rootfs, returning the image paths added.
+/// A missing or non-regular source is an error, not a warning: the user named this file
+/// explicitly, so failing beats shipping an image that silently lacks it.
+pub fn stage_added_files(dest: &Path, files: &[AddFile]) -> Result<Vec<PathBuf>> {
+    let mut staged = Vec::with_capacity(files.len());
+    for file in files {
+        // metadata() follows symlinks, so a symlinked source stages the file it names.
+        let md = std::fs::metadata(&file.src)
+            .with_context(|| format!("--add-file: cannot read {}", file.src.display()))?;
+        if !md.is_file() {
+            let kind = if md.is_dir() {
+                "a directory"
+            } else {
+                "not a regular file"
+            };
+            bail!(
+                "--add-file: {} is {kind}; --add-file takes regular files",
+                file.src.display()
+            );
+        }
+        copy_into(&file.src, dest, &file.dst)?;
+        staged.push(file.dst.clone());
+    }
+    Ok(staged)
+}
+
 /// What the default-include step added, and what it could not find.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct IncludeReport {
@@ -848,5 +911,92 @@ mod tests {
             text.contains("saved"),
             "upx savings summary missing: {text}"
         );
+    }
+
+    #[test]
+    fn add_file_spec_parses_both_forms() {
+        let relocated = AddFile::parse("./app.conf:/etc/app.conf").unwrap();
+        assert_eq!(relocated.src, PathBuf::from("./app.conf"));
+        assert_eq!(relocated.dst, PathBuf::from("/etc/app.conf"));
+
+        // Bare SRC mirrors the host path, so /etc/motd lands at /etc/motd.
+        let mirrored = AddFile::parse("/etc/motd").unwrap();
+        assert_eq!(mirrored.src, PathBuf::from("/etc/motd"));
+        assert_eq!(mirrored.dst, PathBuf::from("/etc/motd"));
+
+        // The split is on the LAST colon, so a colon in the source survives.
+        let odd = AddFile::parse("./od:d.conf:/etc/app.conf").unwrap();
+        assert_eq!(odd.src, PathBuf::from("./od:d.conf"));
+        assert_eq!(odd.dst, PathBuf::from("/etc/app.conf"));
+    }
+
+    #[test]
+    fn add_file_spec_rejects_bad_destinations() {
+        // A relative image path would land somewhere the caller never named.
+        let err = AddFile::parse("./app.conf:etc/app.conf")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must be absolute"), "{err}");
+
+        // A bare relative SRC is the same mistake: it is its own destination.
+        assert!(AddFile::parse("./app.conf").is_err());
+
+        // `..` would escape the staging root once joined under it.
+        let err = AddFile::parse("./app.conf:/etc/../../outside")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(".."), "{err}");
+
+        assert!(AddFile::parse(":/etc/app.conf").is_err());
+        assert!(AddFile::parse("./app.conf:").is_err());
+    }
+
+    #[test]
+    fn add_file_copies_sources_and_creates_parents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let src = make_file(&tmp.path().join("src/app.conf"), b"tuning");
+
+        let files = vec![AddFile {
+            src: src.clone(),
+            dst: PathBuf::from("/etc/app/deep/app.conf"),
+        }];
+        let staged = stage_added_files(&dest, &files).unwrap();
+
+        assert_eq!(staged, vec![PathBuf::from("/etc/app/deep/app.conf")]);
+        let landed = dest.join("etc/app/deep/app.conf");
+        assert_eq!(fs::read(&landed).unwrap(), b"tuning");
+    }
+
+    #[test]
+    fn add_file_fails_loud_on_a_directory_or_a_missing_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+
+        let dir = tmp.path().join("src/etc");
+        fs::create_dir_all(&dir).unwrap();
+        let err = stage_added_files(
+            &dest,
+            &[AddFile {
+                src: dir,
+                dst: PathBuf::from("/etc"),
+            }],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("is a directory"), "{err}");
+
+        // An explicitly named file that is not there is an error, never a warning: the
+        // image would otherwise ship silently without it.
+        let err = stage_added_files(
+            &dest,
+            &[AddFile {
+                src: tmp.path().join("nope.conf"),
+                dst: PathBuf::from("/etc/nope.conf"),
+            }],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("cannot read"), "{err}");
     }
 }

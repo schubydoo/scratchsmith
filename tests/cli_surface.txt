@@ -25,6 +25,7 @@
   --fail-on  value=true  multiple=true  required=false  values=[no-pie,no-relro,partial-relro,no-nx,no-canary,no-fortify]
 
 [pack]
+  --add-file  value=true  multiple=true  required=false
   <binary>  value=true  multiple=false  required=false
   --ca-certs  value=false  multiple=false  required=false
   --cmd  value=true  multiple=true  required=false

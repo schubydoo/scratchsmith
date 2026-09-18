@@ -74,6 +74,26 @@ certificates, which you add separately with `--ca-certs`. `--nss none` also skip
 `files` also drops `/etc/passwd` and `/etc/group`, because glibc reads them through the `files`
 module, so user and group lookups do not work there.
 
+## Add a host file
+
+`--ca-certs` and `--tz` each add one fixed file. To add any other host file, use `--add-file`.
+A scratch image starts empty, so a program that reads a configuration file, a template, or a
+data file at runtime needs that file copied in.
+
+```sh
+scratchsmith pack --add-file ./app.conf:/etc/app/app.conf ./app   # copy to a chosen path
+scratchsmith pack --add-file /etc/motd ./app                      # keep the host path
+```
+
+Write each entry as `SRC:DST`, where `SRC` is the host file and `DST` is the absolute path
+inside the image. Scratchsmith creates the parent directories of `DST` and keeps the source
+file's permission bits. A bare `SRC` is its own destination, so it must be an absolute path.
+The flag repeats, and the `add-file` key in `scratchsmith.toml` takes the same list.
+
+The flag takes regular files only. If the source is missing or is a directory, the pack fails
+and names the path. Scratchsmith never skips a file you asked for, because the image would
+otherwise ship without it. The added files count toward `--max-size`.
+
 ## Inspect the dependency graph
 
 To see what `pack` would stage without building an image, run `graph`:

@@ -200,6 +200,75 @@ fn runtime_extras_stage_ca_and_tz_without_docker() {
 }
 
 #[test]
+fn add_file_copies_host_files_into_the_rootfs() {
+    // The -n -o path needs no Docker: --add-file copies land beside the staged libs.
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let Some(fixture) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let packed = fixture.to_str().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("app.conf");
+    std::fs::write(&src, b"threads = 4").unwrap();
+    let out = tmp.path().join("rootfs");
+
+    let relocated = format!("{}:/etc/app/app.conf", src.display());
+    // A bare SRC is its own destination, so this one mirrors its host path.
+    let mirrored = src.display().to_string();
+    let staged = Command::new(bin)
+        .args([
+            "pack",
+            "-n",
+            "-o",
+            out.to_str().unwrap(),
+            "--add-file",
+            relocated.as_str(),
+            "--add-file",
+            mirrored.as_str(),
+            packed,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        staged.status.success(),
+        "--add-file pack failed: {}",
+        String::from_utf8_lossy(&staged.stderr)
+    );
+    assert_eq!(
+        std::fs::read(out.join("etc/app/app.conf")).unwrap(),
+        b"threads = 4",
+        "SRC:DST did not land at DST"
+    );
+    assert!(
+        out.join(src.strip_prefix("/").unwrap()).exists(),
+        "a bare SRC did not mirror its host path"
+    );
+
+    // A directory is refused by name rather than silently skipped — the image would
+    // otherwise ship without what the user asked for.
+    let dir_spec = format!("{}:/etc", tmp.path().display());
+    let refused = Command::new(bin)
+        .args([
+            "pack",
+            "-n",
+            "-o",
+            tmp.path().join("rootfs-dir").to_str().unwrap(),
+            "--add-file",
+            dir_spec.as_str(),
+            packed,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !refused.status.success(),
+        "--add-file of a directory must fail"
+    );
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("is a directory"), "{stderr}");
+}
+
+#[test]
 fn init_wraps_the_entrypoint_with_tini_and_still_runs() {
     if !docker_available() {
         eprintln!("skipping: no Docker daemon");

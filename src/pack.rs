@@ -4,7 +4,7 @@
 use crate::image::{self, ImageConfig};
 use crate::report::PackReport;
 use crate::resolver::{self, Sysroot};
-use crate::stager::{self, NssSelection, RuntimeExtras, SizeReport, StagedTree};
+use crate::stager::{self, AddFile, NssSelection, RuntimeExtras, SizeReport, StagedTree};
 use crate::supplychain::{self, SbomRequest, ScanRequest, ScanSource, ScanSummary};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
@@ -171,8 +171,9 @@ fn build_rootfs(
 }
 
 // Sum the sizes of the staged rootfs's regular files — the uncompressed image content,
-// including the NSS default-includes, the regenerated ld.so.cache, and runtime extras
-// (`--ca-certs`/`--tz`/`--init`) that land after `build_rootfs`. Symlinks add ~0.
+// including the NSS default-includes, the regenerated ld.so.cache, and the runtime extras
+// (`--ca-certs`/`--tz`/`--init`) and `--add-file` copies that land after `build_rootfs`.
+// Symlinks add ~0.
 fn staged_size(dir: &Path) -> Result<u64> {
     let mut total = 0u64;
     for entry in walkdir::WalkDir::new(dir).follow_links(false) {
@@ -212,6 +213,9 @@ pub struct PackOptions {
     /// Vulnerability-scan the packed rootfs with grype; a `fail_on` gate aborts the pack.
     pub scan: Option<ScanRequest>,
     pub extras: RuntimeExtras,
+    /// Host files to copy into the image (`--add-file SRC[:DST]`), beyond the fixed paths
+    /// `--ca-certs` / `--tz` stage.
+    pub add_files: Vec<AddFile>,
     /// Extra libraries (sonames or paths) to force-stage, e.g. dlopen'd plugins.
     pub includes: Vec<String>,
     /// Which name-service (NSS) modules to stage (`--nss`); default stages files + dns.
@@ -265,6 +269,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
     }
     let (tree, size, warnings) = build_rootfs(binary, out_dir, opts)?;
     stager::stage_runtime_extras(out_dir, &opts.extras)?;
+    stager::stage_added_files(out_dir, &opts.add_files)?;
     enforce_max_size(out_dir, opts.max_size)?;
     let sbom = maybe_sbom(out_dir, opts.sbom.as_ref())?;
     let scan = maybe_scan(out_dir, sbom.as_deref(), opts.scan.as_ref())?;
@@ -302,6 +307,7 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
     let dest = work.path().join("rootfs");
     let (tree, size, warnings) = build_rootfs(binary, &dest, opts)?;
     let extras = stager::stage_runtime_extras(&dest, &opts.extras)?;
+    stager::stage_added_files(&dest, &opts.add_files)?;
     enforce_max_size(&dest, opts.max_size)?;
     // Generate the SBOM and scan while the staged rootfs still exists (dest is temporary).
     let sbom = maybe_sbom(&dest, opts.sbom.as_ref())?;

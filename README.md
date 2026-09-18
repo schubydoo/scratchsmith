@@ -59,6 +59,7 @@ multi-stage build. Purpose-built for the hard case; useful for the easy one.
 | Symbol strip (`--strip`), UPX compression (`--upx`), size report, smoke-run (`--smoke`) | ✅ |
 | Image **size budget** — `--max-size <SIZE>` (fail the build when the staged image exceeds it) | ✅ |
 | Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`) | ✅ |
+| **Add host files** — `--add-file SRC[:DST]` (copy any host file into the image) | ✅ |
 | Image metadata — labels (`--label`), `HEALTHCHECK` (`--healthcheck`) | ✅ |
 | Config file (`scratchsmith.toml`) + named profiles (`--profile`), JSON output (`--format json`) | ✅ |
 | **Pluggable runtime** — `--runtime` (docker / podman / nerdctl) for the default load sink | ✅ |

@@ -25,6 +25,7 @@ file**.
 | `ca-certs` | `--ca-certs` | Add the TLS CA bundle (`/etc/ssl/certs/ca-certificates.crt`). |
 | `tz` | `--tz` | Add the resolved local timezone (`/etc/localtime`). |
 | `init` | `--init` | Add a minimal init (`tini`) as pid 1 wrapping the entrypoint. |
+| `add-file` | `--add-file` | Copy a host file into the image (list). Each entry is `SRC:DST`, or a bare absolute `SRC` to keep the host path. Regular files only. A missing source or a directory fails the pack. |
 | `include` | `--include` | Force-stage extra libraries by soname or path — e.g. `dlopen`'d plugins (list). |
 | `nss` | `--nss` | Name-service (NSS) modules to stage for glibc name lookups: `files`, `dns`, or `none` (list). Fewer modules trim CVE surface. A mode without `files` also drops `/etc/passwd` and `/etc/group`, which glibc reads through the `files` module. Default: `files` and `dns`. |
 | `deny` | `--deny` | Fail the pack if this library ships (list). Resolved libraries, the loader, and NSS modules are all in scope, matched by soname or staged file name. A CI policy gate; read sonames from `scratchsmith graph`. |
@@ -57,6 +58,7 @@ scan-fail-on = "high"
 ca-certs = true
 tz = true
 init = true
+add-file = ["./app.conf:/etc/app/app.conf", "/etc/motd"]
 include = ["libnss_myhostname.so.2"]
 nss = ["files", "dns"]
 deny = ["libssl.so.3"]

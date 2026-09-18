@@ -144,6 +144,10 @@ pub enum Command {
         /// Add a minimal init (tini) as pid 1 wrapping the entrypoint.
         #[arg(long)]
         init: bool,
+        /// Copy a host file into the image: `SRC:DST`, or `SRC` to keep its own absolute
+        /// path. Regular files only; repeatable.
+        #[arg(long = "add-file", value_name = "SRC[:DST]")]
+        add_file: Vec<String>,
         /// Force-stage an extra library (soname or path), e.g. a dlopen'd plugin;
         /// repeatable.
         #[arg(long = "include", value_name = "LIB")]
@@ -292,6 +296,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             ca_certs,
             tz,
             init,
+            add_file,
             include,
             nss,
             deny,
@@ -335,6 +340,14 @@ fn dispatch(cli: Cli) -> Result<()> {
                     tz: tz || file.tz,
                     init: init || file.init,
                 },
+                add_files: if add_file.is_empty() {
+                    file.add_file
+                } else {
+                    add_file
+                }
+                .iter()
+                .map(|spec| crate::stager::AddFile::parse(spec))
+                .collect::<Result<Vec<_>>>()?,
                 includes: if include.is_empty() {
                     file.include
                 } else {
