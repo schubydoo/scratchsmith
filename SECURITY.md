@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Only the **latest** release receives security fixes; there are no backports to earlier
+Only the **latest** release receives security fixes. There are no backports to earlier
 releases.
 
 | Version  | Supported          |
@@ -16,27 +16,27 @@ releases.
 
 Report privately, either:
 
-- **Preferred** — GitHub's private vulnerability reporting: the **Security** tab →
+- **Preferred:** GitHub's private vulnerability reporting through the **Security** tab →
   *Report a vulnerability* (if enabled on the repo), or
-- **Email** — [schuuby@proton.me](mailto:schuuby@proton.me).
+- **Email:** [schuuby@proton.me](mailto:schuuby@proton.me).
 
 ### What to include
 
 - The type of vulnerability and its impact
 - Affected file paths and a commit/tag/branch reference
-- Step-by-step reproduction, and a proof-of-concept if you have one
+- Step-by-step reproduction, and any proof-of-concept you have
 
 ### What to expect
 
-- An acknowledgement within a few days (best-effort; this is a solo, side-project OSS tool)
-- Updates as the fix progresses, and notification when it ships
-- Credit in the advisory if you'd like it
+- An acknowledgement within a few days (best-effort, because this is a solo, side-project OSS tool)
+- Updates as the fix progresses, and a notification once it ships
+- Credit in the advisory, on request
 
 ## Scope notes
 
 Scratchsmith packs **third-party binaries you provide** into container images. It does
-not sandbox or vet those binaries — a malicious input binary produces a malicious image.
-Relevant security-relevant behaviour to report includes: the resolver staging files
-outside the intended set, path-traversal in staging, the smoke-run or hardening lint
-giving a false "safe" signal, or the release pipeline producing unsigned/mis-attested
+not sandbox or vet those binaries. A malicious input binary produces a malicious image.
+Report security-relevant behavior such as these: the resolver stages files outside the
+intended set, or staging does a path traversal. Also report a false "safe" signal from the
+smoke-run or the hardening lint, or a release pipeline that produces unsigned/mis-attested
 artifacts.

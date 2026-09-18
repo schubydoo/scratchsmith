@@ -1,13 +1,13 @@
 # Verifying releases
 
 Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
-Each release also ships a CycloneDX SBOM of Scratchsmith's own dependency graph
-(`scratchsmith-v<ver>.cdx.json`), listed in `checksums.txt` so the signature and provenance
-cover it too. It reflects the full `Cargo.lock` graph, so it includes build- and
+Each release also ships a CycloneDX SBOM of Scratchsmith's own dependency graph. That file is
+`scratchsmith-v<ver>.cdx.json`, and it is listed in `checksums.txt`, so the signature and
+provenance cover it too. It reflects the full `Cargo.lock` graph, so it includes build- and
 dev-dependencies, not only the crates that link into the shipped binary.
 
 Replace `<ver>` with the bare version you downloaded, no leading `v` (the tarball adds the
-`v` prefix; the image tag doesn't).
+`v` prefix, but the image tag does not).
 
 ```sh
 # SLSA provenance — the simplest, ref-agnostic check
@@ -31,4 +31,4 @@ cosign verify ghcr.io/schubydoo/scratchsmith:<ver> \
 The commands above verify Scratchsmith's own **release artifacts**. To sign an image Scratchsmith
 *builds* for you, `pack --push --sign` cosign-signs the pushed image by digest (keyless), and
 `--sbom --sign` attaches the SBOM as a signed attestation. Both only apply to the registry-push
-sink, since cosign signs a registry image — see [Usage](usage.md).
+sink, since cosign signs a registry image. See [Usage](usage.md).

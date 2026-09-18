@@ -45,53 +45,54 @@ Set image metadata, gate on vulnerabilities, or cap the size. The list-valued in
     max-size: 25MB
 ```
 
-Pin `@v<ver>` to a specific release tag (or a commit SHA) — the same supply-chain hygiene the tool
-itself practices. `version:` overrides which scratchsmith release the action runs (defaults to the
-pinned tag, else `latest`).
+Pin `@v<ver>` to a specific release tag (or a commit SHA). That is the same supply-chain hygiene the
+tool itself practices. `version:` overrides which scratchsmith release the action runs (defaults to
+the pinned tag, else `latest`).
 
 ## Inputs
 
-Most inputs map to the `pack` flag of the same name — see [Configuration](configuration.md) for what
-each does and [Usage](usage.md) for the equivalent command-line recipes. A few are action-specific:
-`version` picks which release to download, `output` maps to `--no-build --output`, and `args` is a
-verbatim escape hatch for any flag without a dedicated input (e.g. `--sign`, `--oci-archive`). Note
-`push` publishes with `docker tag`/`docker push`, **not** pack's daemonless, cosign-signable `--push`.
+Most inputs map to the `pack` flag of the same name. See [Configuration](configuration.md) for what
+each does, and [Usage](usage.md) for the equivalent command-line recipes. A few inputs are
+action-specific. `version` picks which release to download. `output` maps to `--no-build --output`.
+`args` is a verbatim escape hatch for any flag without a dedicated input, for example `--sign` or
+`--oci-archive`. Note that `push` publishes with `docker tag`/`docker push`, **not** pack's
+daemonless, cosign-signable `--push`.
 
 | Input | Default | Description |
 |---|---|---|
 | `binary` | *(required)* | Path to the dynamically linked glibc ELF binary to pack. |
-| `version` | *(the pinned tag, else `latest`)* | Which scratchsmith release to download — a tag like `v1.0.0`, or `latest`. |
+| `version` | *(the pinned tag, else `latest`)* | Which scratchsmith release to download: a tag like `v1.0.0`, or `latest`. |
 | `output` | | Stage the rootfs into this directory instead of building an image (`--no-build`). |
 | `entrypoint` | *(the binary's path)* | Image `ENTRYPOINT`. |
 | `cmd` | | Default arguments appended to the entrypoint, one per line. |
 | `env` | | Image environment entries, one `KEY=VALUE` per line. |
 | `workdir` | | Image `WORKDIR`. |
-| `user` | `65532` | Image user `UID[:GID]`; `0` warns. |
+| `user` | `65532` | Image user `UID[:GID]`. `0` warns. |
 | `label` | | OCI image labels, one `KEY=VALUE` per line. |
-| `healthcheck` | | `HEALTHCHECK` in exec form, one token per line; must name an executable in the image. |
+| `healthcheck` | | `HEALTHCHECK` in exec form, one token per line. It must name an executable in the image. |
 | `strip` | `false` | Strip symbols from the binary and libraries. |
 | `upx` | `false` | Compress the binary with UPX (needs `upx` on the runner). |
-| `smoke` | `false` | After building, run the image once and fail if the binary can't start. |
+| `smoke` | `false` | After the build, run the image once. If the binary cannot start, the job fails. |
 | `sbom` | `false` | Generate an SBOM of the packed rootfs (needs `syft` on the runner). |
-| `sbom-file` | `sbom.json` | SBOM output path. Requires `sbom` — ignored on its own. |
+| `sbom-file` | `sbom.json` | SBOM output path. Requires `sbom`, and is ignored on its own. |
 | `sbom-format` | `cyclonedx-json` | SBOM format: `cyclonedx-json` or `spdx-json`. |
-| `scan` | `false` | Vulnerability-scan the rootfs with grype (needs `grype`; reuses the SBOM if `sbom` is set). |
+| `scan` | `false` | Vulnerability-scan the rootfs with grype (needs `grype` on the runner). When `sbom` is set, it reuses that SBOM. |
 | `scan-fail-on` | | Fail on a grype finding at or above this severity (`negligible`…`critical`). Implies `scan`. |
 | `ca-certs` | `false` | Add the TLS CA bundle to the image. |
 | `tz` | `false` | Add the resolved local timezone to the image. |
 | `init` | `false` | Add a minimal init (tini) as pid 1 wrapping the entrypoint. |
-| `include` | | Extra libraries to force-stage (e.g. `dlopen`'d plugins), one soname/path per line. |
+| `include` | | Extra libraries to force-stage, for example `dlopen`'d plugins, one soname/path per line. |
 | `nss` | `files,dns` | NSS modules to stage for glibc lookups, comma-separated (`files,dns`, or `none`). Fewer modules trim CVE surface. |
-| `max-size` | | Fail if the fully-staged image exceeds this size — e.g. `25MB`, `512KiB`, or a byte count. |
+| `max-size` | | If the fully-staged image exceeds this size, the job fails. Write the size as `25MB`, `512KiB`, or a byte count. |
 | `deny` | | If a listed library ships, fail the pack (soname or staged file name), one per line. |
 | `require` | | If a listed library does not ship, fail the pack (same scope as `deny`), one per line. |
-| `push` | | Tag the built image as this registry ref and `docker push` it (needs a prior registry login; not compatible with `output`). |
-| `args` | | Extra raw `pack` flags appended verbatim — the escape hatch for anything above. |
+| `push` | | Tag the built image as this registry ref and `docker push` it. Needs a prior registry login. Not compatible with `output`. |
+| `args` | | Extra raw `pack` flags appended verbatim: the escape hatch for anything above. |
 
 ## Outputs
 
 | Output | Description |
 |---|---|
-| `image` | The loaded image tag (empty when `output` staged a rootfs instead). |
-| `rootfs` | The staged rootfs directory (empty when an image was built). |
+| `image` | The loaded image tag. When `output` staged a rootfs instead, this is empty. |
+| `rootfs` | The staged rootfs directory. When an image was built instead, this is empty. |
 | `report` | The full pack report as JSON. |

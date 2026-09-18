@@ -9,6 +9,6 @@ default: minor
 file, and there was no way to add another. A program that reads a configuration file or a data
 file at runtime now packs without a wrapper step. The flag repeats and takes regular files
 only. The `add-file` key in `scratchsmith.toml` takes the same list. A missing source, a
-directory, or a `DST` that is already in the image fails the pack and names the path. In an
-image the file lands owned by uid 0 at mode `0644`, or `0755` when the source is executable,
-because the layer writer canonicalizes modes.
+directory, or a `DST` that is already in the image fails the pack and names the path. The
+layer writer canonicalizes modes, so in an image the file lands owned by uid 0. Its mode is
+`0644`. When the source is executable, the mode is `0755`.

@@ -4,8 +4,8 @@ Thanks for your interest! Scratchsmith is a Rust CLI that packs a prebuilt **dyn
 glibc Linux** ELF binary (plus its resolved shared libraries) into a minimal
 `FROM scratch` OCI image. This guide covers how to propose changes.
 
-Report bugs and request features through the [issue tracker][issues] first — for a bug,
-use the Bug Report template; for an idea, the Feature Request template.
+Report bugs and request features through the [issue tracker][issues] first. For a bug,
+use the Bug Report template. For an idea, use the Feature Request template.
 
 [issues]: https://github.com/schubydoo/scratchsmith/issues
 
@@ -18,24 +18,24 @@ binaries you can rebuild static. Please check a proposal against that scope.
 ## Development setup
 
 You need a stable Rust toolchain (the crate builds on MSRV **1.96**). **One** external tool is
-required for `cargo test` to pass — the suite *fails* (not skips) without it:
+required for `cargo test` to pass. The suite *fails* (not skips) without it:
 
-- **`ldconfig`** (glibc `libc-bin`) — the stager/pack tests regenerate the loader cache and
-  bail without it. It's normally already present on any glibc system, so this rarely bites —
-  but a stripped container image is one place it can be missing.
+- **`ldconfig`** (glibc `libc-bin`): the stager/pack tests regenerate the loader cache and
+  bail without it. It is normally already present on any glibc system, so this rarely bites.
+  A stripped container image is one place it can be missing.
 
-Everything else is optional — these tests **skip** when the tool is absent, so `cargo test`
+Everything else is optional. If the tool is absent, these tests **skip** and `cargo test`
 still passes:
 
-- a C compiler (`cc`) and `musl-gcc` — build the resolver / lint / musl fixtures
-- Docker — the end-to-end pack/run tests
-- `strip` (binutils) — the `--strip` test
-- `tini` — the `--init` test (a companion test instead checks that `--init` *fails loudly*
-  when `tini` is absent)
+- a C compiler (`cc`) and `musl-gcc`: build the resolver / lint / musl fixtures
+- Docker: the end-to-end pack/run tests
+- `strip` (binutils): the `--strip` test
+- `tini`: the `--init` test. With `tini` absent, a companion test instead checks that
+  `--init` *fails loudly*.
 
-One tool is neither required nor skipped: **`syft`**. Its `--sbom` test runs in both cases —
-asserting success when `syft` is present and a clean "missing syft must fail" error when it
-isn't — so the suite is green either way.
+One tool is neither required nor skipped: **`syft`**. Its `--sbom` test runs in both cases.
+With `syft` present, the test asserts success. With `syft` absent, it asserts a clean
+"missing syft must fail" error. The suite is green either way.
 
 ```sh
 git clone https://github.com/schubydoo/scratchsmith
@@ -47,26 +47,27 @@ cargo run -- doctor   # shows which external tools are present
 
 ## The invariants
 
-A change that breaks one of these is wrong even if tests pass:
+A change that breaks one of these is wrong, even with every test green:
 
 - **Fail loud, never silently.** A missing library/loader, a musl binary, or a missing
-  external tool exits non-zero with a fix hint — never a silent skip that ships a broken
-  image.
-- **Determinism over host-trust.** Resolution emulates `ld.so`; it never scrapes host
+  external tool exits non-zero with a fix hint. It is never a silent skip that ships a
+  broken image.
+- **Determinism over host-trust.** Resolution emulates `ld.so`. It never scrapes host
   `ldd` / `ld.so.cache` / `LD_LIBRARY_PATH`.
-- **Non-root + reproducible by default.** Images default to a non-root user; layers are
+- **Non-root + reproducible by default.** Images default to a non-root user, and layers are
   built deterministically.
-- **Don't overstate.** Docs must not claim a capability the code doesn't have.
-- **Don't break the contract silently.** The CLI flags, `scratchsmith.toml` keys, `--format
-  json` fields, and exit codes are SemVer-stable within a major version. Change them additively
-  in a minor; a removal, rename, or default change is a **major** change that first goes through
-  the deprecation cycle (keep it working, warn on stderr). See **[COMPATIBILITY.md](COMPATIBILITY.md)**.
+- **Do not overstate.** Docs must not claim a capability the code does not have.
+- **Do not break the contract silently.** The CLI flags, `scratchsmith.toml` keys, `--format
+  json` fields, and exit codes are SemVer-stable within a major version. Change them
+  additively in a minor. A removal, rename, or default change is a **major** change, and it
+  first goes through the deprecation cycle (keep it working, warn on stderr). See
+  **[COMPATIBILITY.md](COMPATIBILITY.md)**.
 
 ## Making a change
 
-1. **Branch from `main`** — all PRs target `main`. Use a short prefixed name
+1. **Branch from `main`.** All PRs target `main`. Use a short prefixed name
    (`feat/…`, `fix/…`, `docs/…`, `ci/…`). External contributors: **fork** the repo and
-   branch there — you won't have push access here, and the `no-changelog` label needs
+   branch there. You do not have push access here. The `no-changelog` label needs
    triage rights, so a maintainer applies it for you.
 2. **Keep it green** before pushing:
    ```sh
@@ -84,8 +85,8 @@ A change that breaks one of these is wrong even if tests pass:
 
 ## Conventional PR titles
 
-The repo **squash-merges**, so the PR **title** becomes the commit subject and must
-follow [Conventional Commits][cc] — CI enforces it. Allowed types: `feat`, `fix`,
+The repo **squash-merges**, so the PR **title** becomes the commit subject. It must
+follow [Conventional Commits][cc], and CI enforces that. Allowed types: `feat`, `fix`,
 `perf`, `security`, `revert`, `docs`, `chore`, `ci`, `build`, `test`, `refactor`,
 `style`. Example: `feat: add --sbom-format spdx-json`.
 
@@ -105,22 +106,22 @@ knope document-change    # scaffolds .changeset/<slug>.md
 and a one-line summary. A `major` fragment bumps the major version, so read
 [COMPATIBILITY.md](COMPATIBILITY.md) before you write one.
 
-Internal-only PRs (CI, refactor, tests, non-user-facing docs) need no fragment — apply
-the **`no-changelog`** label instead. Never hand-edit `CHANGELOG.md`; it is generated.
+Internal-only PRs (CI, refactor, tests, non-user-facing docs) need no fragment. Apply
+the **`no-changelog`** label instead. Never hand-edit `CHANGELOG.md`. It is generated.
 
-> Releases are **live** (the `KNOPE_ENABLED` flow is on): a merged fragment is picked up by
-> the `chore: prepare release …` PR and ships when that PR merges. The changeset check itself
-> is **advisory** (a non-blocking sticky-comment nudge), but add a fragment anyway — fragments
-> are the source of truth for the version bump and `CHANGELOG.md`.
+> Releases are **live** (the `KNOPE_ENABLED` flow is on). The `chore: prepare release …` PR
+> picks up a merged fragment, and that fragment ships once the PR merges. The changeset
+> check itself is **advisory**: a non-blocking sticky-comment nudge. Add a fragment anyway,
+> because fragments are the source of truth for the version bump and `CHANGELOG.md`.
 
 [knope]: https://knope.tech
 
 ## Review
 
-Every PR runs CI, and you can request a second-opinion pass by commenting `@claude review`
+Every PR runs CI. To request a second-opinion pass, comment `@claude review`
 (maintainer-only). Merge does **not** require an approving review
-(`required_approving_review_count: 0` — this is a solo project), but it **does** require
-all review threads resolved and the required checks green. Be kind; see the
+(`required_approving_review_count: 0`, because this is a solo project). Merge **does**
+require all review threads resolved and the required checks green. Be kind, and see the
 [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License

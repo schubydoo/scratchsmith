@@ -9,28 +9,28 @@ scratchsmith pack ./app
 docker run --rm scratchsmith/app:packed --version   # image is named scratchsmith/<name>:packed
 ```
 
-The default sink loads into Docker. To load with **podman** or **nerdctl** instead (and run the
-`--smoke` check with it), pass `--runtime`:
+The default sink loads into Docker. To load with **podman** or **nerdctl** instead (and run
+`--smoke` with it), pass `--runtime`:
 
 ```sh
 scratchsmith pack --runtime podman ./app
 ```
 
-Inspect the rootfs without building an image — **no Docker daemon needed**:
+Inspect the rootfs without building an image (**no Docker daemon needed**):
 
 ```sh
 scratchsmith pack --no-build --output ./rootfs ./app
 ```
 
-Or write a **daemonless OCI archive** (loadable by skopeo/buildah, pushable to a registry — no
-Docker daemon):
+Or write a **daemonless OCI archive** (loadable by skopeo/buildah, and pushable to a registry with
+no Docker daemon):
 
 ```sh
 scratchsmith pack --oci-archive ./app.oci.tar ./app
 ```
 
-Or **push straight to a registry** — no Docker daemon. Credentials come from your docker config,
-so `docker login` once (for GitHub's `ghcr.io`, a token with `write:packages`):
+Or **push straight to a registry**, with no Docker daemon. Credentials come from your Docker
+configuration, so `docker login` once (for GitHub's `ghcr.io`, a token with `write:packages`):
 
 ```sh
 echo "$GHCR_TOKEN" | docker login ghcr.io -u YOUR_GH_USERNAME --password-stdin
@@ -59,7 +59,7 @@ scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate f
 glibc loads name-service (NSS) modules at runtime to resolve names: hostnames to IP addresses,
 and user or group IDs to names. Scratchsmith stages a default set (local files plus DNS). If your
 program does fewer lookups, drop the modules it does not need with `--nss`. Fewer modules mean a
-smaller image and less code that could carry a CVE.
+smaller image and less code that can carry a CVE.
 
 ```sh
 scratchsmith pack ./app                 # default: local files + DNS
@@ -71,13 +71,13 @@ scratchsmith pack --nss none ./app      # no NSS modules, for a program that res
 address needs no NSS module. A program that reaches a host by name over TLS also needs CA
 certificates, which you add separately with `--ca-certs`. `--nss none` also skips the generated
 `/etc/nsswitch.conf`, and `--nss files` writes one that lists local files alone. A mode without
-`files` also drops `/etc/passwd` and `/etc/group`, because glibc reads them through the `files`
-module, so user and group lookups do not work there.
+`files` also drops `/etc/passwd` and `/etc/group`. Because glibc reads them through the `files`
+module, user and group lookups do not work there.
 
 ## Add a host file
 
 `--ca-certs` and `--tz` each add one fixed file. To add any other host file, use `--add-file`.
-A scratch image starts empty, so a program that reads a configuration file, a template, or a
+A scratch image starts empty. A program that reads a configuration file, a template, or a
 data file at runtime needs that file copied in.
 
 ```sh
@@ -91,19 +91,19 @@ destination, so it must be an absolute path. The flag repeats, and the `add-file
 `scratchsmith.toml` takes the same list.
 
 An added file does not keep its host permission bits. In an image it lands owned by uid 0, with
-mode `0644`, or `0755` when the source is executable. The layer writer canonicalizes modes so
+mode `0644`. The mode is `0755` for an executable source. The layer writer canonicalizes modes so
 that the layer stays reproducible. A source at mode `0600` is therefore world-readable inside
 the image. Do not add a secret this way. Only a `--no-build --output` rootfs keeps the source
 bits.
 
 The flag takes regular files only. If the source is missing or is a directory, the pack fails
 and names the path. If `DST` is already in the image, the pack fails as well, so a second entry
-for one path cannot quietly replace the first. Scratchsmith never skips a file you asked for,
-because the image would otherwise ship without it. The added files count toward `--max-size`.
+for one path cannot quietly replace the first. Scratchsmith never skips a file you asked for.
+A skipped file means an image that ships without it. The added files count toward `--max-size`.
 
 ## Inspect the dependency graph
 
-To see what `pack` would stage without building an image, run `graph`:
+To see what `pack` stages without building an image, run `graph`:
 
 ```sh
 scratchsmith graph ./app                            # ASCII tree of the resolved deps
@@ -111,14 +111,14 @@ scratchsmith graph --format json ./app              # machine-readable adjacency
 scratchsmith graph --include libplugin.so.1 ./app   # add a dlopen'd library, like pack
 ```
 
-The tree shows each library in full the first time and marks a later repeat with `(*)`, so
+The tree shows each library in full the first time. A later repeat is marked `(*)`, so
 a shared dependency or a cycle does not print twice. A dependency that does not resolve is
 shown as `(missing)`. The last line names the loader (`PT_INTERP`).
 
 ## Gate on libraries
 
-To enforce a library policy in CI, fail the pack when a forbidden library is present or a
-required one is absent:
+To enforce a library policy in CI, fail the pack on a forbidden library or a missing required
+one:
 
 ```sh
 scratchsmith pack --deny libssl.so.3 ./app        # fail if OpenSSL is staged
@@ -140,8 +140,8 @@ scratchsmith diff old new              # files added, removed, changed, and the 
 scratchsmith diff --exit-code old new  # exit non-zero on any difference (a CI gate)
 ```
 
-`diff` marks an added file with `+`, a removed file with `-`, and a changed file with `~`,
-then prints the total size delta. `--format json` emits the same data for a machine.
+`diff` marks an added file with `+`, a removed file with `-`, and a changed file with `~`.
+It then prints the total size delta. `--format json` emits the same data for a machine.
 
 ## Unpack an image
 
@@ -158,8 +158,8 @@ compare two images: unpack both, then run `scratchsmith diff old new`.
 ## Multi-arch images
 
 Scratchsmith resolves against the host's libraries, so it packs for the architecture it runs on.
-To publish a multi-arch image, run `pack --push` on each architecture (a CI matrix), then combine
-the per-arch images into one **multi-arch OCI image index** with `index` — the daemonless
+To publish a multi-arch image, run `pack --push` on each architecture (a CI matrix). Then combine
+the per-arch images into one **multi-arch OCI image index** with `index`. That is the daemonless
 equivalent of `docker manifest create`, with no Docker or buildx:
 
 ```sh
@@ -174,14 +174,15 @@ scratchsmith index ghcr.io/you/app:1.0 \
   ghcr.io/you/app:1.0-arm64
 ```
 
-Each source's platform is read from its own image config — nothing is rebuilt and no cross-arch
-resolution happens. The sources must already be pushed and must live in the **target's repository**
-(an index references its children by digest within one repository) — typically the same repo with a
-different tag, as above. Add `--sign` to cosign-sign the index by digest.
+Each source's platform is read from its own image configuration. Nothing is rebuilt, and no
+cross-arch resolution happens. The sources must already be pushed, and must live in the
+**target's repository**. An index references its children by digest within one repository, so
+this is typically the same repo with a different tag, as above. Add `--sign` to cosign-sign the
+index by digest.
 
 ## Image metadata and entrypoint
 
-Set what the image runs — entrypoint, arguments, environment, working directory, and user:
+Set what the image runs: entrypoint, arguments, environment, working directory, and user:
 
 ```sh
 scratchsmith pack ./app \
@@ -190,9 +191,9 @@ scratchsmith pack ./app \
 ```
 
 `--healthcheck` (like `--cmd`) is repeatable, and each token is one argument of a single exec
-command — so `--healthcheck /app --healthcheck --health` is the one command `["/app", "--health"]`
-(the same as `healthcheck = ["/app", "--health"]` in the [config](configuration.md)), not two
-healthchecks.
+command. So `--healthcheck /app --healthcheck --health` is the one command `["/app", "--health"]`,
+not two healthchecks. It is the same as `healthcheck = ["/app", "--health"]` in the
+[configuration file](configuration.md).
 
 ## In CI
 
@@ -203,7 +204,7 @@ see **[GitHub Action](github-action.md)**.
 
 The `FROM scratch` release image can only run `--version` / `lint` / `doctor` / `--completions`. The **`:toolbox`**
 image bundles the full `pack` toolchain (ldconfig, strip, syft, grype, cosign, upx, tini, the
-docker CLI) on a Wolfi base, so `pack` itself runs inside a container:
+docker CLI) on a Wolfi base. With it, `pack` itself runs inside a container:
 
 ```sh
 # Daemonless — no socket needed; write an OCI archive or push straight to a registry.
@@ -214,8 +215,8 @@ docker run --rm -v "$PWD:/w" -w /w ghcr.io/schubydoo/scratchsmith:toolbox \
 ```
 
 Prefer the daemonless sinks (`--push` / `--oci-archive`) in CI. The **default `docker load` sink**
-needs a host engine, so mount its socket — **which is root-equivalent on the host**, so use it only
-where you trust the workflow:
+needs a host engine, so mount its socket. That socket is **root-equivalent on the host**, so use
+it only where you trust the workflow:
 
 ```sh
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/schubydoo/scratchsmith:toolbox \
@@ -223,4 +224,4 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/schubydoo/s
 ```
 
 Tags: `:toolbox` (latest), `:X.Y.Z-toolbox`, `:X.Y-toolbox`. Verify its signature exactly like the
-scratch image — see [Verifying releases](verifying.md).
+scratch image. See [Verifying releases](verifying.md).
