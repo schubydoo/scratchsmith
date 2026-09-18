@@ -20,8 +20,8 @@ inputs:
     required: true
   version:
     description: >-
-      scratchsmith release to use — a tag like `v1.2.1`, or `latest`. Defaults to the ref this
-      action was called with when that is a version tag (so `@v1.2.1` uses the v1.2.1 CLI), else
+      scratchsmith release to use — a tag like `v1.0.0`, or `latest`. Defaults to the ref this
+      action was called with when that is a version tag (so `@v1.0.0` uses the v1.0.0 CLI), else
       `latest`.
     required: false
     default: ""

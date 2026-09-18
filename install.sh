@@ -5,7 +5,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install.sh | bash
 #
 # Env overrides:
-#   VERSION   release tag to install (default: latest), e.g. VERSION=v1.2.1
+#   VERSION   release tag to install (default: latest), e.g. VERSION=v1.0.0
 #   BIN_DIR   install directory (default: /usr/local/bin as root, else ~/.local/bin)
 #
 # Scratchsmith is LINUX-ONLY: it stages a Linux glibc rootfs (Unix symlinks + mode bits,
