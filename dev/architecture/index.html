@@ -743,8 +743,8 @@
 stable contract — a breaking change to any of them requires a new major version:</p>
 <ul>
 <li><strong>CLI flags</strong> — the names and meaning of <code>pack</code> / <code>lint</code> / <code>doctor</code> / <code>index</code> / <code>graph</code> / <code>diff</code> /
-  <code>unpack</code> flags. New flags arrive in minor releases; a removed or renamed flag, or a changed default,
-  is a major change.</li>
+  <code>unpack</code> flags, and the top-level <code>--completions</code>. New flags arrive in minor releases; a removed
+  or renamed flag, or a changed default, is a major change.</li>
 <li><strong><code>scratchsmith.toml</code></strong> — the config keys and their types (the <a href="../configuration/">Configuration</a> reference).</li>
 <li><strong><code>--format json</code></strong> — the field names and types of the <code>pack</code>, <code>index</code>, <code>graph</code>, <code>diff</code>, and <code>unpack</code>
   reports (the schema CI gates consume). Each is pinned by a golden test, so a change is always deliberate.</li>
