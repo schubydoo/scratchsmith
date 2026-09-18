@@ -9,12 +9,12 @@ stays stable across a minor/patch upgrade, and how we change it when we must.**
 A breaking change to any of these requires a new **major** version. See the
 [Architecture → Stability](docs/architecture.md) reference for the authoritative list.
 
-- **CLI surface** — the names and meaning of `pack` / `lint` / `doctor` / `index` flags and
-  positionals, their short aliases, their defaults, whether they take a value or are repeatable,
-  and the accepted **enum values** (e.g. `--sbom-format cyclonedx-json`, `--scan-fail-on high`).
+- **CLI surface** — the names and meaning of `pack` / `lint` / `doctor` / `index` / `graph` /
+  `diff` / `unpack` flags and positionals, their short aliases, their defaults, whether they take a
+  value or are repeatable, and the accepted **enum values** (e.g. `--sbom-format cyclonedx-json`, `--scan-fail-on high`).
 - **`scratchsmith.toml`** — the config keys and their types.
-- **`--format json`** — the field names and types of the `pack` and `index` reports (the schema
-  CI gates consume).
+- **`--format json`** — the field names and types of the `pack`, `index`, `graph`, `diff`, and
+  `unpack` reports (the schema CI gates consume).
 - **Exit codes** — `0` on success, `2` on an argument/usage error, non-zero on any other failure.
 
 ## What is *not* a contract (may change in any release)
@@ -69,8 +69,9 @@ either fix the regression or make it a deliberate, reviewed major change:
   (`BLESS=1 cargo test --test cli_surface`).
 - **Config keys** — `parses_a_full_config` exercises every key, and `#[serde(deny_unknown_fields)]`
   rejects a renamed/removed key.
-- **`--format json`** — `json_report_schema_is_stable` / `index_report_schema_is_stable` pin the
-  exact key sets.
+- **`--format json`** — `json_report_schema_is_stable`, `index_report_schema_is_stable`,
+  `diff_report_schema_is_stable`, and `unpack_report_schema_is_stable` pin the exact key sets;
+  `dep_graph_json_schema_is_stable` pins the `graph` report's fields.
 - **Exit codes** — the exit-code tests in `tests/cli.rs` pin `0` / `2` / non-zero.
 - **Library API** — a non-blocking `cargo-semver-checks` CI job surfaces `pub`-API changes as a
   heads-up (not a gate; the library is out of contract).

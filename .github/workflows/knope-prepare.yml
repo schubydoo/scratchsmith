@@ -5,9 +5,8 @@ name: Prepare Release
 # force-pushes the `release` branch, and opens/refreshes a
 # `chore: prepare release X.Y.Z` PR. Merging that PR triggers knope-release.yml.
 #
-# workflow_dispatch with `override_version` forces a specific version — the
-# pre-1.0 escape hatch to cut 0.x → 1.0.0 (knope otherwise only ever bumps the
-# minor on a 0.x line). Blank input = normal changeset-computed bump.
+# workflow_dispatch with `override_version` forces a specific version instead of the
+# changeset-computed one — how a pinned release is cut. Blank input = normal bump.
 #
 # Override guard: a dispatch with `override_version` labels its release PR `release-pinned`;
 # a later plain push to main then skips refreshing that PR, so a stray merge can't silently

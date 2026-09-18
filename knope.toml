@@ -15,8 +15,8 @@
 # only at publish, so the release locks IMMUTABLE with its assets already attached.
 # The pushed tag then triggers release.yml (the signed multi-arch GHCR image).
 #
-# Pre-1.0: knope maps a breaking change on a 0.x line to a MINOR bump, never to 1.0.
-# To cut 0.x → 1.0.0 deliberately, dispatch prepare-release with override_version.
+# To pin a release to an exact version instead of the changeset-computed bump, dispatch
+# prepare-release with override_version; see the override guard in knope-prepare.yml.
 
 [package]
 # Single crate. Anchored to line-start so it targets the [package] `version = "X.Y.Z"`

@@ -60,7 +60,7 @@ verbatim escape hatch for any flag without a dedicated input (e.g. `--sign`, `--
 | Input | Default | Description |
 |---|---|---|
 | `binary` | *(required)* | Path to the dynamically linked glibc ELF binary to pack. |
-| `version` | *(the pinned tag, else `latest`)* | Which scratchsmith release to download — a tag like `v1.0.0`, or `latest`. |
+| `version` | *(the pinned tag, else `latest`)* | Which scratchsmith release to download — a tag like `v1.2.1`, or `latest`. |
 | `output` | | Stage the rootfs into this directory instead of building an image (`--no-build`). |
 | `entrypoint` | *(the binary's path)* | Image `ENTRYPOINT`. |
 | `cmd` | | Default arguments appended to the entrypoint, one per line. |

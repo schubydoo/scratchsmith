@@ -102,8 +102,8 @@ knope document-change    # scaffolds .changeset/<slug>.md
 ```
 
 …or hand-write a fragment with front-matter `default: patch|minor|major|perf|security`
-and a one-line summary. **Pre-1.0**, a `major` (breaking) change maps to a *minor* bump —
-0.x never auto-bumps to 1.0.
+and a one-line summary. A `major` fragment bumps the major version, so read
+[COMPATIBILITY.md](COMPATIBILITY.md) before you write one.
 
 Internal-only PRs (CI, refactor, tests, non-user-facing docs) need no fragment — apply
 the **`no-changelog`** label instead. Never hand-edit `CHANGELOG.md`; it is generated.

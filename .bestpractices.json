@@ -39,7 +39,7 @@
   "version_unique_status": "Met",
   "version_unique_justification": "Each release has a unique version identifier, set in Cargo.toml and the git tag (e.g. v0.2.0).",
   "version_semver_status": "Met",
-  "version_semver_justification": "Releases follow Semantic Versioning 2.0.0 (pre-1.0: breaking changes bump the minor).",
+  "version_semver_justification": "Releases follow Semantic Versioning 2.0.0. The surfaces frozen within a major version (CLI flags, scratchsmith.toml keys, --format json fields, exit codes) and the deprecation policy are documented in COMPATIBILITY.md. https://github.com/schubydoo/scratchsmith/blob/main/COMPATIBILITY.md",
   "version_tags_status": "Met",
   "version_tags_justification": "Every release is a git tag of the form vX.Y.Z, and release tags are protected against deletion/force-push by a repository ruleset.",
   "release_notes_status": "Met",

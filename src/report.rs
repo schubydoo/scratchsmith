@@ -711,4 +711,53 @@ mod tests {
             ["digest", "platform", "source"]
         );
     }
+
+    #[test]
+    fn diff_report_schema_is_stable() {
+        // The `diff --format json` output is a SemVer-covered contract (v1.2): CI gates on it
+        // alongside `--exit-code`. Pin the top-level key set and the `added[]`/`removed[]`
+        // sub-schema, so an added, removed, or renamed field is caught here, never silent drift.
+        let report = DiffReport {
+            added: vec![DiffFile {
+                path: "lib/libnew.so.1".into(),
+                size: 10,
+            }],
+            removed: vec![DiffFile {
+                path: "lib/libgone.so.1".into(),
+                size: 4,
+            }],
+            changed: vec!["bin/app".into()],
+            size_before: 100,
+            size_after: 200,
+        };
+        let json = serde_json::to_value(&report).unwrap();
+        let sorted_keys = |v: &serde_json::Value| {
+            let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            k.sort();
+            k
+        };
+        assert_eq!(
+            sorted_keys(&json),
+            ["added", "changed", "removed", "size_after", "size_before"]
+        );
+        assert_eq!(sorted_keys(&json["added"][0]), ["path", "size"]);
+        assert_eq!(sorted_keys(&json["removed"][0]), ["path", "size"]);
+    }
+
+    #[test]
+    fn unpack_report_schema_is_stable() {
+        // The `unpack --format json` output is a SemVer-covered contract (v1.2). Pin the exact
+        // key set so an auditor scripting against an image it did not build cannot break on a
+        // silent rename.
+        let report = UnpackReport {
+            source: "app.tar".into(),
+            dir: "/tmp/rootfs".into(),
+            layers: 2,
+            files: 17,
+        };
+        let json = serde_json::to_value(&report).unwrap();
+        let mut keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["dir", "files", "layers", "source"]);
+    }
 }

@@ -2,8 +2,8 @@
 
 ## Supported Versions
 
-Scratchsmith is pre-1.0. Only the **latest** release receives security fixes; there are
-no backports to older 0.x versions.
+Only the **latest** release receives security fixes; there are no backports to earlier
+releases.
 
 | Version  | Supported          |
 | -------- | ------------------ |
