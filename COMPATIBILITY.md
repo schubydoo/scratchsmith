@@ -3,7 +3,7 @@
 Scratchsmith follows [Semantic Versioning](https://semver.org/) for every release. You can
 drive it from a script, a GitHub Action, or an on-prem CI pipeline. This document is the
 promise you rely on there. It states two things: **what stays stable across a minor/patch
-upgrade, and how we change it where we must**.
+upgrade, and how we change it**.
 
 ## What is a stable contract (frozen within a major version)
 

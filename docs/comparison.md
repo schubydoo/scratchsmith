@@ -41,9 +41,9 @@ Scratchsmith owns the one input the others do not serve: **an arbitrary prebuilt
   future addition). (A *static* musl binary is a single self-contained file and packs fine
   today.) No cross-arch resolution yet.
 - **`dlopen` is best-effort.** Libraries loaded at runtime via `dlopen` are invisible to
-  static analysis. Scratchsmith *warns* about a `dlopen` call it sees, and it lets you
-  force-stage those libraries with `--include <lib>`. It is not a blanket "any binary just
-  works" guarantee.
+  static analysis. Scratchsmith *warns* about a `dlopen` reference in the binary's dynamic
+  symbol table, and it lets you force-stage those libraries with `--include <lib>`. It is not
+  a blanket "any binary just works" guarantee.
 - **Loading into a container engine is the *default* sink.** The default hands the image to a
   local engine for convenience: `docker` by default, or `--runtime podman|nerdctl` for those.
   You can also go daemon-free entirely with `--push <ref>` (straight to a registry),
