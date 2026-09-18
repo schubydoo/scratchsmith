@@ -399,6 +399,20 @@ mod tests {
         assert_eq!(v["nodes"][0]["name"], "app");
         assert_eq!(v["nodes"][0]["needs"][0], "/lib/libc.so.6");
         assert!(v["nodes"][0]["missing"].as_array().unwrap().is_empty());
+
+        // Pin the key sets too, not just the values: the value assertions above catch a
+        // rename or a removal, but an ADDED field would pass them silently. `interpreter`
+        // carries no skip_serializing_if, so the key is present even when it is null.
+        let sorted_keys = |v: &serde_json::Value| {
+            let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            k.sort();
+            k
+        };
+        assert_eq!(sorted_keys(&v), ["interpreter", "missing", "nodes", "root"]);
+        assert_eq!(
+            sorted_keys(&v["nodes"][0]),
+            ["id", "missing", "name", "needs"]
+        );
     }
 
     #[test]

@@ -17,8 +17,8 @@ Scratchsmith follows [Semantic Versioning](https://semver.org/). As of **1.0**, 
 stable contract — a breaking change to any of them requires a new major version:
 
 - **CLI flags** — the names and meaning of `pack` / `lint` / `doctor` / `index` / `graph` / `diff` /
-  `unpack` flags. New flags arrive in minor releases; a removed or renamed flag, or a changed default,
-  is a major change.
+  `unpack` flags, and the top-level `--completions`. New flags arrive in minor releases; a removed
+  or renamed flag, or a changed default, is a major change.
 - **`scratchsmith.toml`** — the config keys and their types (the [Configuration](configuration.md) reference).
 - **`--format json`** — the field names and types of the `pack`, `index`, `graph`, `diff`, and `unpack`
   reports (the schema CI gates consume). Each is pinned by a golden test, so a change is always deliberate.

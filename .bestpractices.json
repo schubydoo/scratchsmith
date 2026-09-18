@@ -26,7 +26,7 @@
   "english_status": "Met",
   "english_justification": "All documentation and project communication are in English.",
   "maintained_status": "Met",
-  "maintained_justification": "The project is actively maintained; changes ship regularly through reviewed pull requests (latest release v0.2.0).",
+  "maintained_justification": "The project is actively maintained; changes ship regularly through reviewed pull requests, and every release is published on the GitHub Releases page. https://github.com/schubydoo/scratchsmith/releases",
 
   "repo_public_status": "Met",
   "repo_public_justification": "The source is in a public git repository: https://github.com/schubydoo/scratchsmith",
@@ -37,7 +37,7 @@
   "repo_distributed_status": "Met",
   "repo_distributed_justification": "The project uses git, a distributed version control system.",
   "version_unique_status": "Met",
-  "version_unique_justification": "Each release has a unique version identifier, set in Cargo.toml and the git tag (e.g. v0.2.0).",
+  "version_unique_justification": "Each release has a unique version identifier, set in Cargo.toml and the git tag (e.g. v1.0.0).",
   "version_semver_status": "Met",
   "version_semver_justification": "Releases follow Semantic Versioning 2.0.0. The surfaces frozen within a major version (CLI flags, scratchsmith.toml keys, --format json fields, exit codes) and the deprecation policy are documented in COMPATIBILITY.md. https://github.com/schubydoo/scratchsmith/blob/main/COMPATIBILITY.md",
   "version_tags_status": "Met",
