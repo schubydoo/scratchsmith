@@ -790,7 +790,7 @@ a hardening report, a non-root image, and no Dockerfile. More: <a href="comparis
 <td>✅</td>
 </tr>
 <tr>
-<td>glibc <strong>NSS</strong> support staged — name-service lookups like <code>getent hosts</code> work</td>
+<td>glibc <strong>NSS</strong> support staged — name-service lookups like <code>getent hosts</code> work; trim the modules with <code>--nss</code></td>
 <td>✅</td>
 </tr>
 <tr>
@@ -810,7 +810,15 @@ a hardening report, a non-root image, and no Dockerfile. More: <a href="comparis
 <td>✅</td>
 </tr>
 <tr>
+<td><strong>Library policy gate</strong> — <code>pack --deny</code>/<code>--require &lt;soname&gt;</code> (fail on a forbidden or missing library)</td>
+<td>✅</td>
+</tr>
+<tr>
 <td><code>dlopen</code> gap <strong>detection</strong> + <code>--include</code> escape hatch</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><strong>Dependency graph</strong> — <code>graph</code> (the resolved dependency tree, ASCII or <code>--format json</code>)</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -867,6 +875,14 @@ a hardening report, a non-root image, and no Dockerfile. More: <a href="comparis
 </tr>
 <tr>
 <td><strong>Multi-arch image index</strong> — <code>index</code> (combine per-arch pushes into one tag, daemonless)</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><strong>Image diff</strong> — <code>diff &lt;a&gt; &lt;b&gt;</code> (files added/removed/changed + size delta; <code>--exit-code</code> gates CI)</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><strong>Unpack an OCI image</strong> — <code>unpack &lt;archive&gt; &lt;dir&gt;</code> (extract the layers to audit an image you didn't build)</td>
 <td>✅</td>
 </tr>
 </tbody>
