@@ -105,12 +105,17 @@ impl AddFile {
         if src.is_empty() || dst.is_empty() {
             bail!("--add-file '{spec}': expected SRC or SRC:DST, both non-empty");
         }
-        let dst = Path::new(dst);
-        if !dst.is_absolute() {
-            bail!("--add-file '{spec}': the image path must be absolute, e.g. /etc/app.conf");
+        let dst_path = Path::new(dst);
+        if !dst_path.is_absolute() {
+            // Name both halves: a colon inside a bare SRC splits the spec in a way the user
+            // never intended, and "the image path must be absolute" alone would not show it.
+            bail!(
+                "--add-file '{spec}': read '{src}' as the source and '{dst}' as the image path, \
+                 but the image path must be absolute, e.g. ./app.conf:/etc/app.conf"
+            );
         }
         // The image path is joined under the staging root, so a `..` would write outside it.
-        if dst
+        if dst_path
             .components()
             .any(|c| c == std::path::Component::ParentDir)
         {
@@ -118,16 +123,16 @@ impl AddFile {
         }
         Ok(AddFile {
             src: PathBuf::from(src),
-            dst: dst.to_path_buf(),
+            dst: dst_path.to_path_buf(),
         })
     }
 }
 
-/// Copy each `--add-file` source into the staged rootfs, returning the image paths added.
-/// A missing or non-regular source is an error, not a warning: the user named this file
-/// explicitly, so failing beats shipping an image that silently lacks it.
-pub fn stage_added_files(dest: &Path, files: &[AddFile]) -> Result<Vec<PathBuf>> {
-    let mut staged = Vec::with_capacity(files.len());
+/// Copy each `--add-file` source into the staged rootfs. A missing source, a non-regular
+/// source, or an image path already staged is an error, not a warning: the user named this
+/// file explicitly, so failing beats shipping an image that silently lacks it or silently
+/// lost something else.
+pub fn stage_added_files(dest: &Path, files: &[AddFile]) -> Result<()> {
     for file in files {
         // metadata() follows symlinks, so a symlinked source stages the file it names.
         let md = std::fs::metadata(&file.src)
@@ -143,10 +148,25 @@ pub fn stage_added_files(dest: &Path, files: &[AddFile]) -> Result<Vec<PathBuf>>
                 file.src.display()
             );
         }
-        copy_into(&file.src, dest, &file.dst)?;
-        staged.push(file.dst.clone());
+        // Refuse to land on anything already there. `std::fs::copy` would truncate it without
+        // a word, and on a soname symlink it writes THROUGH the link and corrupts the real
+        // library. symlink_metadata sees the link itself, so both cases are caught here.
+        if under(dest, &file.dst).symlink_metadata().is_ok() {
+            bail!(
+                "--add-file: {} is already in the image; --add-file will not replace a staged \
+                 file, and each image path can be given only once",
+                file.dst.display()
+            );
+        }
+        copy_into(&file.src, dest, &file.dst).with_context(|| {
+            format!(
+                "--add-file: staging {} at {}",
+                file.src.display(),
+                file.dst.display()
+            )
+        })?;
     }
-    Ok(staged)
+    Ok(())
 }
 
 /// What the default-include step added, and what it could not find.
@@ -941,6 +961,12 @@ mod tests {
         // A bare relative SRC is the same mistake: it is its own destination.
         assert!(AddFile::parse("./app.conf").is_err());
 
+        // A colon inside a BARE src splits the spec in a way the user never meant, so the
+        // error names both halves rather than only complaining about the image path.
+        let err = AddFile::parse("/etc/my:file").unwrap_err().to_string();
+        assert!(err.contains("read '/etc/my' as the source"), "{err}");
+        assert!(err.contains("'file' as the image path"), "{err}");
+
         // `..` would escape the staging root once joined under it.
         let err = AddFile::parse("./app.conf:/etc/../../outside")
             .unwrap_err()
@@ -961,11 +987,56 @@ mod tests {
             src: src.clone(),
             dst: PathBuf::from("/etc/app/deep/app.conf"),
         }];
-        let staged = stage_added_files(&dest, &files).unwrap();
+        stage_added_files(&dest, &files).unwrap();
 
-        assert_eq!(staged, vec![PathBuf::from("/etc/app/deep/app.conf")]);
         let landed = dest.join("etc/app/deep/app.conf");
         assert_eq!(fs::read(&landed).unwrap(), b"tuning");
+    }
+
+    #[test]
+    fn add_file_refuses_to_replace_something_already_staged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let a = make_file(&tmp.path().join("src/a.conf"), b"first");
+        let b = make_file(&tmp.path().join("src/b.conf"), b"second");
+
+        // Two entries for one image path: without the check the first would vanish silently.
+        let err = stage_added_files(
+            &dest,
+            &[
+                AddFile {
+                    src: a,
+                    dst: PathBuf::from("/etc/app.conf"),
+                },
+                AddFile {
+                    src: b.clone(),
+                    dst: PathBuf::from("/etc/app.conf"),
+                },
+            ],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("already in the image"), "{err}");
+        // The first write stands; the pack aborts rather than truncating it.
+        assert_eq!(fs::read(dest.join("etc/app.conf")).unwrap(), b"first");
+
+        // A soname symlink is the dangerous case: fs::copy follows it and overwrites the real
+        // library. symlink_metadata sees the link, so this is refused too.
+        let libdir = dest.join("lib");
+        fs::create_dir_all(&libdir).unwrap();
+        fs::write(libdir.join("libc.so.6.real"), b"REAL").unwrap();
+        std::os::unix::fs::symlink("libc.so.6.real", libdir.join("libc.so.6")).unwrap();
+        let err = stage_added_files(
+            &dest,
+            &[AddFile {
+                src: b,
+                dst: PathBuf::from("/lib/libc.so.6"),
+            }],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("already in the image"), "{err}");
+        assert_eq!(fs::read(libdir.join("libc.so.6.real")).unwrap(), b"REAL");
     }
 
     #[test]
