@@ -65,7 +65,8 @@ inputs:
     description: >-
       Host files to copy into the image, one `SRC:DST` per line. A bare absolute `SRC` keeps its
       own path. Regular files only. A missing source, a directory, or a `DST` already in the
-      image fails the pack.
+      image fails the pack. The file lands owned by uid 0 at mode `0644`, or `0755` for an
+      executable source, so do not add a secret this way.
     required: false
     default: ""
   include:

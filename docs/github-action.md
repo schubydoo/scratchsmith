@@ -81,7 +81,7 @@ daemonless, cosign-signable `--push`.
 | `ca-certs` | `false` | Add the TLS CA bundle to the image. |
 | `tz` | `false` | Add the resolved local timezone to the image. |
 | `init` | `false` | Add a minimal init (tini) as pid 1 wrapping the entrypoint. |
-| `add-file` | | Copy host files into the image, one `SRC:DST` per line. A bare absolute `SRC` keeps its own path. Regular files only. |
+| `add-file` | | Copy host files into the image, one `SRC:DST` per line. A bare absolute `SRC` keeps its own path. Regular files only. The file lands owned by uid 0 at mode `0644`, or `0755` for an executable source, so do not add a secret this way. |
 | `include` | | Extra libraries to force-stage, for example `dlopen`'d plugins, one soname/path per line. |
 | `nss` | `files,dns` | NSS modules to stage for glibc lookups, comma-separated (`files,dns`, or `none`). Fewer modules trim CVE surface. |
 | `max-size` | | If the fully-staged image exceeds this size, the job fails. Write the size as `25MB`, `512KiB`, or a byte count. |
