@@ -228,3 +228,43 @@ jobs:
           [ -n "$ROOTFS" ] || { echo "::error::nss=none pack produced no rootfs — is --nss wired in action.yml?"; exit 1; }
           test ! -e "$ROOTFS/etc/nsswitch.conf" || { echo "::error::nss=none staged an nsswitch.conf — the --nss value did not reach the stager"; exit 1; }
           echo "nss input wired (none staged no nsswitch.conf)"
+      # add-file is the one input that puts a caller-chosen file in the image, so the positive
+      # case pins the wiring by itself: drop the input and the asserted paths are simply absent.
+      # Two lines exercise the per-line loop — one relocated (SRC:DST), one mirrored (bare SRC).
+      - name: Write a file for the add-file input to copy
+        run: echo "scratchsmith action selftest" > ./selftest-note.txt
+      - name: Pack with add-file → rootfs
+        id: addfile
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          output: ./staged-add-file
+          add-file: |
+            ./selftest-note.txt:/etc/selftest-note.txt
+            /etc/hostname
+      - name: Assert add-file staged both files
+        env:
+          ROOTFS: ${{ steps.addfile.outputs.rootfs }}
+        run: |
+          set -euo pipefail
+          [ -n "$ROOTFS" ] || { echo "::error::add-file pack produced no rootfs — is --add-file wired in action.yml?"; exit 1; }
+          grep -q "scratchsmith action selftest" "$ROOTFS/etc/selftest-note.txt" || { echo "::error::add-file did not copy ./selftest-note.txt to /etc/selftest-note.txt"; exit 1; }
+          test -e "$ROOTFS/etc/hostname" || { echo "::error::a bare absolute add-file did not mirror /etc/hostname into the image"; exit 1; }
+          echo "add-file input wired (relocated and mirrored)"
+      # Trip half: --add-file takes regular files only, so a directory source MUST fail the pack.
+      # This also pins the value reaching the CLI verbatim — a mangled spec fails differently but
+      # still fails, so the positive case above is what proves the happy path.
+      - name: Pack add-file with a directory source (must fail)
+        id: addfile-trip
+        continue-on-error: true
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          add-file: /etc:/etc-copy
+      - name: Assert the add-file directory guard tripped
+        env:
+          OUTCOME: ${{ steps.addfile-trip.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$OUTCOME" = "failure" ] || { echo "::error::add-file of a directory packed anyway — was the --add-file wiring dropped from action.yml?"; exit 1; }
+          echo "add-file directory guard verified"

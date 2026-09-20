@@ -24,7 +24,7 @@ To publish the built image, log in first and set `push`:
 ```
 
 Set image metadata, gate on vulnerabilities, or cap the size. The list-valued inputs (`cmd`, `env`,
-`label`, `healthcheck`, `include`, `deny`, `require`) take **one value per line**:
+`label`, `healthcheck`, `add-file`, `include`, `deny`, `require`) take **one value per line**:
 
 ```yaml
 - uses: schubydoo/scratchsmith@v<ver>
@@ -81,6 +81,7 @@ daemonless, cosign-signable `--push`.
 | `ca-certs` | `false` | Add the TLS CA bundle to the image. |
 | `tz` | `false` | Add the resolved local timezone to the image. |
 | `init` | `false` | Add a minimal init (tini) as pid 1 wrapping the entrypoint. |
+| `add-file` | | Copy host files into the image, one `SRC:DST` per line. A bare absolute `SRC` keeps its own path. Regular files only. |
 | `include` | | Extra libraries to force-stage, for example `dlopen`'d plugins, one soname/path per line. |
 | `nss` | `files,dns` | NSS modules to stage for glibc lookups, comma-separated (`files,dns`, or `none`). Fewer modules trim CVE surface. |
 | `max-size` | | If the fully-staged image exceeds this size, the job fails. Write the size as `25MB`, `512KiB`, or a byte count. |

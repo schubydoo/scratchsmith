@@ -61,6 +61,13 @@ inputs:
     description: Add a minimal init (tini) as pid 1 wrapping the entrypoint.
     required: false
     default: "false"
+  add-file:
+    description: >-
+      Host files to copy into the image, one `SRC:DST` per line. A bare absolute `SRC` keeps its
+      own path. Regular files only. A missing source, a directory, or a `DST` already in the
+      image fails the pack.
+    required: false
+    default: ""
   include:
     description: Extra libraries to force-stage (e.g. dlopen'd plugins), one soname/path per line.
     required: false
@@ -230,6 +237,7 @@ runs:
         IN_CA_CERTS: ${{ inputs.ca-certs }}
         IN_TZ: ${{ inputs.tz }}
         IN_INIT: ${{ inputs.init }}
+        IN_ADD_FILE: ${{ inputs.add-file }}
         IN_INCLUDE: ${{ inputs.include }}
         IN_ARGS: ${{ inputs.args }}
         IN_ENTRYPOINT: ${{ inputs.entrypoint }}
@@ -286,6 +294,10 @@ runs:
         while IFS= read -r lib; do
           [ -n "$lib" ] && args+=("--include" "$lib")
         done <<< "$IN_INCLUDE"
+        # A spec is SRC:DST (split on the last colon) or a bare absolute SRC: one token either way.
+        while IFS= read -r f; do
+          [ -n "$f" ] && args+=("--add-file" "$f")
+        done <<< "$IN_ADD_FILE"
         while IFS= read -r c; do
           [ -n "$c" ] && args+=("--cmd" "$c")
         done <<< "$IN_CMD"
