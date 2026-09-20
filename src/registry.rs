@@ -32,7 +32,10 @@ pub fn push_to_registry(
     // `registry()` is the Docker-config key (e.g. `docker.io`); `resolve_registry()` is the
     // real endpoint we talk HTTP to (e.g. `registry-1.docker.io`). Look creds up by the
     // former, exchange/probe against the latter.
-    let plan = plan_credential(docker_credential::get_credential(reference.registry()).ok());
+    let plan = plan_credential(credential_or_anonymous(
+        docker_credential::get_credential(reference.registry()),
+        reference.registry(),
+    )?);
     let endpoint = reference.resolve_registry().to_string();
     let repository = reference.repository().to_string();
 
@@ -133,7 +136,10 @@ pub fn push_index(target: &str, sources: &[String]) -> Result<IndexOutcome> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let plan = plan_credential(docker_credential::get_credential(target_ref.registry()).ok());
+    let plan = plan_credential(credential_or_anonymous(
+        docker_credential::get_credential(target_ref.registry()),
+        target_ref.registry(),
+    )?);
     let endpoint = target_ref.resolve_registry().to_string();
     let repository = target_ref.repository().to_string();
     let client = Client::new(ClientConfig {
@@ -352,6 +358,48 @@ enum CredentialPlan {
     IdentityToken(String),
 }
 
+// Split "no credential is configured" from "the credential lookup FAILED".
+//
+// Both used to collapse to `None` via `.ok()` and push ANONYMOUSLY. Against a registry that
+// requires auth the user then got an opaque 401 instead of "your credential helper failed";
+// against one that accepts anonymous writes, the push SUCCEEDED under an identity they did not
+// choose. Only the two "there is nothing to find" variants are genuinely anonymous.
+//
+// Pure and takes the Result directly, so every variant is unit-testable without a Docker config
+// on the machine.
+fn credential_or_anonymous(
+    got: std::result::Result<
+        docker_credential::DockerCredential,
+        docker_credential::CredentialRetrievalError,
+    >,
+    registry: &str,
+) -> Result<Option<docker_credential::DockerCredential>> {
+    use docker_credential::CredentialRetrievalError as E;
+    match got {
+        Ok(cred) => Ok(Some(cred)),
+        // Nothing to find. `ConfigReadError` belongs here and it is NOT obvious: the crate
+        // returns it when `File::open` on the config fails, which is the ordinary "this
+        // machine has no Docker config" case, not a broken helper. Classifying it as a
+        // failure broke every anonymous push to a local registry, which is how this was
+        // caught. `ConfigNotFound` is narrower still: the config PATH could not be resolved.
+        Err(E::NoCredentialConfigured | E::ConfigNotFound | E::ConfigReadError) => Ok(None),
+        // A credential for this registry EXISTS and something about using it broke. This is
+        // the set the user must hear about: it used to become an anonymous push.
+        Err(
+            e @ (E::HelperCommunicationError
+            | E::MalformedHelperResponse
+            | E::HelperFailure { .. }
+            | E::CredentialDecodingError
+            | E::CredentialMismatchError),
+        ) => Err(anyhow::Error::new(e)).with_context(|| {
+            format!(
+                "looking up the credential for {registry}; fix the credential helper or the \
+                 stored login, or remove the entry to push anonymously"
+            )
+        }),
+    }
+}
+
 fn plan_credential(cred: Option<docker_credential::DockerCredential>) -> CredentialPlan {
     use docker_credential::DockerCredential::{IdentityToken, UsernamePassword};
     match cred {
@@ -433,7 +481,14 @@ async fn exchange_identity_token(
         .await
         .with_context(|| format!("exchanging the identity token at {realm}"))?;
     let status = res.status();
-    let body = res.text().await.unwrap_or_default();
+    // A body that cannot be READ is not an empty body. `unwrap_or_default()` turned a
+    // connection reset mid-response into "", which then surfaced as a token-decoding error
+    // that named the wrong cause. The status rides along in the context, so a non-success
+    // exchange still reports it even when the body is unreadable.
+    let body = res
+        .text()
+        .await
+        .with_context(|| format!("reading the identity-token response from {realm} ({status})"))?;
     if !status.is_success() {
         anyhow::bail!("identity-token exchange at {realm} failed ({status}): {body}");
     }
@@ -536,6 +591,57 @@ mod tests {
             registry_protocol("localhost:5000"),
             ClientProtocol::HttpsExcept(_)
         ));
+    }
+
+    #[test]
+    fn a_missing_credential_is_anonymous_but_a_broken_helper_is_an_error() {
+        use docker_credential::CredentialRetrievalError as E;
+        use docker_credential::DockerCredential::UsernamePassword;
+
+        // Found: passed through.
+        assert!(matches!(
+            credential_or_anonymous(Ok(UsernamePassword("u".into(), "p".into())), "ghcr.io"),
+            Ok(Some(UsernamePassword(_, _)))
+        ));
+
+        // Nothing to find: genuinely anonymous, which is a supported way to push to a public
+        // or local registry. ConfigReadError is in this set deliberately -- the crate returns
+        // it when the config file cannot be OPENED, i.e. the common "no Docker config here"
+        // case. Treating it as a failure broke `index_assembles_a_pushed_image_into_an_index`
+        // against a local registry, which is the regression this row now pins.
+        for nothing in [
+            E::NoCredentialConfigured,
+            E::ConfigNotFound,
+            E::ConfigReadError,
+        ] {
+            assert!(
+                matches!(credential_or_anonymous(Err(nothing), "ghcr.io"), Ok(None)),
+                "an absent credential must stay anonymous"
+            );
+        }
+
+        // Everything else is a FAILURE, and used to be swallowed into an anonymous push.
+        // Named individually rather than with a catch-all, so a new variant added upstream
+        // has to be classified here by hand instead of defaulting into silence.
+        for broken in [
+            E::HelperCommunicationError,
+            E::MalformedHelperResponse,
+            E::HelperFailure {
+                helper: "docker-credential-x".into(),
+                stdout: String::new(),
+                stderr: "boom".into(),
+            },
+            E::CredentialDecodingError,
+            E::CredentialMismatchError,
+        ] {
+            let err = credential_or_anonymous(Err(broken), "ghcr.io")
+                .expect_err("a failed credential lookup must not become an anonymous push");
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("ghcr.io"),
+                "the error must name the registry, got: {msg}"
+            );
+        }
     }
 
     #[test]
