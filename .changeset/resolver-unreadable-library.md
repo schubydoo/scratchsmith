@@ -16,11 +16,8 @@ the point where it knew the real problem.
 
 When the resolver cannot read a library, it now stops there, and the error names that path.
 
-A file that reads correctly and does not claim to be an ELF file is unchanged. It has no
+A file that reads correctly and does not parse as an ELF file is unchanged. It has no
 dependencies of its own, so it stays a leaf, which is what the old code meant to do.
-
-A file that claims to be an ELF file and then fails to parse now stops the resolver as well. Its
-dependencies are unknown for the same reason.
 
 `COMPATIBILITY.md` promises a non-zero exit on any failure, so reporting these failures keeps
 that promise.

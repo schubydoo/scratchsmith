@@ -234,18 +234,17 @@ pub struct GoblinSource;
 
 impl LinkInfoSource for GoblinSource {
     fn read(&self, path: &Path) -> Result<Option<ElfInfo>> {
+        // The IO error propagates; a PARSE failure stays a leaf, exactly as before.
+        //
+        // Keying the leaf on the `\x7fELF` magic instead -- so a truncated or corrupt `.so`
+        // propagates -- is a real improvement and is NOT done here. It would refuse to pack a
+        // graph that packs today: such a file survives the stager's copy, the hardening lint
+        // returns Option, and only `--strip` rejects it, so a default pack exited 0 and wrote
+        // an image. That is "tighten validation", which is a separate decision from this fix.
+        // Tracked in the scratch backlog beside DEF F12, which was split out for the same
+        // property.
         let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-        // Only a file that does not even CLAIM to be an ELF is a leaf: a stray data file that
-        // happened to resolve by name. One carrying the magic and then failing to parse is a
-        // BROKEN ELF, and dropping its DT_NEEDED subtree silently is this same bug in a
-        // smaller shape. Propagating also keeps goblin's own reason, which a bare `.ok()`
-        // discarded before `resolve_with` could report it.
-        if !bytes.starts_with(b"\x7fELF") {
-            return Ok(None);
-        }
-        parse_elf_info(&bytes)
-            .map(Some)
-            .with_context(|| format!("parsing {} as ELF", path.display()))
+        Ok(parse_elf_info(&bytes).ok())
     }
 }
 
@@ -355,10 +354,15 @@ pub fn resolve_with(
             });
             // A resolved file that will not PARSE (e.g. a stray data file) is kept as a leaf
             // rather than aborting the whole resolution. A file that cannot be READ is not:
-            // it was already pushed to `resolution.libs` above, so swallowing the error stages
-            // it while its own DT_NEEDED children are never queued, never resolved and never
-            // staged. They never reach `missing` either -- nothing asked for them -- so even
-            // the --require/--deny gate cannot see the hole. Same outcome as a short layer.
+            // its own DT_NEEDED children are never queued, never resolved and never staged,
+            // and they never reach `missing` either, because nothing asked for them.
+            //
+            // What the user saw depended on the command. `graph` resolves without staging, so
+            // it exited 0 and reported a tree with a whole branch absent. `pack` did fail, but
+            // only later and for the wrong reason: the library is pushed to `resolution.libs`
+            // just above, and the stager's copy of that same unreadable file failed, so the
+            // error named a copy. `check_lib_policy` runs after `stager::stage`, so the
+            // --require/--deny gate was never reached rather than blind.
             if let Some(child) = source.read(&real)? {
                 queue.push_back((real, child, child_rpaths.clone()));
             }
@@ -601,8 +605,9 @@ mod tests {
         // libmid resolves and is staged, but cannot be READ. Swallowing that used to leave
         // libmid in `libs` while libleaf -- its only DT_NEEDED -- was never queued, never
         // resolved and never staged, and never reached `missing` either, because nothing ever
-        // asked for it. The pack then succeeded over a rootfs with a library missing, and even
-        // --require could not see it.
+        // asked for it. `graph` then exited 0 reporting a tree with that branch absent, and
+        // `pack` failed only later, at the stager's copy of the same file, naming a copy
+        // rather than the read.
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let (exe, mid, leaf, infos) = chain_fixture(root);
