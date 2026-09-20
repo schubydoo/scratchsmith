@@ -2,18 +2,5 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "local>schubydoo/renovate-config:scratchsmith"
-  ],
-  "customManagers": [
-    {
-      "customType": "regex",
-      "description": "Track the Simple English plugin pinned in claude-review.yml. Renovate's github-actions manager reads `uses:`, never a `ref:` under `with:`, so this pin was invisible to it and the workflow told the maintainer to bump it by hand. It lives here rather than in the shared preset because the pin is specific to this repository's workflow.",
-      "managerFilePatterns": [
-        "/^\\.github/workflows/claude-review\\.yml$/"
-      ],
-      "matchStrings": [
-        "repository:\\s+(?<depName>AminBlg/SimpleEnglish)\\s*\\n\\s+ref:\\s+(?<currentDigest>[0-9a-f]{40})\\s*#\\s*(?<currentValue>v\\S+)"
-      ],
-      "datasourceTemplate": "github-tags"
-    }
   ]
 }
