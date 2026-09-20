@@ -51,6 +51,7 @@ report, a non-root image, and no Dockerfile, it is equally handy. More:
 | Image **size budget**: `--max-size <SIZE>` (if the staged image exceeds the budget, the build fails) | ✅ |
 | Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`) | ✅ |
 | **Add host files**: `--add-file SRC[:DST]` (copy any host file into the image) | ✅ |
+| **Locale data**: `--locale NAME` (stage one compiled glibc locale, never the host archive) | ✅ |
 | Image metadata: labels (`--label`), `HEALTHCHECK` (`--healthcheck`) | ✅ |
 | Configuration file (`scratchsmith.toml`) + named profiles (`--profile`), JSON output (`--format json`) | ✅ |
 | **Pluggable runtime**: `--runtime` (docker / podman / nerdctl) for the default load sink | ✅ |

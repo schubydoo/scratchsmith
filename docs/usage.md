@@ -101,6 +101,31 @@ and names the path. If `DST` is already in the image, the pack fails as well, so
 for one path cannot quietly replace the first. Scratchsmith never skips a file you asked for.
 A skipped file means an image that ships without it. The added files count toward `--max-size`.
 
+## Stage a locale
+
+A scratch image carries no locale data, so a glibc program runs in the C locale and `setlocale`
+fails for any other. `--locale` stages one compiled locale at `/usr/lib/locale/<name>`. With no
+`LOCPATH` set, glibc reads exactly that path.
+
+```sh
+scratchsmith pack --locale en_US.UTF-8 --env LANG=en_US.UTF-8 ./app
+```
+
+Name the locale the way glibc names it, such as `en_US.UTF-8` or `de_DE.UTF-8@euro`.
+Scratchsmith takes the data from a matching directory under `/usr/lib/locale` on the host. If
+there is no such directory, it compiles the locale with `localedef`, which reads the glibc
+locale sources at `/usr/share/i18n`. If neither source is available, the pack fails and names
+what is missing.
+
+The host `locale-archive` file is never copied. One archive holds every locale the host has.
+That is hundreds of megabytes on a full distribution, far more than one program needs. A single
+locale costs about 3 MB, and most of that is the collation table `LC_COLLATE`.
+
+Staging the data does not select it. Set `LANG` or `LC_ALL` with `--env`, because the
+environment is what glibc reads at startup. If you stage a locale and set neither, the pack
+warns and the program runs in the C locale. The flag repeats, and the `locale` key in
+`scratchsmith.toml` takes the same list. Locale data counts toward `--max-size`.
+
 ## Inspect the dependency graph
 
 To see what `pack` stages without building an image, run `graph`:

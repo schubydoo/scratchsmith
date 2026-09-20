@@ -268,6 +268,85 @@ fn add_file_copies_host_files_into_the_rootfs() {
     assert!(stderr.contains("is a directory"), "{stderr}");
 }
 
+// Pick a locale this host can actually stage: one already built as a directory, else one
+// localedef can compile from /usr/share/i18n. Both are absent on a minimal container, and a
+// host that cannot supply locale data cannot prove anything about staging it.
+fn stageable_locale() -> Option<String> {
+    let root = Path::new("/usr/lib/locale");
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                return Some(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+    }
+    let have_localedef = ["/usr/bin/localedef", "/bin/localedef"]
+        .iter()
+        .any(|p| Path::new(p).exists());
+    (have_localedef && Path::new("/usr/share/i18n/locales/en_US").exists())
+        .then(|| "en_US.UTF-8".to_string())
+}
+
+#[test]
+fn locale_stages_one_locale_and_never_the_archive() {
+    // The -n -o path needs no Docker. Whichever source the host offers, the locale must land
+    // under /usr/lib/locale, and the host's locale-archive must stay out of the image.
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let Some(fixture) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let Some(locale) = stageable_locale() else {
+        eprintln!("skipping: host has no locale directory and no localedef sources");
+        return;
+    };
+    let packed = fixture.to_str().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("rootfs");
+
+    let staged = Command::new(bin)
+        .args([
+            "pack",
+            "-n",
+            "-o",
+            out.to_str().unwrap(),
+            "--locale",
+            locale.as_str(),
+            packed,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        staged.status.success(),
+        "--locale pack failed: {}",
+        String::from_utf8_lossy(&staged.stderr)
+    );
+    let dir = out.join("usr/lib/locale").join(&locale);
+    assert!(dir.join("LC_CTYPE").exists(), "{locale} has no LC_CTYPE");
+    assert!(
+        !out.join("usr/lib/locale/locale-archive").exists(),
+        "the host locale-archive must never be copied into the image"
+    );
+    // Nothing selects the locale, so the pack says so rather than shipping a silent no-op.
+    let text = String::from_utf8_lossy(&staged.stdout);
+    assert!(text.contains("LANG"), "no LANG warning in: {text}");
+
+    // A locale name is a directory name, never a path out of the staging root.
+    let refused = Command::new(bin)
+        .args([
+            "pack",
+            "-n",
+            "-o",
+            tmp.path().join("rootfs-escape").to_str().unwrap(),
+            "--locale",
+            "../../etc",
+            packed,
+        ])
+        .output()
+        .unwrap();
+    assert!(!refused.status.success(), "--locale with a path must fail");
+}
+
 #[test]
 fn init_wraps_the_entrypoint_with_tini_and_still_runs() {
     if !docker_available() {

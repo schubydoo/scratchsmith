@@ -169,6 +169,129 @@ pub fn stage_added_files(dest: &Path, files: &[AddFile]) -> Result<()> {
     Ok(())
 }
 
+/// Where glibc looks for compiled locale data inside the image.
+const LOCALE_ROOT: &str = "/usr/lib/locale";
+
+/// Stage each requested locale (`--locale en_US.UTF-8`) at `/usr/lib/locale/<name>`, the path
+/// glibc reads with no `LOCPATH` set.
+///
+/// The host's `locale-archive` is never copied. It is one file holding every locale the host
+/// has, which is hundreds of megabytes on a full distro, and a scratch image should carry only
+/// what was asked for. Two sources, in order: a per-locale directory the host already has, then
+/// `localedef`, which compiles one locale out of `/usr/share/i18n`. When neither works the pack
+/// fails, because the user named this locale explicitly.
+pub fn stage_locales(dest: &Path, locales: &[String]) -> Result<()> {
+    for name in locales {
+        let name = validate_locale_name(name)?;
+        let target = under(dest, &Path::new(LOCALE_ROOT).join(name));
+        if target.symlink_metadata().is_ok() {
+            bail!("--locale: {name} is already in the image; each locale can be given only once");
+        }
+        let host_dir = Path::new(LOCALE_ROOT).join(name);
+        if host_dir.is_dir() {
+            copy_dir_into(&host_dir, &target)
+                .with_context(|| format!("--locale: staging {name} from {}", host_dir.display()))?;
+            continue;
+        }
+        compile_locale(name, &target)?;
+    }
+    Ok(())
+}
+
+// The name is joined under the staging root, so anything that could escape it, or that names
+// a path rather than a locale, is refused before it reaches the filesystem.
+fn validate_locale_name(name: &str) -> Result<&str> {
+    if name.is_empty() {
+        bail!("--locale: the locale name must not be empty");
+    }
+    if name.contains('/') || name == "." || name == ".." {
+        bail!("--locale '{name}': name a locale such as en_US.UTF-8, not a path");
+    }
+    Ok(name)
+}
+
+// Compile ONE locale into `target`. `--no-archive` makes localedef write a plain directory
+// instead of adding to an archive, which is the form the image needs.
+fn compile_locale(name: &str, target: &Path) -> Result<()> {
+    compile_locale_with("localedef", name, target)
+}
+
+// The program is a parameter so a test can point at one that is not there and prove the
+// "could not run" path, which is otherwise only reachable on a host without localedef.
+fn compile_locale_with(program: &str, name: &str, target: &Path) -> Result<()> {
+    let (input, charmap) = localedef_input(name)?;
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let out = Command::new(program)
+        .arg("--no-archive")
+        .arg("-i")
+        .arg(&input)
+        .arg("-f")
+        .arg(&charmap)
+        .arg(target)
+        .output()
+        .with_context(|| {
+            format!(
+                "--locale {name}: could not run localedef; install glibc's locale tools, or build \
+                 {LOCALE_ROOT}/{name} on this host first"
+            )
+        })?;
+    if !out.status.success() {
+        bail!(
+            "--locale {name}: localedef -i {input} -f {charmap} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+// Split a locale name into the two things localedef needs: the source locale (`-i`, which
+// keeps any `@modifier`) and the character map (`-f`). `de_DE.UTF-8@euro` is `de_DE@euro`
+// plus `UTF-8`.
+fn localedef_input(name: &str) -> Result<(String, String)> {
+    let (base, modifier) = match name.split_once('@') {
+        Some((base, m)) => (base, Some(m)),
+        None => (name, None),
+    };
+    let Some((lang, charmap)) = base.rsplit_once('.') else {
+        bail!(
+            "--locale '{name}': name the character map too, as in {name}.UTF-8. Only a locale \
+             already built at {LOCALE_ROOT}/{name} on this host can leave it out"
+        );
+    };
+    let input = match modifier {
+        Some(m) => format!("{lang}@{m}"),
+        None => lang.to_string(),
+    };
+    Ok((input, charmap.to_string()))
+}
+
+// Copy a host locale directory into the image, subdirectories and all: glibc keeps
+// LC_MESSAGES as a directory beside the plain LC_* files.
+fn copy_dir_into(src: &Path, target: &Path) -> Result<()> {
+    std::fs::create_dir_all(target)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = target.join(entry.file_name());
+        // file_type() describes the entry itself, so a symlink is never followed into a copy.
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_into(&from, &to)?;
+        } else if ty.is_file() {
+            std::fs::copy(&from, &to)
+                .with_context(|| format!("copying {} -> {}", from.display(), to.display()))?;
+        } else {
+            bail!(
+                "--locale: {} is neither a file nor a directory",
+                from.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// What the default-include step added, and what it could not find.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct IncludeReport {
@@ -1069,5 +1192,144 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("cannot read"), "{err}");
+    }
+
+    #[test]
+    fn locale_name_must_not_be_a_path() {
+        // The name is joined under the staging root, so a traversal must never reach disk.
+        for bad in [
+            "",
+            "..",
+            "../../etc",
+            "en_US.UTF-8/../../root",
+            "/etc/passwd",
+        ] {
+            assert!(
+                validate_locale_name(bad).is_err(),
+                "{bad:?} must be refused"
+            );
+        }
+        assert_eq!(validate_locale_name("en_US.UTF-8").unwrap(), "en_US.UTF-8");
+    }
+
+    #[test]
+    fn locale_name_splits_into_localedef_arguments() {
+        assert_eq!(
+            localedef_input("en_US.UTF-8").unwrap(),
+            ("en_US".to_string(), "UTF-8".to_string())
+        );
+        // The modifier belongs to the source locale (-i), not the character map (-f).
+        assert_eq!(
+            localedef_input("de_DE.UTF-8@euro").unwrap(),
+            ("de_DE@euro".to_string(), "UTF-8".to_string())
+        );
+        // Without a character map there is nothing to pass to -f, so say which one is missing.
+        let err = localedef_input("de_DE").unwrap_err().to_string();
+        assert!(err.contains("character map"), "{err}");
+    }
+
+    #[test]
+    fn locale_staging_copies_a_host_directory_whole() {
+        // A locale directory carries LC_MESSAGES as a subdirectory, so the copy recurses.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("xx_XX.UTF-8");
+        make_file(&src.join("LC_CTYPE"), b"ctype");
+        make_file(&src.join("LC_MESSAGES/SYS_LC_MESSAGES"), b"messages");
+        let dest = tmp.path().join("dest");
+
+        copy_dir_into(&src, &dest.join("usr/lib/locale/xx_XX.UTF-8")).unwrap();
+
+        let staged = dest.join("usr/lib/locale/xx_XX.UTF-8");
+        assert_eq!(fs::read(staged.join("LC_CTYPE")).unwrap(), b"ctype");
+        assert_eq!(
+            fs::read(staged.join("LC_MESSAGES/SYS_LC_MESSAGES")).unwrap(),
+            b"messages"
+        );
+    }
+
+    #[test]
+    fn locale_reports_a_missing_localedef_by_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = compile_locale_with(
+            "scratchsmith-no-such-localedef",
+            "en_US.UTF-8",
+            &tmp.path().join("usr/lib/locale/en_US.UTF-8"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("could not run localedef"), "{err}");
+    }
+
+    #[test]
+    fn locale_surfaces_what_localedef_printed() {
+        // A locale with no source definition: localedef exits non-zero and says why, and that
+        // reason belongs in the pack error rather than a bare exit code.
+        if !Path::new("/usr/bin/localedef").exists() {
+            eprintln!("skipping: no localedef on this host");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let err = compile_locale(
+            "zz_ZZ.UTF-8",
+            &tmp.path().join("usr/lib/locale/zz_ZZ.UTF-8"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("localedef -i zz_ZZ -f UTF-8 failed"), "{err}");
+    }
+
+    #[test]
+    fn locale_compiles_one_locale_when_the_host_has_no_directory_for_it() {
+        // The compile path is what a host with only a locale-archive takes.
+        if !Path::new("/usr/bin/localedef").exists()
+            || !Path::new("/usr/share/i18n/locales/en_US").exists()
+        {
+            eprintln!("skipping: no localedef or no glibc locale sources");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("usr/lib/locale/en_US.UTF-8");
+        compile_locale("en_US.UTF-8", &target).unwrap();
+        assert!(target.join("LC_CTYPE").exists(), "no LC_CTYPE compiled");
+    }
+
+    #[test]
+    fn locale_copy_refuses_anything_that_is_not_a_file_or_a_directory() {
+        // A symlink is the case that matters: following one would copy a file from outside
+        // the locale directory, so name it instead.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("xx_XX.UTF-8");
+        make_file(&src.join("LC_CTYPE"), b"ctype");
+        std::os::unix::fs::symlink("/etc/passwd", src.join("LC_TIME")).unwrap();
+        let err = copy_dir_into(&src, &tmp.path().join("dest"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("neither a file nor a directory"), "{err}");
+    }
+
+    #[test]
+    fn locale_falls_back_to_compiling_when_the_host_has_no_directory() {
+        if !Path::new("/usr/bin/localedef").exists()
+            || !Path::new("/usr/share/i18n/locales/en_US").exists()
+            || Path::new("/usr/lib/locale/en_US.UTF-8").is_dir()
+        {
+            eprintln!("skipping: host cannot compile, or already has the directory");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        stage_locales(&dest, &["en_US.UTF-8".to_string()]).unwrap();
+        assert!(dest.join("usr/lib/locale/en_US.UTF-8/LC_CTYPE").exists());
+    }
+
+    #[test]
+    fn locale_refuses_to_stage_the_same_name_twice() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        make_file(&dest.join("usr/lib/locale/en_US.UTF-8/LC_CTYPE"), b"ctype");
+        let err = stage_locales(&dest, &["en_US.UTF-8".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already in the image"), "{err}");
     }
 }

@@ -172,7 +172,8 @@ fn build_rootfs(
 
 // Sum the sizes of the staged rootfs's regular files — the uncompressed image content,
 // including the NSS default-includes, the regenerated ld.so.cache, and the runtime extras
-// (`--ca-certs`/`--tz`/`--init`) and `--add-file` copies that land after `build_rootfs`.
+// (`--ca-certs`/`--tz`/`--init`), `--add-file` copies and `--locale` data that land after
+// `build_rootfs`.
 // Symlinks add ~0.
 fn staged_size(dir: &Path) -> Result<u64> {
     let mut total = 0u64;
@@ -183,6 +184,22 @@ fn staged_size(dir: &Path) -> Result<u64> {
         }
     }
     Ok(total)
+}
+
+// A staged locale that nothing selects is dead weight, because the selection lives in the
+// image environment, not in the locale data. Name it rather than ship a silent no-op.
+fn locale_env_warning(locales: &[String], env: &[String]) -> Option<String> {
+    let first = locales.first()?;
+    let selected = env
+        .iter()
+        .any(|e| e.starts_with("LANG=") || e.starts_with("LC_ALL="));
+    (!selected).then(|| {
+        format!(
+            "staged {} locale(s), but the image sets neither LANG nor LC_ALL, so the binary \
+             runs in the C locale; add --env LANG={first}",
+            locales.len()
+        )
+    })
 }
 
 // Enforce `--max-size` against the FULLY staged rootfs (after default-includes and
@@ -216,6 +233,8 @@ pub struct PackOptions {
     /// Host files to copy into the image (`--add-file SRC[:DST]`), beyond the fixed paths
     /// `--ca-certs` / `--tz` stage.
     pub add_files: Vec<AddFile>,
+    /// Compiled glibc locales to stage under `/usr/lib/locale` (`--locale en_US.UTF-8`).
+    pub locales: Vec<String>,
     /// Extra libraries (sonames or paths) to force-stage, e.g. dlopen'd plugins.
     pub includes: Vec<String>,
     /// Which name-service (NSS) modules to stage (`--nss`); default stages files + dns.
@@ -267,9 +286,11 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
     if opts.smoke {
         bail!("--smoke needs a built image, so it isn't supported with --no-build; drop --smoke, or set `smoke = false` in the profile");
     }
-    let (tree, size, warnings) = build_rootfs(binary, out_dir, opts)?;
+    let (tree, size, mut warnings) = build_rootfs(binary, out_dir, opts)?;
     stager::stage_runtime_extras(out_dir, &opts.extras)?;
     stager::stage_added_files(out_dir, &opts.add_files)?;
+    stager::stage_locales(out_dir, &opts.locales)?;
+    warnings.extend(locale_env_warning(&opts.locales, &opts.image.env));
     enforce_max_size(out_dir, opts.max_size)?;
     let sbom = maybe_sbom(out_dir, opts.sbom.as_ref())?;
     let scan = maybe_scan(out_dir, sbom.as_deref(), opts.scan.as_ref())?;
@@ -305,9 +326,11 @@ struct StagedImage {
 fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
     let work = tempfile::tempdir()?;
     let dest = work.path().join("rootfs");
-    let (tree, size, warnings) = build_rootfs(binary, &dest, opts)?;
+    let (tree, size, mut warnings) = build_rootfs(binary, &dest, opts)?;
     let extras = stager::stage_runtime_extras(&dest, &opts.extras)?;
     stager::stage_added_files(&dest, &opts.add_files)?;
+    stager::stage_locales(&dest, &opts.locales)?;
+    warnings.extend(locale_env_warning(&opts.locales, &opts.image.env));
     enforce_max_size(&dest, opts.max_size)?;
     // Generate the SBOM and scan while the staged rootfs still exists (dest is temporary).
     let sbom = maybe_sbom(&dest, opts.sbom.as_ref())?;
@@ -547,5 +570,16 @@ mod tests {
             init_entrypoint("/tini", vec!["/app".into(), "--serve".into()]),
             vec!["/tini", "--", "/app", "--serve"]
         );
+    }
+
+    #[test]
+    fn staged_locale_without_lang_warns() {
+        let locales = vec!["en_US.UTF-8".to_string()];
+        let warning = locale_env_warning(&locales, &[]).expect("a staged locale needs a selector");
+        assert!(warning.contains("LANG=en_US.UTF-8"), "{warning}");
+        // Either selector counts, and no locale at all is not worth a warning.
+        assert!(locale_env_warning(&locales, &["LANG=en_US.UTF-8".to_string()]).is_none());
+        assert!(locale_env_warning(&locales, &["LC_ALL=en_US.UTF-8".to_string()]).is_none());
+        assert!(locale_env_warning(&[], &[]).is_none());
     }
 }

@@ -70,6 +70,9 @@ pub struct Config {
     /// Host files to copy into the image, each `SRC:DST` or bare `SRC` (`--add-file`).
     #[serde(default, rename = "add-file")]
     pub add_file: Vec<String>,
+    /// Compiled glibc locales to stage under `/usr/lib/locale` (`--locale`).
+    #[serde(default)]
+    pub locale: Vec<String>,
     /// Force-stage extra libraries (sonames or paths), e.g. dlopen'd plugins.
     #[serde(default)]
     pub include: Vec<String>,
@@ -156,6 +159,7 @@ impl Config {
             tz: self.tz || over.tz,
             init: self.init || over.init,
             add_file: vec_or(self.add_file, over.add_file),
+            locale: vec_or(self.locale, over.locale),
             include: vec_or(self.include, over.include),
             nss: if over.nss.is_empty() {
                 self.nss
@@ -201,6 +205,7 @@ mod tests {
             tz = true
             init = true
             add-file = ["./app.conf:/etc/app.conf", "/etc/motd"]
+            locale = ["en_US.UTF-8"]
             include = ["libfoo.so"]
             nss = ["files", "dns"]
             deny = ["libssl.so.3"]
@@ -226,6 +231,7 @@ mod tests {
                 "/etc/motd".to_string()
             ]
         );
+        assert_eq!(cfg.locale, vec!["en_US.UTF-8".to_string()]);
         assert_eq!(cfg.include, vec!["libfoo.so".to_string()]);
         assert_eq!(
             cfg.nss,

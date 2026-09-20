@@ -38,6 +38,7 @@
   --include  value=true  multiple=true  required=false
   --init  value=false  multiple=false  required=false
   --label  value=true  multiple=true  required=false
+  --locale  value=true  multiple=true  required=false
   --max-size  value=true  multiple=false  required=false
   --no-build -n  value=false  multiple=false  required=false
   --nss  value=true  multiple=true  required=false  values=[files,dns,none]

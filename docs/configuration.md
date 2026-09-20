@@ -26,6 +26,7 @@ file**.
 | `tz` | `--tz` | Add the resolved local timezone (`/etc/localtime`). |
 | `init` | `--init` | Add a minimal init (`tini`) as pid 1 wrapping the entrypoint. |
 | `add-file` | `--add-file` | Copy a host file into the image (list). Each entry is `SRC:DST`, or a bare absolute `SRC` to keep the host path. Regular files only. A missing source, a directory, or a `DST` already in the image fails the pack. In an image the file lands owned by uid 0 at mode `0644`, or `0755` for an executable source. The layer writer canonicalizes modes, so do not add a secret this way. |
+| `locale` | `--locale` | Stage a compiled glibc locale under `/usr/lib/locale` (list). Name it as glibc does, such as `en_US.UTF-8`. The data comes from a matching host directory under `/usr/lib/locale`. When there is none, `localedef` compiles the locale from `/usr/share/i18n`. The host `locale-archive` is never copied. Set `LANG` or `LC_ALL` with `--env` to select the locale. |
 | `include` | `--include` | Force-stage extra libraries by soname or path, for example `dlopen`'d plugins (list). |
 | `nss` | `--nss` | Name-service (NSS) modules to stage for glibc name lookups: `files`, `dns`, or `none` (list). Fewer modules trim CVE surface. A mode without `files` also drops `/etc/passwd` and `/etc/group`, which glibc reads through the `files` module. Default: `files` and `dns`. |
 | `deny` | `--deny` | If this library ships, the pack fails (list). Resolved libraries, the loader, and NSS modules are all in scope, matched by soname or staged file name. This is a CI policy gate. Read sonames from `scratchsmith graph`. |
@@ -59,6 +60,7 @@ ca-certs = true
 tz = true
 init = true
 add-file = ["./app.conf:/etc/app/app.conf", "/etc/motd"]
+locale = ["en_US.UTF-8"]
 include = ["libnss_myhostname.so.2"]
 nss = ["files", "dns"]
 deny = ["libssl.so.3"]

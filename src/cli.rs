@@ -148,6 +148,10 @@ pub enum Command {
         /// path. Regular files only; repeatable.
         #[arg(long = "add-file", value_name = "SRC[:DST]")]
         add_file: Vec<String>,
+        /// Stage a compiled glibc locale at /usr/lib/locale, e.g. en_US.UTF-8; repeatable.
+        /// Set the locale to use with --env LANG=...
+        #[arg(long = "locale", value_name = "NAME")]
+        locale: Vec<String>,
         /// Force-stage an extra library (soname or path), e.g. a dlopen'd plugin;
         /// repeatable.
         #[arg(long = "include", value_name = "LIB")]
@@ -297,6 +301,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             tz,
             init,
             add_file,
+            locale,
             include,
             nss,
             deny,
@@ -348,6 +353,11 @@ fn dispatch(cli: Cli) -> Result<()> {
                 .iter()
                 .map(|spec| crate::stager::AddFile::parse(spec))
                 .collect::<Result<Vec<_>>>()?,
+                locales: if locale.is_empty() {
+                    file.locale
+                } else {
+                    locale
+                },
                 includes: if include.is_empty() {
                     file.include
                 } else {
