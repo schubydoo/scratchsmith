@@ -187,14 +187,22 @@ jobs:
       - run: cargo build
       - name: Generate and source completions
         run: |
+          set -euo pipefail
           bin=target/debug/scratchsmith
           "$bin" --completions bash > ss.bash
           "$bin" --completions zsh  > _scratchsmith
           "$bin" --completions fish > ss.fish
-          bash --noprofile --norc -c 'source ss.bash' && echo "bash: sourced OK"
+          # Each shell gets its OWN statement, never `cmd && echo "... OK"`. POSIX `set -e` is
+          # ignored for every command of an AND-OR list except the last, so under the `&&` form
+          # a broken bash or zsh completion left this REQUIRED job green. Only the fish line was
+          # gated, and only because it happened to be last.
+          bash --noprofile --norc -c 'source ss.bash'
+          echo "bash: sourced OK"
           # Set fpath BEFORE compinit (it reads fpath when it runs).
-          zsh -c 'fpath=($PWD $fpath); autoload -Uz compinit; compinit -u; source ./_scratchsmith' && echo "zsh: sourced OK"
-          fish -c 'source ss.fish' && echo "fish: sourced OK"
+          zsh -c 'fpath=($PWD $fpath); autoload -Uz compinit; compinit -u; source ./_scratchsmith'
+          echo "zsh: sourced OK"
+          fish -c 'source ss.fish'
+          echo "fish: sourced OK"
 
   musl:
     # Gate the shipped artifact's invariant on EVERY PR, not just at release: the
