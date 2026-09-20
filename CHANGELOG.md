@@ -5,6 +5,79 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 1.4.0 (2026-09-20)
+
+### Features
+
+#### `add-file` GitHub Action input ([#188](https://github.com/schubydoo/scratchsmith/pull/188))
+
+The action now exposes `--add-file` as a first-class input. Each line is one `SRC:DST` spec, or
+one bare absolute `SRC` that keeps its own path in the image. The action passes each line to the
+pack flag of the same name, so the rules do not change. Regular files only. A missing source, a
+directory, or a destination already in the image fails the pack. Before this, the flag was
+reachable only through the `args` escape hatch.
+
+#### `--locale`: stage a glibc locale in the image ([#189](https://github.com/schubydoo/scratchsmith/pull/189))
+
+`pack --locale en_US.UTF-8` stages one compiled locale at `/usr/lib/locale/en_US.UTF-8`. With no
+`LOCPATH` set, glibc reads exactly that path. Until now a scratch image carried no locale data.
+Every packed binary ran in the C locale, and `setlocale` failed for any other.
+
+The data comes from a matching host directory under `/usr/lib/locale`. When there is none,
+`localedef` compiles the locale from the glibc sources at `/usr/share/i18n`. When neither
+source is available, the pack fails and names what is missing. `scratchsmith doctor` now
+probes `localedef` too.
+
+The host `locale-archive` is never copied, because one archive holds every locale the host has.
+A single locale costs about 3 MB, and most of that is the collation table `LC_COLLATE`.
+
+Staging the data does not select it, so set `LANG`, `LC_ALL`, or a per-category `LC_*` entry
+with `--env`. If nothing selects a staged locale, the pack warns. If a selector names a locale
+the pack did not stage, the pack warns as well. glibc answers that mismatch with a silent
+fallback to the C locale.
+
+The flag repeats and takes a locale name, not a path. The `locale` key in `scratchsmith.toml`
+takes the same list.
+
+#### The pack report names the loader ([#192](https://github.com/schubydoo/scratchsmith/pull/192))
+
+`pack --format json` gains an `interpreter` field, and the text output gains a `loader` line.
+Both carry the image path of the dynamic loader, which is the one staged path the binary's
+`PT_INTERP` chooses rather than scratchsmith. An ELF that carries no `PT_INTERP` reports null,
+and the text line is absent. A static binary is the usual case for that, but not the only
+one. Read the field as "no `PT_INTERP`", not as "static".
+
+Until now a pack recorded every other fact about the image and stayed silent about the loader.
+A job that wanted to assert which loader shipped had to unpack the image and look. It can now
+read one field.
+
+The field is additive, so an existing consumer of the JSON is unaffected.
+
+#### `--symlinks`: keep a named symlink as a symlink ([#191](https://github.com/schubydoo/scratchsmith/pull/191))
+
+Scratchsmith copies the content of a symlink you name, so the image gets a regular file and
+not the link. That loses the path itself. Packing `/usr/bin/python3`, a link to `python3.13`,
+produced an image with the real file and nothing at `/usr/bin/python3`. A container that ran
+the name rather than the target then failed to start.
+
+`pack --symlinks <mode>` chooses what happens. `copy-all` copies the content to the named
+path, which is the default and what every earlier release did. `preserve` recreates the link.
+`copy-unsafe` recreates a link whose target is in the image and copies the content for one
+whose target is not. `skip-unsafe` recreates the safe link and stages nothing for the other.
+A dangling or skipped link warns and names the target.
+
+The mode covers the packed binary's own path and each `--add-file` source. Resolved libraries
+are not in scope, because the loader decides those and the stager already recreates the soname
+links it needs. Preserving a link never pulls its target into the image, so an image still
+gains only what you asked for. The packed binary is the exception: its real file is always
+staged, so a preserved link to it always resolves. The `symlinks` key in `scratchsmith.toml`
+takes the same value.
+
+A mode other than `copy-all` relaxes two `--add-file` rules, and only for a source that is
+itself a symlink. A preserved link is staged as a link, so a link to a directory no longer
+fails. Under `skip-unsafe` an entry the pack cannot honor stages nothing and warns. Every link
+the stager writes carries a relative value, so a staged tree resolves inside itself.
+
 ## 1.3.0 (2026-09-19)
 
 ### Features
