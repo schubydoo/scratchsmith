@@ -57,6 +57,11 @@ jobs:
       github.event.comment.author_association == 'OWNER'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # The ONE place this id is written. The `settings:` input below consumes it, and the
+      # "Assert the output style resolves" step proves it against the plugin checkout, so the
+      # two cannot drift into the silent-default failure described there.
+      REVIEW_OUTPUT_STYLE: simple-english:simple-english
     permissions:
       contents: read
       pull-requests: write # post the review and its inline comments
@@ -212,6 +217,56 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Assert the output style resolves
+        # An output style name that does not resolve DEGRADES SILENTLY: Claude Code falls back
+        # to the default and the run still reports success, so the review ships in the wrong
+        # register with nothing to show for it. Every other failure mode on this path is
+        # guarded (a failed App mint fails the job, "Fail if nothing was posted" catches a
+        # silent run), and this was the gap. Resolve the id the same way Claude Code does,
+        # BEFORE the review: plugin name from the manifest, style name from an output-style
+        # file's frontmatter. Matching on frontmatter rather than filename is deliberate, since
+        # that is what actually resolves.
+        env:
+          STYLE: ${{ env.REVIEW_OUTPUT_STYLE }}
+          PLUGIN_DIR: ${{ github.workspace }}/simple-english
+        run: |
+          set -euo pipefail
+          case "$STYLE" in
+            *:*) : ;;
+            *) echo "::error::REVIEW_OUTPUT_STYLE must be 'plugin:style', got '$STYLE'"; exit 1 ;;
+          esac
+          want_plugin="${STYLE%%:*}"
+          want_style="${STYLE#*:}"
+
+          manifest="$PLUGIN_DIR/.claude-plugin/plugin.json"
+          if [ ! -f "$manifest" ]; then
+            echo "::error::no plugin manifest at $manifest — the plugin layout moved at this ref, so '$STYLE' cannot resolve"
+            exit 1
+          fi
+          have_plugin=$(jq -r '.name // empty' "$manifest")
+          if [ "$have_plugin" != "$want_plugin" ]; then
+            echo "::error::plugin manifest declares name '$have_plugin', but the style id asks for '$want_plugin'"
+            exit 1
+          fi
+
+          # Scan every output style the plugin ships and match on the frontmatter `name:`.
+          found=""
+          for f in "$PLUGIN_DIR"/output-styles/*.md; do
+            [ -e "$f" ] || continue
+            n=$(awk '/^---[[:space:]]*$/{d++; next} d==1 && /^name:[[:space:]]*/{sub(/^name:[[:space:]]*/, ""); gsub(/["'"'"']/, ""); print; exit}' "$f")
+            if [ "$n" = "$want_style" ]; then found="$f"; break; fi
+          done
+          if [ -z "$found" ]; then
+            echo "::error::no output style named '$want_style' under $PLUGIN_DIR/output-styles — '$STYLE' would degrade to the default"
+            echo "styles this ref ships:"
+            for f in "$PLUGIN_DIR"/output-styles/*.md; do
+              [ -e "$f" ] || continue
+              echo "  $(basename "$f"): $(awk '/^---[[:space:]]*$/{d++; next} d==1 && /^name:[[:space:]]*/{sub(/^name:[[:space:]]*/, ""); print; exit}' "$f")"
+            done
+            exit 1
+          fi
+          echo "::notice::output style '$STYLE' resolves (plugin '$have_plugin', file $found)"
+
       - name: Review
         id: review
         uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
@@ -225,7 +280,7 @@ jobs:
           # DEFAULT-BRANCH copy of a workflow for `issue_comment`), and a style name that
           # does not resolve DEGRADES SILENTLY to the default. The review instructions keep
           # an honest "may" on an uncertain finding, overriding the style's no-hedging rule.
-          settings: '{"outputStyle": "simple-english:simple-english"}'
+          settings: '{"outputStyle": "${{ env.REVIEW_OUTPUT_STYLE }}"}'
           # NO `prompt:` — see the banner. Guidance goes through the system prompt.
           # Keep codecov's coverage comments out of Claude's context (the CI floor owns that).
           exclude_comments_by_actor: "greptile-apps[bot],codecov[bot]"
