@@ -363,7 +363,10 @@ enum CredentialPlan {
 // Both used to collapse to `None` via `.ok()` and push ANONYMOUSLY. Against a registry that
 // requires auth the user then got an opaque 401 instead of "your credential helper failed";
 // against one that accepts anonymous writes, the push SUCCEEDED under an identity they did not
-// choose. Only the two "there is nothing to find" variants are genuinely anonymous.
+// choose.
+//
+// The split is by "is there a credential here at all", NOT by how the variant name reads -- two
+// of them read as failures and are not. Each arm below says which it is and why.
 //
 // Pure and takes the Result directly, so every variant is unit-testable without a Docker config
 // on the machine.
@@ -375,13 +378,34 @@ fn credential_or_anonymous(
     registry: &str,
 ) -> Result<Option<docker_credential::DockerCredential>> {
     use docker_credential::CredentialRetrievalError as E;
+
+    // A credential helper reports "I have no entry for this server" by EXITING NON-ZERO with
+    // this exact message, not by printing nothing. That is the docker-credential-helpers
+    // protocol; the native stores print it on stdout.
+    const CREDENTIALS_NOT_FOUND: &str = "credentials not found in native keychain";
+
     match got {
         Ok(cred) => Ok(Some(cred)),
+        // A helper saying "nothing here" -- NOT a broken helper, despite the variant name.
+        // `creds_store` is consulted for EVERY registry (docker_credential lib.rs:143-145),
+        // so without this arm no machine carrying a `credsStore` could push anonymously --
+        // Docker Desktop writes one, and so does `docker login` with pass or secretservice.
+        // Docker's own CLI carves out the same case by name, in
+        // cli/config/credentials/native_store.go. A helper reporting not-found with a
+        // NON-standard message (ecr-login, gcloud) still lands in the fatal arm below, which
+        // is the safe side to err on.
+        Err(E::HelperFailure { stdout, stderr, .. })
+            if stdout.trim() == CREDENTIALS_NOT_FOUND || stderr.trim() == CREDENTIALS_NOT_FOUND =>
+        {
+            Ok(None)
+        }
         // Nothing to find. `ConfigReadError` belongs here and it is NOT obvious: the crate
-        // returns it when `File::open` on the config fails, which is the ordinary "this
-        // machine has no Docker config" case, not a broken helper. Classifying it as a
+        // returns it both when the config cannot be OPENED (`File::open`, lib.rs:232 -- the
+        // ordinary "this machine has no Docker config" case) and when it cannot be PARSED
+        // (config.rs:89). So an unreadable or corrupt config also pushes anonymously in
+        // silence. The missing-file case dominates by far, and classifying the variant as a
         // failure broke every anonymous push to a local registry, which is how this was
-        // caught. `ConfigNotFound` is narrower still: the config PATH could not be resolved.
+        // caught. `ConfigNotFound` is narrower: the config PATH could not be resolved.
         Err(E::NoCredentialConfigured | E::ConfigNotFound | E::ConfigReadError) => Ok(None),
         // A credential for this registry EXISTS and something about using it broke. This is
         // the set the user must hear about: it used to become an anonymous push.
@@ -617,6 +641,37 @@ mod tests {
             assert!(
                 matches!(credential_or_anonymous(Err(nothing), "ghcr.io"), Ok(None)),
                 "an absent credential must stay anonymous"
+            );
+        }
+
+        // A helper reporting "no entry for this server" does so by EXITING NON-ZERO with the
+        // standard message, so this HelperFailure is the anonymous case. Without it, no
+        // machine carrying a `credsStore` could push anonymously, because `creds_store` is
+        // consulted for every registry. Both streams, since third-party helpers differ.
+        for stream in ["stdout", "stderr"] {
+            let (stdout, stderr) = match stream {
+                "stdout" => (
+                    "credentials not found in native keychain\n".to_string(),
+                    String::new(),
+                ),
+                _ => (
+                    String::new(),
+                    "  credentials not found in native keychain  ".to_string(),
+                ),
+            };
+            assert!(
+                matches!(
+                    credential_or_anonymous(
+                        Err(E::HelperFailure {
+                            helper: "docker-credential-desktop".into(),
+                            stdout,
+                            stderr,
+                        }),
+                        "localhost:5000",
+                    ),
+                    Ok(None)
+                ),
+                "a helper reporting not-found on {stream} must stay anonymous"
             );
         }
 
