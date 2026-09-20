@@ -66,10 +66,10 @@ inputs:
       Host files to copy into the image, one `SRC:DST` per line. A bare absolute `SRC` keeps its
       own path. Regular files only, and a missing source, a directory, or a `DST` already in the
       image fails the pack. A `symlinks` mode that stages a link changes two of those rules, and
-      only for a source that is itself a symlink. A link to a directory no longer fails, and
-      `skip-unsafe` stages nothing and warns. A taken `DST` still fails under every mode. The
-      file lands owned by uid 0 at mode `0644`, or `0755` for an executable source, so do not
-      add a secret this way.
+      only for a source that is itself a symlink. A preserved link is staged as a link, so a link
+      to a directory no longer fails. Under `skip-unsafe`, an entry the pack cannot honor stages
+      nothing and warns. A taken `DST` still fails under every mode. The file lands owned by
+      uid 0 at mode `0644`, or `0755` for an executable source, so do not add a secret this way.
     required: false
     default: ""
   locale:
@@ -297,6 +297,10 @@ runs:
         if [ -n "$IN_LOCALE" ] && ! command -v localedef >/dev/null 2>&1; then
           while IFS= read -r loc; do
             [ -n "$loc" ] || continue
+            # A name containing a slash is invalid and the CLI says so. Judging the name here
+            # would let this preflight pre-empt that error, which also decouples the selftest
+            # that proves the --locale wiring from the wiring itself.
+            case "$loc" in */*) continue ;; esac
             if [ ! -d "/usr/lib/locale/$loc" ]; then
               echo "::error::locale '$loc' has no prebuilt directory on the runner and localedef is missing — add a step that installs it (e.g. apt-get install -y libc-bin locales) before this action."
               exit 1

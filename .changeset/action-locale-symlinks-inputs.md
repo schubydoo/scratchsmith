@@ -14,7 +14,7 @@ the CLI in v1.4.0. The action packs with the latest release, so an input can be 
 after a release carries its flag.
 
 The `add-file` input description changed with them. It stated that a directory source always
-fails the pack. That holds only while the action cannot reach `--symlinks`. A mode that stages
-a link changes that rule for a source that is itself a symlink, so the description now says so.
-A `DST` already in the image still fails under every mode, which the description now says as
+fails the pack. That holds only while the action cannot reach `--symlinks`. A preserved link is
+staged as a link, so a link to a directory no longer fails, and the description now says so. A
+`DST` already in the image still fails under every mode, which the description now says as
 well.
