@@ -23,8 +23,9 @@ To publish the built image, log in first and set `push`:
     push: ghcr.io/${{ github.repository }}:latest
 ```
 
-Set image metadata, gate on vulnerabilities, or cap the size. The list-valued inputs (`cmd`, `env`,
-`label`, `healthcheck`, `add-file`, `include`, `deny`, `require`) take **one value per line**:
+Nine inputs take **one value per line**: `cmd`, `env`, `label`, `healthcheck`, `add-file`,
+`locale`, `include`, `deny`, and `require`. Set image metadata, gate on vulnerabilities, or cap
+the size:
 
 ```yaml
 - uses: schubydoo/scratchsmith@v<ver>
@@ -81,7 +82,9 @@ daemonless, cosign-signable `--push`.
 | `ca-certs` | `false` | Add the TLS CA bundle to the image. |
 | `tz` | `false` | Add the resolved local timezone to the image. |
 | `init` | `false` | Add a minimal init (tini) as pid 1 wrapping the entrypoint. |
-| `add-file` | | Copy host files into the image, one `SRC:DST` per line. A bare absolute `SRC` keeps its own path. Regular files only. The file lands owned by uid 0 at mode `0644`, or `0755` for an executable source, so do not add a secret this way. |
+| `add-file` | | Copy host files into the image, one `SRC:DST` per line. A bare absolute `SRC` keeps its own path. Regular files only, and a missing source, a directory, or a `DST` already in the image fails the pack. A `symlinks` mode that stages a link changes two of those rules for a symlink source: a link to a directory no longer fails, and `skip-unsafe` stages nothing and warns. A taken `DST` still fails under every mode. The file lands owned by uid 0 at mode `0644`, or `0755` for an executable source, so do not add a secret this way. |
+| `locale` | | Compiled glibc locales to stage at `/usr/lib/locale`, one name per line, for example `en_US.UTF-8`. A name, never a path. Needs a prebuilt directory on the runner, or `localedef` plus the glibc sources at `/usr/share/i18n`. Staging a locale does not select it, so also set `LANG` through `env`. The host `locale-archive` is never copied. |
+| `symlinks` | `copy-all` | What a symlink you name becomes in the image: `copy-all`, `preserve`, `copy-unsafe`, or `skip-unsafe`. Covers the packed binary's own path and each `add-file` source, never the resolved libraries. |
 | `include` | | Extra libraries to force-stage, for example `dlopen`'d plugins, one soname/path per line. |
 | `nss` | `files,dns` | NSS modules to stage for glibc lookups, comma-separated (`files,dns`, or `none`). Fewer modules trim CVE surface. |
 | `max-size` | | If the fully-staged image exceeds this size, the job fails. Write the size as `25MB`, `512KiB`, or a byte count. |

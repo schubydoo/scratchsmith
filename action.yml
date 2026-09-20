@@ -64,9 +64,28 @@ inputs:
   add-file:
     description: >-
       Host files to copy into the image, one `SRC:DST` per line. A bare absolute `SRC` keeps its
-      own path. Regular files only. A missing source, a directory, or a `DST` already in the
-      image fails the pack. The file lands owned by uid 0 at mode `0644`, or `0755` for an
-      executable source, so do not add a secret this way.
+      own path. Regular files only, and a missing source, a directory, or a `DST` already in the
+      image fails the pack. A `symlinks` mode that stages a link changes two of those rules, and
+      only for a source that is itself a symlink. A link to a directory no longer fails, and
+      `skip-unsafe` stages nothing and warns. A taken `DST` still fails under every mode. The
+      file lands owned by uid 0 at mode `0644`, or `0755` for an executable source, so do not
+      add a secret this way.
+    required: false
+    default: ""
+  locale:
+    description: >-
+      Compiled glibc locales to stage at `/usr/lib/locale`, one name per line (for example
+      `en_US.UTF-8`). A name, never a path. Needs a prebuilt directory on the runner, or
+      `localedef` plus the glibc sources at `/usr/share/i18n`. Staging a locale does not select
+      it, so also set `LANG` through `env`. The host `locale-archive` is never copied.
+    required: false
+    default: ""
+  symlinks:
+    description: >-
+      What a symlink you name becomes in the image: `copy-all`, `preserve`, `copy-unsafe`, or
+      `skip-unsafe`. Covers the packed binary's own path and each `add-file` source, never the
+      resolved libraries. Empty keeps the default (`copy-all`), which copies the target's
+      content and leaves no link in the image.
     required: false
     default: ""
   include:
@@ -239,6 +258,8 @@ runs:
         IN_TZ: ${{ inputs.tz }}
         IN_INIT: ${{ inputs.init }}
         IN_ADD_FILE: ${{ inputs.add-file }}
+        IN_LOCALE: ${{ inputs.locale }}
+        IN_SYMLINKS: ${{ inputs.symlinks }}
         IN_INCLUDE: ${{ inputs.include }}
         IN_ARGS: ${{ inputs.args }}
         IN_ENTRYPOINT: ${{ inputs.entrypoint }}
@@ -271,6 +292,17 @@ runs:
           echo "::error::upx: true needs upx on the runner — add a step that installs it (e.g. apt-get install -y upx-ucl) before this action."
           exit 1
         fi
+        # A locale with a prebuilt host directory needs no tool, so only a name WITHOUT one
+        # requires localedef. Mirrors the source order the stager itself uses.
+        if [ -n "$IN_LOCALE" ] && ! command -v localedef >/dev/null 2>&1; then
+          while IFS= read -r loc; do
+            [ -n "$loc" ] || continue
+            if [ ! -d "/usr/lib/locale/$loc" ]; then
+              echo "::error::locale '$loc' has no prebuilt directory on the runner and localedef is missing — add a step that installs it (e.g. apt-get install -y libc-bin locales) before this action."
+              exit 1
+            fi
+          done <<< "$IN_LOCALE"
+        fi
         args=("pack" "$IN_BINARY" "--format" "json")
         [ -n "$IN_OUTPUT" ] && args+=("--no-build" "--output" "$IN_OUTPUT")
         [ -n "$IN_USER" ] && args+=("--user" "$IN_USER")
@@ -285,6 +317,9 @@ runs:
         [ -n "$IN_MAX_SIZE" ] && args+=("--max-size" "$IN_MAX_SIZE")
         # --nss takes a comma-separated value; pass it through as one token.
         [ -n "$IN_NSS" ] && args+=("--nss" "$IN_NSS")
+        # --symlinks takes one enum value. Pass it verbatim so clap, not this script, is what
+        # rejects a bad mode — a check here would drift from the enum on the next mode added.
+        [ -n "$IN_SYMLINKS" ] && args+=("--symlinks" "$IN_SYMLINKS")
         [ "$IN_SCAN" = "true" ] && args+=("--scan")
         [ -n "$IN_SCAN_FAIL_ON" ] && args+=("--scan-fail-on" "$IN_SCAN_FAIL_ON")
         if [ "$IN_SBOM" = "true" ]; then
@@ -299,6 +334,9 @@ runs:
         while IFS= read -r f; do
           [ -n "$f" ] && args+=("--add-file" "$f")
         done <<< "$IN_ADD_FILE"
+        while IFS= read -r loc; do
+          [ -n "$loc" ] && args+=("--locale" "$loc")
+        done <<< "$IN_LOCALE"
         while IFS= read -r c; do
           [ -n "$c" ] && args+=("--cmd" "$c")
         done <<< "$IN_CMD"

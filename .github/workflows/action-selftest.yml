@@ -268,3 +268,105 @@ jobs:
           set -euo pipefail
           [ "$OUTCOME" = "failure" ] || { echo "::error::add-file of a directory packed anyway — was the --add-file wiring dropped from action.yml?"; exit 1; }
           echo "add-file directory guard verified"
+      # --locale stages a COMPILED locale, so the runner must be able to supply one. The runner
+      # image ships no en_US directory, so localedef compiles it from /usr/share/i18n. Assert
+      # that source rather than skipping when it is absent: a self-skipping selftest proves
+      # nothing, and a runner image that drops the locale sources must fail loudly here instead
+      # of turning this pair into a quiet no-op.
+      - name: Assert the runner can supply locale data
+        run: |
+          set -euo pipefail
+          # Either source the stager accepts will do, in the order it tries them: a prebuilt
+          # host directory first, else localedef compiling from the glibc sources.
+          if [ -d /usr/lib/locale/en_US.UTF-8 ]; then
+            echo "locale source present (prebuilt directory)"
+          elif command -v localedef >/dev/null 2>&1 && [ -e /usr/share/i18n/locales/en_US ]; then
+            echo "locale source present (localedef will compile it)"
+          else
+            echo "::error::the runner has neither a prebuilt en_US.UTF-8 directory nor localedef plus /usr/share/i18n/locales/en_US — the locale selftest has nothing to stage"
+            exit 1
+          fi
+      - name: Pack with locale → rootfs
+        id: locale
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          output: ./staged-locale
+          locale: en_US.UTF-8
+          # Illustrative, and not asserted here: it mirrors the documented pairing (staging a
+          # locale does not select it) and keeps the pack's selection warning quiet. The `env`
+          # input itself is covered by the image-config job above, which can read it back.
+          env: LANG=en_US.UTF-8
+      - name: Assert the locale staged and the archive did not
+        env:
+          ROOTFS: ${{ steps.locale.outputs.rootfs }}
+        run: |
+          set -euo pipefail
+          [ -n "$ROOTFS" ] || { echo "::error::locale pack produced no rootfs — is --locale wired in action.yml?"; exit 1; }
+          test -e "$ROOTFS/usr/lib/locale/en_US.UTF-8/LC_CTYPE" || { echo "::error::locale input did not stage en_US.UTF-8"; exit 1; }
+          # Exactly one entry: the host locale-archive holds every locale the host has, and it
+          # must never ride along. Counting catches a change that copies the whole root.
+          count="$(find "$ROOTFS/usr/lib/locale" -mindepth 1 -maxdepth 1 | wc -l)"
+          [ "$count" = "1" ] || { echo "::error::expected exactly one entry under /usr/lib/locale, found $count"; exit 1; }
+          echo "locale input wired (en_US.UTF-8 staged, archive excluded)"
+      # Trip half: --locale takes a NAME, never a path, so a path must fail the pack. This also
+      # pins the value reaching the CLI verbatim.
+      - name: Pack with a locale path instead of a name (must fail)
+        id: locale-trip
+        continue-on-error: true
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          locale: /usr/lib/locale/en_US.UTF-8
+      - name: Assert the locale name guard tripped
+        env:
+          OUTCOME: ${{ steps.locale-trip.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$OUTCOME" = "failure" ] || { echo "::error::a locale path packed anyway — was the --locale wiring dropped from action.yml?"; exit 1; }
+          echo "locale name guard verified"
+      # symlinks covers each add-file source, so the positive case pins the wiring by itself:
+      # under the copy-all default the staged entry is a regular file and `test -L` fails.
+      - name: Write a symlinked file for the symlinks input to preserve
+        run: |
+          set -euo pipefail
+          echo "scratchsmith symlink selftest" > "${RUNNER_TEMP}/ss-note.txt"
+          # A RELATIVE link value, so the preserved link can resolve inside the image. An
+          # absolute host path would stage as a dangling link and prove less.
+          ln -sf ss-note.txt "${RUNNER_TEMP}/ss-link.txt"
+      - name: Pack with symlinks=preserve → rootfs
+        id: symlinks
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          output: ./staged-symlinks
+          symlinks: preserve
+          add-file: |
+            ${{ runner.temp }}/ss-note.txt:/etc/ss-note.txt
+            ${{ runner.temp }}/ss-link.txt:/etc/ss-link.txt
+      - name: Assert the symlink stayed a symlink and resolves in the image
+        env:
+          ROOTFS: ${{ steps.symlinks.outputs.rootfs }}
+        run: |
+          set -euo pipefail
+          [ -n "$ROOTFS" ] || { echo "::error::symlinks pack produced no rootfs — is --symlinks wired in action.yml?"; exit 1; }
+          test -L "$ROOTFS/etc/ss-link.txt" || { echo "::error::symlinks=preserve staged a regular file — the input never reached --symlinks"; exit 1; }
+          grep -q "scratchsmith symlink selftest" "$ROOTFS/etc/ss-link.txt" || { echo "::error::the preserved link does not resolve inside the staged tree"; exit 1; }
+          echo "symlinks input wired (preserve kept the link, and it resolves in the image)"
+      # Trip half: --symlinks takes one of four modes, so clap must reject anything else. A
+      # value this script mangled on the way would fail differently but still fail, so the
+      # positive case above is what proves the happy path.
+      - name: Pack with an unknown symlinks mode (must fail)
+        id: symlinks-trip
+        continue-on-error: true
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          symlinks: not-a-mode
+      - name: Assert the symlinks mode guard tripped
+        env:
+          OUTCOME: ${{ steps.symlinks-trip.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$OUTCOME" = "failure" ] || { echo "::error::an unknown symlinks mode packed anyway — was the --symlinks wiring dropped from action.yml?"; exit 1; }
+          echo "symlinks mode guard verified"
