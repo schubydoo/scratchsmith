@@ -201,18 +201,39 @@ pub fn build_layer(root: &Path) -> Result<Layer> {
     })
 }
 
+// Every path under `root`, sorted, excluding `root` itself.
+//
+// A walk error is PROPAGATED, never skipped. Discarding one drops that entry, or a whole
+// unreadable subtree, from the layer -- and the pack then succeeds, digests and SIGNS a short
+// layer, so the image fails only later, at run time, on a missing library. Failing loud here
+// matches `pack::staged_size` and `diff::scan`, which already propagate.
+fn sorted_entries(root: &Path) -> Result<Vec<std::path::PathBuf>> {
+    let mut paths = Vec::new();
+    for entry in walkdir::WalkDir::new(root) {
+        let entry = entry.map_err(|e| {
+            // Name the entry that could not be read, not just the root: walkdir reports the
+            // failing path, and that is the one thing the user can act on.
+            let at = e
+                .path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| root.display().to_string());
+            anyhow::Error::new(e).context(format!("reading the staged rootfs entry {at}"))
+        })?;
+        let path = entry.into_path();
+        if path != root {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
 // Tar the staged tree reproducibly: entries sorted by path, mtime zeroed, uid/gid 0,
 // canonical modes, symlinks preserved. The same rootfs yields a byte-identical tar.
 fn deterministic_tar(root: &Path) -> Result<Vec<u8>> {
     use std::os::unix::fs::PermissionsExt;
 
-    let mut paths: Vec<std::path::PathBuf> = walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .map(|e| e.into_path())
-        .filter(|p| p != root)
-        .collect();
-    paths.sort();
+    let paths = sorted_entries(root)?;
 
     let mut ar = tar::Builder::new(Vec::new());
     for path in paths {
@@ -452,6 +473,51 @@ mod tests {
         // diff_id is the uncompressed hash, digest the gzip hash — never equal.
         assert_ne!(layer.diff_id, layer.digest);
         assert!(!layer.gzip.is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_entry_fails_the_layer_instead_of_dropping_it() {
+        // The layer tar USED to `filter_map(|e| e.ok())` the walk, so an unreadable directory
+        // vanished from the image and the pack still succeeded -- then digested and signed a
+        // short layer. Assert the loud failure, and that the message names the path.
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tiny_rootfs();
+        let root = tmp.path().join("root");
+        let locked = root.join("usr/lib/private");
+        std::fs::create_dir_all(locked.join("deeper")).unwrap();
+        std::fs::write(locked.join("deeper/secret.so"), b"payload").unwrap();
+
+        // Sanity: it builds fine while the subtree is readable, so the failure below is the
+        // permission and nothing else.
+        build_layer(&root).expect("a readable rootfs must build");
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Test the PRECONDITION rather than infer it from a uid: root ignores the mode bits,
+        // and so do some container and filesystem setups. If the directory is still readable
+        // this test cannot fail, and a test that cannot fail must say so rather than pass.
+        if std::fs::read_dir(&locked).is_ok() {
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            panic!(
+                "cannot make {} unreadable (running as root?), so this test proves nothing",
+                locked.display()
+            );
+        }
+        // Matched rather than `expect_err`, which would need `Layer: Debug` — and deriving it
+        // on a struct holding the gzip bytes would dump a whole layer into a failure message.
+        let built = build_layer(&root);
+
+        // Restore before any assertion, so a failing assert still lets TempDir clean up.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let Err(err) = built else {
+            panic!("an unreadable subtree must fail the layer, but it built one");
+        };
+        let msg = format!("{err:#}");
+
+        assert!(
+            msg.contains("private"),
+            "the error must name the entry that could not be read, got: {msg}"
+        );
     }
 
     #[test]
