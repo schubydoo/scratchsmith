@@ -321,10 +321,20 @@ fn symlinks_preserve_puts_the_named_binary_path_back() {
         .symlink_metadata()
         .expect("preserve must create the named path");
     assert!(md.file_type().is_symlink(), "the named path must be a link");
-    // Resolving it inside the image must land on a real file, not dangle.
+    // The value must be RELATIVE. An absolute one resolves against the host root, so
+    // `named.exists()` alone would pass on the host file whether or not the staged copy is
+    // there, which measures nothing. Resolve it by hand inside the staging tree instead.
+    let value = std::fs::read_link(&named).unwrap();
     assert!(
-        named.exists(),
-        "the preserved link must resolve inside the image"
+        value.is_relative(),
+        "the link value must be relative, got {}",
+        value.display()
+    );
+    let staged_real = kept.join(real.strip_prefix("/").unwrap());
+    assert_eq!(
+        named.parent().unwrap().join(&value).canonicalize().unwrap(),
+        staged_real.canonicalize().unwrap(),
+        "the link must resolve to the staged binary, not to the host one"
     );
 }
 

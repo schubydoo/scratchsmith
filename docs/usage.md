@@ -96,10 +96,15 @@ that the layer stays reproducible. A source at mode `0600` is therefore world-re
 the image. Do not add a secret this way. Only a `--no-build --output` rootfs keeps the source
 bits.
 
-The flag takes regular files only. If the source is missing or is a directory, the pack fails
-and names the path. If `DST` is already in the image, the pack fails as well, so a second entry
-for one path cannot quietly replace the first. Scratchsmith never skips a file you asked for.
-A skipped file means an image that ships without it. The added files count toward `--max-size`.
+With the default `--symlinks copy-all`, the flag takes regular files only. If the source is
+missing or is a directory, the pack fails and names the path. If `DST` is already in the image,
+the pack fails as well, so a second entry for one path cannot quietly replace the first. A file
+you asked for is never skipped without a word. The added files count toward `--max-size`.
+
+Another `--symlinks` mode changes two of those rules, and only for a source that is itself a
+symlink. A preserved link is staged as a link, so a link to a directory no longer fails. Under
+`skip-unsafe` an entry the pack cannot honor stages nothing and warns. The section below has
+the detail.
 
 ## Keep a symlink as a symlink
 

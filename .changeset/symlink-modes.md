@@ -21,3 +21,8 @@ links it needs. Preserving a link never pulls its target into the image, so an i
 gains only what you asked for. The packed binary is the exception: its real file is always
 staged, so a preserved link to it always resolves. The `symlinks` key in `scratchsmith.toml`
 takes the same value.
+
+A mode other than `copy-all` relaxes two `--add-file` rules, and only for a source that is
+itself a symlink. A preserved link is staged as a link, so a link to a directory no longer
+fails. Under `skip-unsafe` an entry the pack cannot honor stages nothing and warns. Every link
+the stager writes carries a relative value, so a staged tree resolves inside itself.

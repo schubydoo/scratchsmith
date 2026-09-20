@@ -265,15 +265,59 @@ fn ensure_not_staged(dest: &Path, image_path: &Path) -> Result<()> {
 // link at /etc, not at a/), and an absolute one is already an image path. Judging a relative
 // value against the host source directory instead would answer for the wrong filesystem.
 fn link_target_in_image(dest: &Path, image_link: &Path, value: &Path) -> bool {
-    let target = if value.is_absolute() {
-        value.to_path_buf()
-    } else {
-        match image_link.parent() {
-            Some(dir) => dir.join(value),
-            None => return false,
-        }
+    let Some(dir) = image_link.parent() else {
+        return false;
     };
-    under(dest, &target).symlink_metadata().is_ok()
+    under(dest, &lexical_image_path(dir, value))
+        .symlink_metadata()
+        .is_ok()
+}
+
+// Resolve a link value the way the image will read it, LEXICALLY: `.` drops and `..` pops,
+// and a pop at the root stays at the root. Joining without this leaves the `..` for the
+// kernel, so `../../../../usr/lib/x.so` walks out of the staging root and the "is it in the
+// image" probe gets answered by the HOST filesystem. A staging decision must never read
+// host state that way. The inverse matters too: `/etc/../usr/x` must answer for `/usr/x`,
+// not miss because `dest/etc` does not exist yet.
+fn lexical_image_path(base_dir: &Path, value: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut parts: Vec<&OsStr> = Vec::new();
+    let walk: Vec<Component> = if value.is_absolute() {
+        value.components().collect()
+    } else {
+        base_dir.components().chain(value.components()).collect()
+    };
+    for c in walk {
+        match c {
+            Component::Prefix(_) | Component::RootDir => parts.clear(),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                parts.pop();
+            }
+            Component::Normal(p) => parts.push(p),
+        }
+    }
+    let mut out = PathBuf::from("/");
+    out.extend(parts);
+    out
+}
+
+// Express `target` relative to `from_dir`, both absolute image paths. A staged link must
+// resolve inside the rootfs: an absolute value resolves against the HOST root whenever the
+// tree is not mounted as `/`, which is exactly the `--no-build --output DIR` case.
+fn relative_link_value(from_dir: &Path, target: &Path) -> PathBuf {
+    let mut from = from_dir.components().peekable();
+    let mut to = target.components().peekable();
+    while from.peek().is_some() && from.peek() == to.peek() {
+        from.next();
+        to.next();
+    }
+    let mut out = PathBuf::new();
+    for _ in from {
+        out.push("..");
+    }
+    out.extend(to);
+    out
 }
 
 // Create a symlink at an image path, carrying the value verbatim so a relative link stays
@@ -791,11 +835,16 @@ fn stage_files(
     // surprise for anything that execs the name rather than the target. Put the link back,
     // unless the caller asked for the flattening default. Its target IS staged (just above),
     // so it can never dangle, and the entrypoint stays the real path either way.
+    //
+    // The value is RELATIVE, like every other link the stager writes. An absolute value
+    // resolves against the host root whenever the tree is not mounted as `/`, which is the
+    // whole of the `--no-build --output DIR` case.
     if symlinks != SymlinkMode::CopyAll {
         let named = std::path::absolute(binary)
             .with_context(|| format!("resolving {}", binary.display()))?;
         if named != binary_real && under(dest, &named).symlink_metadata().is_err() {
-            place_symlink(dest, &named, &binary_real)?;
+            let dir = named.parent().unwrap_or(Path::new("/"));
+            place_symlink(dest, &named, &relative_link_value(dir, &binary_real))?;
         }
     }
 
@@ -1432,6 +1481,58 @@ mod tests {
         assert!(warnings.is_empty(), "{warnings:?}");
         let link = dest.join("opt/app/link.conf");
         assert_eq!(fs::read_link(&link).unwrap(), Path::new("real.conf"));
+    }
+
+    #[test]
+    fn a_link_value_is_resolved_lexically_and_cannot_leave_the_root() {
+        // `..` must be answered by path arithmetic, never by walking the host filesystem.
+        assert_eq!(
+            lexical_image_path(Path::new("/etc"), Path::new("../usr/lib/x.so")),
+            Path::new("/usr/lib/x.so")
+        );
+        // More `..` than there are components stops at the root rather than climbing out.
+        assert_eq!(
+            lexical_image_path(Path::new("/etc"), Path::new("../../../../usr/lib/x.so")),
+            Path::new("/usr/lib/x.so")
+        );
+        // An absolute value ignores the base, and `.` is a no-op.
+        assert_eq!(
+            lexical_image_path(Path::new("/etc"), Path::new("/opt/./app")),
+            Path::new("/opt/app")
+        );
+    }
+
+    #[test]
+    fn a_traversing_link_value_is_judged_inside_the_image_only() {
+        // /etc/passwd exists on the host but NOT in this image, so the answer must be "no".
+        // Before the lexical fix, the `..` chain escaped the staging root and the host said
+        // yes.
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        make_file(&dest.join("etc/keep"), b"x");
+        std::os::unix::fs::symlink("../../../../etc/passwd", tmp.path().join("escape")).unwrap();
+        let warnings = add_link(
+            &dest,
+            tmp.path().join("escape"),
+            "/etc/escape",
+            SymlinkMode::Preserve,
+        )
+        .unwrap();
+        assert_eq!(warnings.len(), 1, "an escaping value must read as unsafe");
+        assert!(warnings[0].contains("will dangle"), "{warnings:?}");
+    }
+
+    #[test]
+    fn a_relative_link_value_points_inside_the_staged_tree() {
+        assert_eq!(
+            relative_link_value(Path::new("/usr/bin"), Path::new("/usr/bin/python3.13")),
+            Path::new("python3.13")
+        );
+        // Different trees still resolve without ever naming the root.
+        assert_eq!(
+            relative_link_value(Path::new("/usr/bin"), Path::new("/opt/app/bin/real")),
+            Path::new("../../opt/app/bin/real")
+        );
     }
 
     #[test]
