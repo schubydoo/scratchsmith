@@ -747,7 +747,7 @@ runner, verifies it against the release checksums, and runs <code>pack</code>:</
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nt">push</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/${{ github.repository }}:latest</span>
 </code></pre></div>
 <p>Set image metadata, gate on vulnerabilities, or cap the size. The list-valued inputs (<code>cmd</code>, <code>env</code>,
-<code>label</code>, <code>healthcheck</code>, <code>include</code>, <code>deny</code>, <code>require</code>) take <strong>one value per line</strong>:</p>
+<code>label</code>, <code>healthcheck</code>, <code>add-file</code>, <code>include</code>, <code>deny</code>, <code>require</code>) take <strong>one value per line</strong>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schubydoo/scratchsmith@v&lt;ver&gt;</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">binary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./dist/app</span>
@@ -888,6 +888,11 @@ daemonless, cosign-signable <code>--push</code>.</p>
 <td><code>init</code></td>
 <td><code>false</code></td>
 <td>Add a minimal init (tini) as pid 1 wrapping the entrypoint.</td>
+</tr>
+<tr>
+<td><code>add-file</code></td>
+<td></td>
+<td>Copy host files into the image, one <code>SRC:DST</code> per line. A bare absolute <code>SRC</code> keeps its own path. Regular files only. The file lands owned by uid 0 at mode <code>0644</code>, or <code>0755</code> for an executable source, so do not add a secret this way.</td>
 </tr>
 <tr>
 <td><code>include</code></td>
