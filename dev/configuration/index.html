@@ -817,12 +817,17 @@ file</strong>.</p>
 <tr>
 <td><code>add-file</code></td>
 <td><code>--add-file</code></td>
-<td>Copy a host file into the image (list). Each entry is <code>SRC:DST</code>, or a bare absolute <code>SRC</code> to keep the host path. Regular files only. A missing source, a directory, or a <code>DST</code> already in the image fails the pack. In an image the file lands owned by uid 0 at mode <code>0644</code>, or <code>0755</code> for an executable source. The layer writer canonicalizes modes, so do not add a secret this way.</td>
+<td>Copy a host file into the image (list). Each entry is <code>SRC:DST</code>, or a bare absolute <code>SRC</code> to keep the host path. With the default <code>symlinks = "copy-all"</code> the entry takes regular files only. A missing source, a directory, or a <code>DST</code> already in the image then fails the pack. Another <code>symlinks</code> mode changes that for a source that is itself a symlink. In an image the file lands owned by uid 0 at mode <code>0644</code>, or <code>0755</code> for an executable source. The layer writer canonicalizes modes, so do not add a secret this way.</td>
 </tr>
 <tr>
 <td><code>locale</code></td>
 <td><code>--locale</code></td>
 <td>Stage a compiled glibc locale under <code>/usr/lib/locale</code> (list). Name it as glibc does, such as <code>en_US.UTF-8</code>. The data comes from a matching host directory under <code>/usr/lib/locale</code>. When there is none, <code>localedef</code> compiles the locale from <code>/usr/share/i18n</code>. The host <code>locale-archive</code> is never copied. Set <code>LANG</code>, <code>LC_ALL</code>, or a per-category <code>LC_*</code> entry with <code>--env</code> to select the locale. If nothing selects a staged locale, the pack warns. If a selector names a locale the pack did not stage, the pack warns as well.</td>
+</tr>
+<tr>
+<td><code>symlinks</code></td>
+<td><code>--symlinks</code></td>
+<td>What a symlink you name becomes in the image: <code>copy-all</code> (default), <code>preserve</code>, <code>copy-unsafe</code>, or <code>skip-unsafe</code>. Covers the packed binary path and each <code>add-file</code> source. See <a href="../usage/">Usage</a> for the mode table.</td>
 </tr>
 <tr>
 <td><code>include</code></td>
@@ -889,14 +894,15 @@ file</strong>.</p>
 <a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="n">init</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
 <a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="n">add-file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"./app.conf:/etc/app/app.conf"</span><span class="p">,</span><span class="w"> </span><span class="s2">"/etc/motd"</span><span class="p">]</span>
 <a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="n">locale</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"en_US.UTF-8"</span><span class="p">]</span>
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="n">include</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libnss_myhostname.so.2"</span><span class="p">]</span>
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="n">nss</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"files"</span><span class="p">,</span><span class="w"> </span><span class="s2">"dns"</span><span class="p">]</span>
-<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="n">deny</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libssl.so.3"</span><span class="p">]</span>
-<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="n">require</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libseccomp.so.2"</span><span class="p">]</span>
-<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
-<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="n">max-size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50MB"</span>
-<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"docker"</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="n">symlinks</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"copy-all"</span>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="n">include</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libnss_myhostname.so.2"</span><span class="p">]</span>
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="n">nss</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"files"</span><span class="p">,</span><span class="w"> </span><span class="s2">"dns"</span><span class="p">]</span>
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="n">deny</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libssl.so.3"</span><span class="p">]</span>
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="n">require</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libseccomp.so.2"</span><span class="p">]</span>
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
+<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="n">max-size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50MB"</span>
+<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"docker"</span>
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w">                 </span><span class="c1"># binary + all keys come from the file</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:dev<span class="w"> </span>./other<span class="w">   </span><span class="c1"># CLI overrides binary + push</span>
