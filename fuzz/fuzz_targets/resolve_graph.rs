@@ -76,11 +76,11 @@ const INTERP: &str = "/lib64/ld-fuzz.so.2";
 struct MapSource(HashMap<PathBuf, ElfInfo>);
 
 impl LinkInfoSource for MapSource {
-    fn read(&self, path: &Path) -> anyhow::Result<ElfInfo> {
-        self.0
-            .get(&canonical(path))
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("no scripted info for {}", path.display()))
+    // A path with no scripted entry is a LEAF (Ok(None)), not a read failure. The trait
+    // separates the two so the resolver can propagate a genuine read failure while still
+    // tolerating a resolved file that is simply not an ELF.
+    fn read(&self, path: &Path) -> anyhow::Result<Option<ElfInfo>> {
+        Ok(self.0.get(&canonical(path)).cloned())
     }
 }
 
