@@ -1,5 +1,5 @@
 ---
-default: minor
+default: patch
 ---
 
 #### A rootfs entry that cannot be read now fails the pack

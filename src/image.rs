@@ -534,6 +534,21 @@ mod tests {
     }
 
     #[test]
+    fn an_unopenable_root_fails_instead_of_building_an_empty_layer() {
+        // The WORSE half of the same bug, and the one the subtree test above does not reach.
+        // With the old `filter_map(|e| e.ok())` an unopenable root yielded an EMPTY path list,
+        // so build_layer returned a valid-looking empty layer. A short layer at least fails at
+        // container start on a missing library; an empty one builds an image that pulls,
+        // starts, and contains nothing.
+        let tmp = tempfile::tempdir().unwrap();
+        let gone = tmp.path().join("no-such-root");
+        assert!(
+            build_layer(&gone).is_err(),
+            "an absent root must fail, not build an empty layer"
+        );
+    }
+
+    #[test]
     fn layer_build_is_reproducible() {
         // Two builds of the same rootfs must yield identical hashes (sorted entries,
         // zeroed mtime/uid/gid, deterministic gzip).
