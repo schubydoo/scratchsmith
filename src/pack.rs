@@ -430,7 +430,8 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         mut warnings,
         interpreter,
     } = build_rootfs(binary, &dest, opts)?;
-    // The SBOM and scan inside run while the staged rootfs still exists (dest is temporary).
+    // finish_staging generates the SBOM and scan while the staged rootfs still exists (dest is
+    // temporary), which is why this call sits here rather than after the image config.
     let Finished { extras, sbom, scan } = finish_staging(&dest, opts, &mut warnings)?;
 
     // Effective image config: if --init staged tini, wrap the entrypoint so tini is
