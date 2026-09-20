@@ -113,14 +113,20 @@ fn check_lib_policy(
     }
 }
 
+/// What `build_rootfs` produced. A struct rather than a tuple because the pieces are
+/// unrelated to each other and every sink threads all of them into its report.
+struct Rootfs {
+    tree: StagedTree,
+    size: SizeReport,
+    warnings: Vec<String>,
+    /// The loader's image path (`PT_INTERP`), or `None` for a static binary.
+    interpreter: Option<String>,
+}
+
 // Resolve `binary` and build its complete rootfs (libs, loader, cache, NSS/passwd
 // includes) under `dest`, optionally stripping. The shared core of every pack path.
-// Returns the tree, the size report, and any include warnings (no printing).
-fn build_rootfs(
-    binary: &Path,
-    dest: &Path,
-    opts: &PackOptions,
-) -> Result<(StagedTree, SizeReport, Vec<String>)> {
+// Returns the tree, the size report, the loader path and any include warnings (no printing).
+fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Rootfs> {
     let info = resolver::read_elf_info(binary)?;
     // Reject musl up front rather than staging a subtly broken image (Task 2.5).
     resolver::ensure_glibc(&info)?;
@@ -167,7 +173,15 @@ fn build_rootfs(
         &opts.deny,
     )?;
     let sizes = stager::strip_and_measure(dest, &tree, &resolution, opts.strip, opts.upx)?;
-    Ok((tree, sizes, warnings))
+    Ok(Rootfs {
+        tree,
+        size: sizes,
+        warnings,
+        interpreter: resolution
+            .interpreter
+            .as_ref()
+            .map(|i| i.image_path.display().to_string()),
+    })
 }
 
 // Sum the sizes of the staged rootfs's regular files — the uncompressed image content,
@@ -337,7 +351,12 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
     if opts.smoke {
         bail!("--smoke needs a built image, so it isn't supported with --no-build; drop --smoke, or set `smoke = false` in the profile");
     }
-    let (tree, size, mut warnings) = build_rootfs(binary, out_dir, opts)?;
+    let Rootfs {
+        tree,
+        size,
+        mut warnings,
+        interpreter,
+    } = build_rootfs(binary, out_dir, opts)?;
     stager::stage_runtime_extras(out_dir, &opts.extras)?;
     warnings.extend(stager::stage_added_files(
         out_dir,
@@ -355,6 +374,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
         pushed: None,
         staged_dir: Some(tree.root.display().to_string()),
         entrypoint: tree.entrypoint.display().to_string(),
+        interpreter,
         size,
         warnings,
         smoke_ok: None,
@@ -376,12 +396,19 @@ struct StagedImage {
     warnings: Vec<String>,
     sbom: Option<String>,
     scan: Option<ScanSummary>,
+    /// The loader's image path, carried through to every image sink's report.
+    interpreter: Option<String>,
 }
 
 fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
     let work = tempfile::tempdir()?;
     let dest = work.path().join("rootfs");
-    let (tree, size, mut warnings) = build_rootfs(binary, &dest, opts)?;
+    let Rootfs {
+        tree,
+        size,
+        mut warnings,
+        interpreter,
+    } = build_rootfs(binary, &dest, opts)?;
     let extras = stager::stage_runtime_extras(&dest, &opts.extras)?;
     warnings.extend(stager::stage_added_files(
         &dest,
@@ -423,6 +450,7 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         warnings,
         sbom,
         scan,
+        interpreter,
     })
 }
 
@@ -456,6 +484,7 @@ pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
         smoke_ok,
         sbom: s.sbom,
         scan: s.scan,
+        interpreter: s.interpreter,
         signed: None,
     })
 }
@@ -479,6 +508,7 @@ fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackR
         smoke_ok: None,
         sbom: s.sbom,
         scan: s.scan,
+        interpreter: s.interpreter,
         signed: None,
     })
 }
@@ -512,6 +542,7 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackRep
         smoke_ok: None,
         sbom: s.sbom,
         scan: s.scan,
+        interpreter: s.interpreter,
         signed,
     })
 }

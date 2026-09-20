@@ -57,6 +57,10 @@ pub struct PackReport {
     pub staged_dir: Option<String>,
     /// Entrypoint path inside the image.
     pub entrypoint: String,
+    /// The dynamic loader the image carries, at the path the kernel will exec (`PT_INTERP`).
+    /// `None` for a static binary, which needs no loader. Recorded so a build can assert
+    /// which loader shipped without unpacking the image.
+    pub interpreter: Option<String>,
     /// Per-file and total payload sizes.
     pub size: SizeReport,
     /// Best-effort include warnings (e.g. an absent NSS module).
@@ -77,6 +81,11 @@ impl PackReport {
         let mut out = String::new();
         for w in &self.warnings {
             out.push_str(&format!("warning: {w}\n"));
+        }
+        // The loader is the one staged file whose path the kernel, not scratchsmith, chose.
+        // Naming it makes a pack self-documenting; a static binary has none to name.
+        if let Some(interp) = &self.interpreter {
+            out.push_str(&format!("loader {interp}\n"));
         }
         out.push_str("payload size:\n");
         out.push_str(&format!("{}\n", self.size));
@@ -480,6 +489,7 @@ mod tests {
             pushed: None,
             staged_dir: None,
             entrypoint: "/opt/app".into(),
+            interpreter: Some("/lib64/ld-linux-x86-64.so.2".into()),
             size: SizeReport {
                 entries: vec![],
                 total_before: 200,
@@ -534,6 +544,7 @@ mod tests {
             [
                 "archive",
                 "entrypoint",
+                "interpreter",
                 "pushed",
                 "sbom",
                 "scan",
@@ -574,6 +585,18 @@ mod tests {
         assert!(text.contains("loaded image scratchsmith/app:packed"));
         assert!(text.contains("smoke-run ok"));
         assert!(text.contains("200 -> 123"));
+        assert!(text.contains("loader /lib64/ld-linux-x86-64.so.2"));
+    }
+
+    #[test]
+    fn a_static_binary_reports_no_loader() {
+        // A static binary has no PT_INTERP, so there is no loader to name. The JSON says
+        // null rather than an empty string, and the text says nothing at all.
+        let mut r = sample_report();
+        r.interpreter = None;
+        assert!(!r.to_text().contains("loader"));
+        let json = serde_json::to_value(&r).unwrap();
+        assert!(json["interpreter"].is_null());
     }
 
     #[test]
@@ -584,6 +607,7 @@ mod tests {
             pushed: Some("ghcr.io/you/app:latest".into()),
             staged_dir: None,
             entrypoint: "/opt/app".into(),
+            interpreter: Some("/lib64/ld-linux-x86-64.so.2".into()),
             size: SizeReport {
                 entries: vec![],
                 total_before: 10,
@@ -668,6 +692,7 @@ mod tests {
             pushed: None,
             staged_dir: Some("/out/rootfs".into()),
             entrypoint: "/opt/app".into(),
+            interpreter: Some("/lib64/ld-linux-x86-64.so.2".into()),
             size: SizeReport {
                 entries: vec![],
                 total_before: 1,

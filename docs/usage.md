@@ -54,6 +54,14 @@ scratchsmith pack --strip --max-size 8MB ./app        # fail the build if the st
 scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate for CI
 ```
 
+The report names the loader the image carries, because the binary's `PT_INTERP` chooses that
+path and not scratchsmith. `--format json` carries it as `interpreter`, so a job can assert it
+without unpacking the image. A static binary has no loader, and the field is null.
+
+```sh
+scratchsmith pack --format json ./app | jq -e '.interpreter == "/lib64/ld-linux-x86-64.so.2"'
+```
+
 ## Trim the NSS modules
 
 glibc loads name-service (NSS) modules at runtime to resolve names: hostnames to IP addresses,

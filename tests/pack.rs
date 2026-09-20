@@ -338,6 +338,47 @@ fn symlinks_preserve_puts_the_named_binary_path_back() {
     );
 }
 
+#[test]
+fn the_report_names_the_loader_the_image_carries() {
+    // The loader's path is chosen by the binary's PT_INTERP, not by scratchsmith, so a pack
+    // that does not name it leaves the one host-dependent path in the image unrecorded.
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let Some(fixture) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out = Command::new(bin)
+        .args([
+            "pack",
+            "-n",
+            "-o",
+            tmp.path().join("rootfs").to_str().unwrap(),
+            "--format",
+            "json",
+            fixture.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "pack failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let interp = report["interpreter"]
+        .as_str()
+        .expect("a dynamic binary must report its loader");
+    // The reported path must be the one actually staged, not a guess.
+    assert!(
+        tmp.path()
+            .join("rootfs")
+            .join(interp.trim_start_matches('/'))
+            .exists(),
+        "the reported loader {interp} is not in the staged rootfs"
+    );
+}
+
 // Pick a locale this host can actually stage: one already built as a directory, else one
 // localedef can compile from /usr/share/i18n. Both are absent on a minimal container, and a
 // host that cannot supply locale data cannot prove anything about staging it.
