@@ -234,9 +234,18 @@ pub struct GoblinSource;
 
 impl LinkInfoSource for GoblinSource {
     fn read(&self, path: &Path) -> Result<Option<ElfInfo>> {
-        // The IO error propagates; only the PARSE failure becomes a leaf.
         let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-        Ok(parse_elf_info(&bytes).ok())
+        // Only a file that does not even CLAIM to be an ELF is a leaf: a stray data file that
+        // happened to resolve by name. One carrying the magic and then failing to parse is a
+        // BROKEN ELF, and dropping its DT_NEEDED subtree silently is this same bug in a
+        // smaller shape. Propagating also keeps goblin's own reason, which a bare `.ok()`
+        // discarded before `resolve_with` could report it.
+        if !bytes.starts_with(b"\x7fELF") {
+            return Ok(None);
+        }
+        parse_elf_info(&bytes)
+            .map(Some)
+            .with_context(|| format!("parsing {} as ELF", path.display()))
     }
 }
 

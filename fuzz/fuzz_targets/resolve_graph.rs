@@ -8,7 +8,7 @@
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 use scratchsmith::resolver::{resolve_with, ElfInfo, LinkInfoSource, Sysroot};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 // The dynamic-linking facts the fuzzer controls for one object. Strings stay arbitrary — they drive
@@ -47,6 +47,11 @@ struct Lib {
     name: String,
     dir: LibDir,
     facts: Facts,
+    // Make this library UNREADABLE to the source. Without it the map source always returns
+    // Ok, so the resolver's read-failure propagation is unreachable from the fuzzer: the
+    // interesting part is the PARTIALLY BUILT `Resolution` that precedes the failure, since
+    // the library is pushed to `libs` before its facts are read.
+    unreadable: bool,
 }
 
 // The buckets a real file may sit in: a couple of Sysroot default dirs plus the binary's own
@@ -73,14 +78,22 @@ struct Scenario {
 const INTERP: &str = "/lib64/ld-fuzz.so.2";
 
 // An in-memory link-info source, keyed exactly as the resolver looks up (canonical real path).
-struct MapSource(HashMap<PathBuf, ElfInfo>);
+struct MapSource {
+    infos: HashMap<PathBuf, ElfInfo>,
+    unreadable: HashSet<PathBuf>,
+}
 
 impl LinkInfoSource for MapSource {
-    // A path with no scripted entry is a LEAF (Ok(None)), not a read failure. The trait
-    // separates the two so the resolver can propagate a genuine read failure while still
-    // tolerating a resolved file that is simply not an ELF.
+    // Three outcomes, matching the trait's contract:
+    //   Err       -> the file could not be READ (driven by the fuzz input)
+    //   Ok(None)  -> read fine, not an ELF: a leaf
+    //   Ok(Some)  -> scripted facts
     fn read(&self, path: &Path) -> anyhow::Result<Option<ElfInfo>> {
-        Ok(self.0.get(&canonical(path)).cloned())
+        let key = canonical(path);
+        if self.unreadable.contains(&key) {
+            anyhow::bail!("fuzz: cannot read {}", key.display());
+        }
+        Ok(self.infos.get(&key).cloned())
     }
 }
 
@@ -131,6 +144,7 @@ fuzz_target!(|scn: Scenario| {
     }
 
     let mut infos: HashMap<PathBuf, ElfInfo> = HashMap::new();
+    let mut unreadable: HashSet<PathBuf> = HashSet::new();
     infos.insert(canonical(&exe), root_facts.into_elf());
 
     // Materialise a bounded number of libraries as real files, each mapped to its facts.
@@ -149,9 +163,15 @@ fuzz_target!(|scn: Scenario| {
             continue;
         }
         infos.insert(canonical(&path), lib.facts.into_elf());
+        // The library is still a real file and still resolves; only READING its facts fails.
+        // That is the shape that matters: it lands in `libs` before the read, so this drives
+        // the resolver's propagation out of a partially built `Resolution`.
+        if lib.unreadable {
+            unreadable.insert(canonical(&path));
+        }
     }
 
     let sysroot = Sysroot::new(root);
     let includes: Vec<String> = scn.includes.into_iter().take(8).collect();
-    let _ = resolve_with(&exe, &sysroot, &includes, &MapSource(infos));
+    let _ = resolve_with(&exe, &sysroot, &includes, &MapSource { infos, unreadable });
 });
