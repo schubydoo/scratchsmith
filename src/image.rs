@@ -209,7 +209,9 @@ pub fn build_layer(root: &Path) -> Result<Layer> {
 // matches `pack::staged_size` and `diff::scan`, which already propagate.
 fn sorted_entries(root: &Path) -> Result<Vec<std::path::PathBuf>> {
     let mut paths = Vec::new();
-    for entry in walkdir::WalkDir::new(root) {
+    // follow_links(false) is the default, but both siblings state it and the tar loop's symlink
+    // handling below depends on it, so pin it where it is relied on.
+    for entry in walkdir::WalkDir::new(root).follow_links(false) {
         let entry = entry.map_err(|e| {
             // Name the entry that could not be read, not just the root: walkdir reports the
             // failing path, and that is the one thing the user can act on.
@@ -238,14 +240,20 @@ fn deterministic_tar(root: &Path) -> Result<Vec<u8>> {
     let mut ar = tar::Builder::new(Vec::new());
     for path in paths {
         let rel = path.strip_prefix(root)?;
-        let meta = std::fs::symlink_metadata(&path)?;
+        // Every read here names its path too. An entry the walk could stat but this process
+        // cannot read (a restrictive mode, or one that vanishes between the walk and the read)
+        // otherwise fails with a bare "Permission denied (os error 13)": loud, but with nothing
+        // to act on. Nothing up the chain adds a path, so it has to be added here.
+        let meta = std::fs::symlink_metadata(&path)
+            .with_context(|| format!("reading the staged rootfs entry {}", path.display()))?;
         let mut header = tar::Header::new_gnu();
         header.set_mtime(0);
         header.set_uid(0);
         header.set_gid(0);
 
         if meta.file_type().is_symlink() {
-            let target = std::fs::read_link(&path)?;
+            let target = std::fs::read_link(&path)
+                .with_context(|| format!("reading the staged symlink {}", path.display()))?;
             header.set_entry_type(tar::EntryType::Symlink);
             header.set_size(0);
             header.set_mode(0o777);
@@ -256,7 +264,8 @@ fn deterministic_tar(root: &Path) -> Result<Vec<u8>> {
             header.set_mode(0o755);
             ar.append_data(&mut header, rel, std::io::empty())?;
         } else {
-            let data = std::fs::read(&path)?;
+            let data = std::fs::read(&path)
+                .with_context(|| format!("reading the staged file {}", path.display()))?;
             let exec = meta.permissions().mode() & 0o111 != 0;
             header.set_entry_type(tar::EntryType::Regular);
             header.set_size(data.len() as u64);
@@ -514,9 +523,13 @@ mod tests {
         };
         let msg = format!("{err:#}");
 
+        // Assert the FULL path, not a substring of it: the property under test is that the
+        // failing ENTRY is named rather than the root, and a loose substring could be satisfied
+        // by some other path under the temp tree.
         assert!(
-            msg.contains("private"),
-            "the error must name the entry that could not be read, got: {msg}"
+            msg.contains(&locked.display().to_string()),
+            "the error must name the entry that could not be read ({}), got: {msg}",
+            locked.display()
         );
     }
 
