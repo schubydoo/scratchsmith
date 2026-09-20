@@ -56,6 +56,7 @@
   --sign  value=false  multiple=false  required=false
   --smoke  value=false  multiple=false  required=false
   --strip  value=false  multiple=false  required=false
+  --symlinks  value=true  multiple=false  required=false  values=[copy-all,preserve,copy-unsafe,skip-unsafe]
   --tz  value=false  multiple=false  required=false
   --upx  value=false  multiple=false  required=false
   --user  value=true  multiple=false  required=false

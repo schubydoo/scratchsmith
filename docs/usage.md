@@ -101,6 +101,35 @@ and names the path. If `DST` is already in the image, the pack fails as well, so
 for one path cannot quietly replace the first. Scratchsmith never skips a file you asked for.
 A skipped file means an image that ships without it. The added files count toward `--max-size`.
 
+## Keep a symlink as a symlink
+
+Scratchsmith copies the content of a symlink you name, so the image gets a regular file and
+not the link. That loses the path itself. If you pack `/usr/bin/python3`, which is a link to
+`python3.13`, the image holds the real file and nothing at `/usr/bin/python3`. A container
+that runs the name rather than the target then fails to start. `--symlinks` chooses what
+happens instead.
+
+```sh
+scratchsmith pack --symlinks preserve /usr/bin/python3
+```
+
+| Mode | What a named symlink becomes |
+|---|---|
+| `copy-all` | The target's content, at the named path. This is the default, and what every earlier release did. |
+| `preserve` | A link. A target outside the image makes it dangle, and the pack warns. |
+| `copy-unsafe` | A link for a target inside the image. The target's content for a target outside it. |
+| `skip-unsafe` | A link for a target inside the image. Nothing at all for a target outside it, and the pack warns. |
+
+The mode covers the packed binary's own path and each `--add-file` source. Resolved libraries
+are not in scope, because the loader decides those and the stager already recreates the
+soname links it needs.
+
+Preserving a link never pulls its target into the image. You add the target yourself, with
+`--add-file`, or you accept a link that dangles. The packed binary is the exception: its real
+file is always staged, so a preserved link to it always resolves. Added files are staged in
+the order you list them, so a link can point at an earlier `--add-file` but not at a later
+one.
+
 ## Stage a locale
 
 A scratch image carries no locale data, so a glibc program runs in the C locale and `setlocale`

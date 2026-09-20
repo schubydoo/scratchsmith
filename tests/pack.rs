@@ -268,6 +268,66 @@ fn add_file_copies_host_files_into_the_rootfs() {
     assert!(stderr.contains("is a directory"), "{stderr}");
 }
 
+#[test]
+fn symlinks_preserve_puts_the_named_binary_path_back() {
+    // Packing a symlinked binary stages the REAL file and, by default, nothing else: the
+    // path the user typed is gone from the image. --symlinks puts it back as a link.
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let Some(fixture) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real/id-real");
+    std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+    std::fs::copy(fixture, &real).unwrap();
+    let link = tmp.path().join("bin/id-link");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink("../real/id-real", &link).unwrap();
+
+    let pack = |mode: Option<&str>, out: &Path| {
+        let mut args = vec!["pack", "-n", "-o", out.to_str().unwrap()];
+        if let Some(m) = mode {
+            args.push("--symlinks");
+            args.push(m);
+        }
+        args.push(link.to_str().unwrap());
+        let done = Command::new(bin).args(&args).output().unwrap();
+        assert!(
+            done.status.success(),
+            "pack failed: {}",
+            String::from_utf8_lossy(&done.stderr)
+        );
+    };
+
+    // Default: the real file only, exactly as every release before this one packed it.
+    let flat = tmp.path().join("flat");
+    pack(None, &flat);
+    let named = flat.join(link.strip_prefix("/").unwrap());
+    assert!(
+        flat.join(real.strip_prefix("/").unwrap()).exists(),
+        "the real binary must always be staged"
+    );
+    assert!(
+        named.symlink_metadata().is_err(),
+        "copy-all must not create the named path"
+    );
+
+    // preserve: the named path is back, as a link, and its target is the staged real file.
+    let kept = tmp.path().join("kept");
+    pack(Some("preserve"), &kept);
+    let named = kept.join(link.strip_prefix("/").unwrap());
+    let md = named
+        .symlink_metadata()
+        .expect("preserve must create the named path");
+    assert!(md.file_type().is_symlink(), "the named path must be a link");
+    // Resolving it inside the image must land on a real file, not dangle.
+    assert!(
+        named.exists(),
+        "the preserved link must resolve inside the image"
+    );
+}
+
 // Pick a locale this host can actually stage: one already built as a directory, else one
 // localedef can compile from /usr/share/i18n. Both are absent on a minimal container, and a
 // host that cannot supply locale data cannot prove anything about staging it.

@@ -73,6 +73,9 @@ pub struct Config {
     /// Compiled glibc locales to stage under `/usr/lib/locale` (`--locale`).
     #[serde(default)]
     pub locale: Vec<String>,
+    /// What a symlink you name becomes in the image (`--symlinks`): `copy-all` (default),
+    /// `preserve`, `copy-unsafe`, or `skip-unsafe`.
+    pub symlinks: Option<crate::stager::SymlinkMode>,
     /// Force-stage extra libraries (sonames or paths), e.g. dlopen'd plugins.
     #[serde(default)]
     pub include: Vec<String>,
@@ -160,6 +163,7 @@ impl Config {
             init: self.init || over.init,
             add_file: vec_or(self.add_file, over.add_file),
             locale: vec_or(self.locale, over.locale),
+            symlinks: over.symlinks.or(self.symlinks),
             include: vec_or(self.include, over.include),
             nss: if over.nss.is_empty() {
                 self.nss
@@ -206,6 +210,7 @@ mod tests {
             init = true
             add-file = ["./app.conf:/etc/app.conf", "/etc/motd"]
             locale = ["en_US.UTF-8"]
+            symlinks = "preserve"
             include = ["libfoo.so"]
             nss = ["files", "dns"]
             deny = ["libssl.so.3"]
@@ -232,6 +237,7 @@ mod tests {
             ]
         );
         assert_eq!(cfg.locale, vec!["en_US.UTF-8".to_string()]);
+        assert_eq!(cfg.symlinks, Some(crate::stager::SymlinkMode::Preserve));
         assert_eq!(cfg.include, vec!["libfoo.so".to_string()]);
         assert_eq!(
             cfg.nss,

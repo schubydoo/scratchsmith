@@ -61,6 +61,7 @@ build. It is purpose-built for the hard case and useful for the easy one.
 | Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`) | ✅ |
 | **Add host files**: `--add-file SRC[:DST]` (copy any host file into the image) | ✅ |
 | **Locale data**: `--locale NAME` (stage one compiled glibc locale, never the host archive) | ✅ |
+| **Symlink modes**: `--symlinks` (keep a named symlink as a link, or flatten it) | ✅ |
 | Image metadata: labels (`--label`), `HEALTHCHECK` (`--healthcheck`) | ✅ |
 | Configuration file (`scratchsmith.toml`) + named profiles (`--profile`), JSON output (`--format json`) | ✅ |
 | **Pluggable runtime**: `--runtime` (docker / podman / nerdctl) for the default load sink | ✅ |

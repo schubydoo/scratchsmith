@@ -3,7 +3,9 @@
 //! Requires ldconfig (present on any glibc host, including CI).
 
 use scratchsmith::resolver::{resolve, Sysroot};
-use scratchsmith::stager::{stage, stage_default_includes, strip_and_measure, NssSelection};
+use scratchsmith::stager::{
+    stage, stage_default_includes, strip_and_measure, NssSelection, SymlinkMode,
+};
 use std::path::Path;
 use std::process::Command;
 
@@ -23,7 +25,8 @@ fn stages_a_real_binary_into_a_runnable_tree() {
 
     let tmp = tempfile::tempdir().unwrap();
     let dest = tmp.path().join("rootfs");
-    let tree = stage(bin, &resolution, &dest).expect("staging should succeed");
+    let tree =
+        stage(bin, &resolution, &dest, SymlinkMode::CopyAll).expect("staging should succeed");
 
     // The loader must exist at its verbatim PT_INTERP path, or the image won't exec.
     let interp = resolution.interpreter.as_ref().unwrap();
@@ -102,7 +105,7 @@ fn strip_reduces_payload_size() {
 
     let tmp = tempfile::tempdir().unwrap();
     let dest = tmp.path().join("rootfs");
-    let tree = stage(bin, &resolution, &dest).expect("stage");
+    let tree = stage(bin, &resolution, &dest, SymlinkMode::CopyAll).expect("stage");
 
     let report = strip_and_measure(&dest, &tree, &resolution, true, false).expect("strip+measure");
     assert!(report.stripped);
@@ -136,7 +139,7 @@ fn upx_compresses_the_binary_only() {
 
     let tmp = tempfile::tempdir().unwrap();
     let dest = tmp.path().join("rootfs");
-    let tree = stage(bin, &resolution, &dest).expect("stage");
+    let tree = stage(bin, &resolution, &dest, SymlinkMode::CopyAll).expect("stage");
 
     let report = strip_and_measure(&dest, &tree, &resolution, false, true).expect("upx");
     assert!(report.upx, "report should flag upx");

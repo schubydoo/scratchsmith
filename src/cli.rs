@@ -152,6 +152,10 @@ pub enum Command {
         /// Set the locale to use with --env LANG=...
         #[arg(long = "locale", value_name = "NAME")]
         locale: Vec<String>,
+        /// What a symlink you name becomes in the image (the packed binary's own path, and
+        /// each --add-file source). Default: copy-all, which copies the target's content.
+        #[arg(long = "symlinks", value_name = "MODE")]
+        symlinks: Option<crate::stager::SymlinkMode>,
         /// Force-stage an extra library (soname or path), e.g. a dlopen'd plugin;
         /// repeatable.
         #[arg(long = "include", value_name = "LIB")]
@@ -302,6 +306,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             init,
             add_file,
             locale,
+            symlinks,
             include,
             nss,
             deny,
@@ -358,6 +363,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                 } else {
                     locale
                 },
+                symlinks: symlinks.or(file.symlinks).unwrap_or_default(),
                 includes: if include.is_empty() {
                     file.include
                 } else {

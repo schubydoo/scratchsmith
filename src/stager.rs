@@ -86,6 +86,34 @@ fn find_tini() -> Result<PathBuf> {
     bail!("no tini binary found")
 }
 
+/// What to do with a symlink the user named: the packed binary's own path, and each
+/// `--add-file` source.
+///
+/// Scratchsmith has always flattened these, copying the target's content to the named path,
+/// so an image never carried a link the user could see. That loses the path itself: packing
+/// `/usr/bin/python3` (a link to `python3.13`) produced an image with no `/usr/bin/python3`
+/// at all. These modes make the choice explicit, and `CopyAll` keeps the historical behavior
+/// as the default.
+///
+/// "Unsafe" means a preserved link whose target is NOT in the image, so it would dangle.
+/// Preserving never drags the target in by itself: an image gains only what was asked for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive] // may gain modes in a minor; not a stable exhaustive library API
+pub enum SymlinkMode {
+    /// Copy the target's content to the named path. No link in the image (the default,
+    /// and what every release before this one did).
+    #[default]
+    CopyAll,
+    /// Recreate the link as a link, even when its target is not in the image. A dangling
+    /// link warns rather than fails: the user asked for the link, not for the target.
+    Preserve,
+    /// Recreate the link when its target is in the image, else copy the content.
+    CopyUnsafe,
+    /// Recreate the link when its target is in the image, else stage nothing and warn.
+    SkipUnsafe,
+}
+
 /// A host file to copy into the image (`--add-file SRC[:DST]`). `--ca-certs` and `--tz`
 /// each stage one fixed path; this is the arbitrary-file escape hatch beside them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,8 +160,65 @@ impl AddFile {
 /// source, or an image path already staged is an error, not a warning: the user named this
 /// file explicitly, so failing beats shipping an image that silently lacks it or silently
 /// lost something else.
-pub fn stage_added_files(dest: &Path, files: &[AddFile]) -> Result<()> {
+///
+/// `mode` decides what a symlinked SOURCE becomes. The default (`CopyAll`) follows it and
+/// copies the content, which is what every release before this one did. Returns the
+/// warnings a preserved-but-dangling or skipped entry produced.
+///
+/// Entries are processed in order, and "is the target in the image" is asked at that moment,
+/// so an `--add-file` link can point at an earlier `--add-file` but not at a later one.
+pub fn stage_added_files(dest: &Path, files: &[AddFile], mode: SymlinkMode) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
     for file in files {
+        // symlink_metadata describes the link itself, so this runs BEFORE any decision to
+        // follow it. metadata() would error on a broken link that Preserve can still honor.
+        let link_md = std::fs::symlink_metadata(&file.src)
+            .with_context(|| format!("--add-file: cannot read {}", file.src.display()))?;
+
+        if link_md.file_type().is_symlink() && mode != SymlinkMode::CopyAll {
+            // A link must not take the place of a staged file either. The copy path checks
+            // this too, further down, where it also reports a bad SOURCE first: "you named a
+            // directory" is more useful to the user than "the destination is taken".
+            ensure_not_staged(dest, &file.dst)?;
+            let value = std::fs::read_link(&file.src)
+                .with_context(|| format!("--add-file: reading link {}", file.src.display()))?;
+            let safe = link_target_in_image(dest, &file.dst, &value);
+            match mode {
+                SymlinkMode::Preserve => {
+                    if !safe {
+                        warnings.push(format!(
+                            "--add-file: {} is a symlink to {}, which is not in the image, so it \
+                             will dangle",
+                            file.dst.display(),
+                            value.display()
+                        ));
+                    }
+                    place_symlink(dest, &file.dst, &value)?;
+                    continue;
+                }
+                SymlinkMode::CopyUnsafe if safe => {
+                    place_symlink(dest, &file.dst, &value)?;
+                    continue;
+                }
+                SymlinkMode::SkipUnsafe => {
+                    if safe {
+                        place_symlink(dest, &file.dst, &value)?;
+                    } else {
+                        warnings.push(format!(
+                            "--add-file: skipped {}: it is a symlink to {}, which is not in the \
+                             image",
+                            file.dst.display(),
+                            value.display()
+                        ));
+                    }
+                    continue;
+                }
+                // CopyUnsafe with an unsafe target falls through to the copy below, which is
+                // exactly what the mode name promises.
+                _ => {}
+            }
+        }
+
         // metadata() follows symlinks, so a symlinked source stages the file it names.
         let md = std::fs::metadata(&file.src)
             .with_context(|| format!("--add-file: cannot read {}", file.src.display()))?;
@@ -148,16 +233,7 @@ pub fn stage_added_files(dest: &Path, files: &[AddFile]) -> Result<()> {
                 file.src.display()
             );
         }
-        // Refuse to land on anything already there. `std::fs::copy` would truncate it without
-        // a word, and on a soname symlink it writes THROUGH the link and corrupts the real
-        // library. symlink_metadata sees the link itself, so both cases are caught here.
-        if under(dest, &file.dst).symlink_metadata().is_ok() {
-            bail!(
-                "--add-file: {} is already in the image; --add-file will not replace a staged \
-                 file, and each image path can be given only once",
-                file.dst.display()
-            );
-        }
+        ensure_not_staged(dest, &file.dst)?;
         copy_into(&file.src, dest, &file.dst).with_context(|| {
             format!(
                 "--add-file: staging {} at {}",
@@ -166,6 +242,49 @@ pub fn stage_added_files(dest: &Path, files: &[AddFile]) -> Result<()> {
             )
         })?;
     }
+    Ok(warnings)
+}
+
+// Refuse to land on anything already there. `std::fs::copy` would truncate it without a word,
+// and on a soname symlink it writes THROUGH the link and corrupts the real library.
+// symlink_metadata sees the link itself, so both cases are caught here.
+fn ensure_not_staged(dest: &Path, image_path: &Path) -> Result<()> {
+    if under(dest, image_path).symlink_metadata().is_ok() {
+        bail!(
+            "--add-file: {} is already in the image; --add-file will not replace a staged \
+             file, and each image path can be given only once",
+            image_path.display()
+        );
+    }
+    Ok(())
+}
+
+// Would a link with this value resolve to something already staged? The question is about
+// the value the link CARRIES, read the way the IMAGE will read it. So a relative value
+// resolves against the link's directory INSIDE the image (`--add-file a/b:/etc/c` puts the
+// link at /etc, not at a/), and an absolute one is already an image path. Judging a relative
+// value against the host source directory instead would answer for the wrong filesystem.
+fn link_target_in_image(dest: &Path, image_link: &Path, value: &Path) -> bool {
+    let target = if value.is_absolute() {
+        value.to_path_buf()
+    } else {
+        match image_link.parent() {
+            Some(dir) => dir.join(value),
+            None => return false,
+        }
+    };
+    under(dest, &target).symlink_metadata().is_ok()
+}
+
+// Create a symlink at an image path, carrying the value verbatim so a relative link stays
+// relative (an absolute one would break the moment the image root moves).
+fn place_symlink(dest: &Path, image_path: &Path, value: &Path) -> Result<()> {
+    let link = under(dest, image_path);
+    if let Some(parent) = link.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::os::unix::fs::symlink(value, &link)
+        .with_context(|| format!("linking {} -> {}", image_path.display(), value.display()))?;
     Ok(())
 }
 
@@ -432,8 +551,13 @@ nobody:x:65534:
 ";
 
 /// Stage `binary` and its resolved dependencies under `dest`, then build the cache.
-pub fn stage(binary: &Path, resolution: &Resolution, dest: &Path) -> Result<StagedTree> {
-    let tree = stage_files(binary, resolution, dest)?;
+pub fn stage(
+    binary: &Path,
+    resolution: &Resolution,
+    dest: &Path,
+    symlinks: SymlinkMode,
+) -> Result<StagedTree> {
+    let tree = stage_files(binary, resolution, dest, symlinks)?;
     generate_ld_cache(dest, resolution)?;
     Ok(tree)
 }
@@ -642,7 +766,12 @@ fn libc_dir(resolution: &Resolution) -> Option<PathBuf> {
 
 // File placement only — no ld.so.cache — so the copy and symlink logic is testable
 // without the external ldconfig tool.
-fn stage_files(binary: &Path, resolution: &Resolution, dest: &Path) -> Result<StagedTree> {
+fn stage_files(
+    binary: &Path,
+    resolution: &Resolution,
+    dest: &Path,
+    symlinks: SymlinkMode,
+) -> Result<StagedTree> {
     // Never build an image known to be broken; the caller must fix the deps first.
     if !resolution.missing.is_empty() {
         bail!(
@@ -656,6 +785,19 @@ fn stage_files(binary: &Path, resolution: &Resolution, dest: &Path) -> Result<St
     let binary_real =
         std::fs::canonicalize(binary).with_context(|| format!("locating {}", binary.display()))?;
     copy_into(&binary_real, dest, &binary_real)?;
+
+    // The path the USER named is not always the real one. `pack /usr/bin/python3` follows a
+    // link to python3.13, and the image then has no /usr/bin/python3 at all, which is a
+    // surprise for anything that execs the name rather than the target. Put the link back,
+    // unless the caller asked for the flattening default. Its target IS staged (just above),
+    // so it can never dangle, and the entrypoint stays the real path either way.
+    if symlinks != SymlinkMode::CopyAll {
+        let named = std::path::absolute(binary)
+            .with_context(|| format!("resolving {}", binary.display()))?;
+        if named != binary_real && under(dest, &named).symlink_metadata().is_err() {
+            place_symlink(dest, &named, &binary_real)?;
+        }
+    }
 
     // The kernel execs PT_INTERP verbatim, so the loader must live at that exact path.
     if let Some(interp) = &resolution.interpreter {
@@ -783,7 +925,7 @@ mod tests {
             missing: vec![],
             edges: vec![],
         };
-        stage_files(&binary, &res, &dest).unwrap();
+        stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
 
         let staged_loader = dest.join("lib64/ld-linux-x86-64.so.2");
         assert!(
@@ -811,7 +953,7 @@ mod tests {
             missing: vec![],
             edges: vec![],
         };
-        stage_files(&binary, &res, &dest).unwrap();
+        stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
 
         let staged_dir = under(&dest, real.parent().unwrap());
         let real_file = staged_dir.join("libfoo.so.1.2.3");
@@ -831,7 +973,7 @@ mod tests {
         let binary = make_file(&tmp.path().join("opt/tool/run"), b"binary");
 
         let res = Resolution::default();
-        let tree = stage_files(&binary, &res, &dest).unwrap();
+        let tree = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
 
         assert_eq!(tree.entrypoint, binary);
         assert!(under(&dest, &binary).exists(), "binary must be staged");
@@ -849,7 +991,7 @@ mod tests {
             missing: vec!["libmissing.so".into()],
             edges: vec![],
         };
-        let err = stage_files(&binary, &res, &dest).unwrap_err();
+        let err = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap_err();
         assert!(err.to_string().contains("libmissing.so"));
     }
 
@@ -1116,10 +1258,196 @@ mod tests {
             src: src.clone(),
             dst: PathBuf::from("/etc/app/deep/app.conf"),
         }];
-        stage_added_files(&dest, &files).unwrap();
+        stage_added_files(&dest, &files, SymlinkMode::CopyAll).unwrap();
 
         let landed = dest.join("etc/app/deep/app.conf");
         assert_eq!(fs::read(&landed).unwrap(), b"tuning");
+    }
+
+    // A symlinked source plus a staged target, so every mode has both a safe and an unsafe
+    // case to answer. `safe.conf` is in the image; `gone.conf` never is.
+    fn symlink_fixture() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        make_file(&dest.join("etc/safe.conf"), b"already staged");
+        make_file(&tmp.path().join("src/real.conf"), b"content");
+        std::os::unix::fs::symlink("/etc/safe.conf", tmp.path().join("src/to-safe")).unwrap();
+        std::os::unix::fs::symlink("/etc/gone.conf", tmp.path().join("src/to-gone")).unwrap();
+        (tmp, dest)
+    }
+
+    fn add_link(dest: &Path, src: PathBuf, dst: &str, mode: SymlinkMode) -> Result<Vec<String>> {
+        stage_added_files(
+            dest,
+            &[AddFile {
+                src,
+                dst: PathBuf::from(dst),
+            }],
+            mode,
+        )
+    }
+
+    #[test]
+    fn copy_all_keeps_flattening_a_symlinked_source() {
+        // The default must behave exactly as every release before this one did. The link has
+        // to name a HOST path here, because copy-all follows it on the host.
+        let (tmp, dest) = symlink_fixture();
+        std::os::unix::fs::symlink(
+            tmp.path().join("src/real.conf"),
+            tmp.path().join("src/to-real"),
+        )
+        .unwrap();
+        let warnings = add_link(
+            &dest,
+            tmp.path().join("src/to-real"),
+            "/etc/app.conf",
+            SymlinkMode::CopyAll,
+        )
+        .unwrap();
+        assert!(warnings.is_empty());
+        let landed = dest.join("etc/app.conf");
+        assert!(!landed.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(fs::read(&landed).unwrap(), b"content");
+    }
+
+    #[test]
+    fn copy_all_still_fails_loudly_on_a_link_the_host_cannot_follow() {
+        // /etc/safe.conf exists in the IMAGE, not on the host, so following it is impossible.
+        // That is an error rather than a silent empty file.
+        let (tmp, dest) = symlink_fixture();
+        let err = add_link(
+            &dest,
+            tmp.path().join("src/to-safe"),
+            "/etc/app.conf",
+            SymlinkMode::CopyAll,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("cannot read"), "{err}");
+    }
+
+    #[test]
+    fn preserve_keeps_the_link_even_when_it_dangles() {
+        let (tmp, dest) = symlink_fixture();
+        // Safe: the target is in the image, so the link resolves and nothing is said.
+        let warnings = add_link(
+            &dest,
+            tmp.path().join("src/to-safe"),
+            "/etc/safe-link",
+            SymlinkMode::Preserve,
+        )
+        .unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let link = dest.join("etc/safe-link");
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_link(&link).unwrap(), Path::new("/etc/safe.conf"));
+
+        // Unsafe: the link is still created, because that is what preserve means, but the
+        // dangle is named rather than left for the user to discover at runtime.
+        let warnings = add_link(
+            &dest,
+            tmp.path().join("src/to-gone"),
+            "/etc/gone-link",
+            SymlinkMode::Preserve,
+        )
+        .unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("will dangle"), "{warnings:?}");
+        assert!(dest
+            .join("etc/gone-link")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[test]
+    fn copy_unsafe_links_when_it_can_and_copies_when_it_cannot() {
+        let (tmp, dest) = symlink_fixture();
+        add_link(
+            &dest,
+            tmp.path().join("src/to-safe"),
+            "/etc/safe-link",
+            SymlinkMode::CopyUnsafe,
+        )
+        .unwrap();
+        assert!(dest
+            .join("etc/safe-link")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+
+        // The target is not in the image, so this one falls back to a copy of the content.
+        let real = tmp.path().join("src/real.conf");
+        std::os::unix::fs::symlink(&real, tmp.path().join("src/to-real")).unwrap();
+        add_link(
+            &dest,
+            tmp.path().join("src/to-real"),
+            "/etc/copied.conf",
+            SymlinkMode::CopyUnsafe,
+        )
+        .unwrap();
+        let landed = dest.join("etc/copied.conf");
+        assert!(!landed.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(fs::read(&landed).unwrap(), b"content");
+    }
+
+    #[test]
+    fn skip_unsafe_stages_nothing_for_a_link_it_cannot_honor() {
+        let (tmp, dest) = symlink_fixture();
+        let warnings = add_link(
+            &dest,
+            tmp.path().join("src/to-gone"),
+            "/etc/gone-link",
+            SymlinkMode::SkipUnsafe,
+        )
+        .unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("skipped"), "{warnings:?}");
+        assert!(
+            dest.join("etc/gone-link").symlink_metadata().is_err(),
+            "skip-unsafe must leave nothing behind, not an empty file"
+        );
+    }
+
+    #[test]
+    fn a_relative_link_resolves_against_its_own_directory() {
+        // The value is kept verbatim, so it must be judged the way the image will read it:
+        // relative to the link's own directory, not to the process working directory.
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        // The target sits beside the link INSIDE the image, which is what makes it safe.
+        make_file(&dest.join("opt/app/real.conf"), b"content");
+        make_file(&tmp.path().join("host/real.conf"), b"content");
+        std::os::unix::fs::symlink("real.conf", tmp.path().join("host/link.conf")).unwrap();
+
+        let warnings = add_link(
+            &dest,
+            tmp.path().join("host/link.conf"),
+            "/opt/app/link.conf",
+            SymlinkMode::SkipUnsafe,
+        )
+        .unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let link = dest.join("opt/app/link.conf");
+        assert_eq!(fs::read_link(&link).unwrap(), Path::new("real.conf"));
+    }
+
+    #[test]
+    fn a_preserved_link_still_cannot_replace_a_staged_file() {
+        // The collision rule outranks every mode: a link must not quietly take the place of
+        // something already in the image.
+        let (tmp, dest) = symlink_fixture();
+        let err = add_link(
+            &dest,
+            tmp.path().join("src/to-safe"),
+            "/etc/safe.conf",
+            SymlinkMode::Preserve,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("already in the image"), "{err}");
     }
 
     #[test]
@@ -1142,6 +1470,7 @@ mod tests {
                     dst: PathBuf::from("/etc/app.conf"),
                 },
             ],
+            SymlinkMode::CopyAll,
         )
         .unwrap_err()
         .to_string();
@@ -1161,6 +1490,7 @@ mod tests {
                 src: b,
                 dst: PathBuf::from("/lib/libc.so.6"),
             }],
+            SymlinkMode::CopyAll,
         )
         .unwrap_err()
         .to_string();
@@ -1181,6 +1511,7 @@ mod tests {
                 src: dir,
                 dst: PathBuf::from("/etc"),
             }],
+            SymlinkMode::CopyAll,
         )
         .unwrap_err()
         .to_string();
@@ -1194,6 +1525,7 @@ mod tests {
                 src: tmp.path().join("nope.conf"),
                 dst: PathBuf::from("/etc/nope.conf"),
             }],
+            SymlinkMode::CopyAll,
         )
         .unwrap_err()
         .to_string();

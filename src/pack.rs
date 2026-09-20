@@ -155,7 +155,7 @@ fn build_rootfs(
             resolution.missing.join(", ")
         );
     }
-    let tree = stager::stage(binary, &resolution, dest)?;
+    let tree = stager::stage(binary, &resolution, dest, opts.symlinks)?;
     let default_includes = stager::stage_default_includes(&resolution, dest, &opts.nss)?;
     warnings.extend(default_includes.warnings);
     // Gate on the library policy over everything staged (resolved libs, the loader, and the
@@ -281,6 +281,9 @@ pub struct PackOptions {
     /// Host files to copy into the image (`--add-file SRC[:DST]`), beyond the fixed paths
     /// `--ca-certs` / `--tz` stage.
     pub add_files: Vec<AddFile>,
+    /// What a symlink the user named becomes in the image: the packed binary's own path,
+    /// and each `--add-file` source (`--symlinks`). Defaults to the historical flattening.
+    pub symlinks: stager::SymlinkMode,
     /// Compiled glibc locales to stage under `/usr/lib/locale` (`--locale en_US.UTF-8`).
     pub locales: Vec<String>,
     /// Extra libraries (sonames or paths) to force-stage, e.g. dlopen'd plugins.
@@ -336,7 +339,11 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
     }
     let (tree, size, mut warnings) = build_rootfs(binary, out_dir, opts)?;
     stager::stage_runtime_extras(out_dir, &opts.extras)?;
-    stager::stage_added_files(out_dir, &opts.add_files)?;
+    warnings.extend(stager::stage_added_files(
+        out_dir,
+        &opts.add_files,
+        opts.symlinks,
+    )?);
     stager::stage_locales(out_dir, &opts.locales)?;
     warnings.extend(locale_env_warning(&opts.locales, &opts.image.env));
     enforce_max_size(out_dir, opts.max_size)?;
@@ -376,7 +383,11 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
     let dest = work.path().join("rootfs");
     let (tree, size, mut warnings) = build_rootfs(binary, &dest, opts)?;
     let extras = stager::stage_runtime_extras(&dest, &opts.extras)?;
-    stager::stage_added_files(&dest, &opts.add_files)?;
+    warnings.extend(stager::stage_added_files(
+        &dest,
+        &opts.add_files,
+        opts.symlinks,
+    )?);
     stager::stage_locales(&dest, &opts.locales)?;
     warnings.extend(locale_env_warning(&opts.locales, &opts.image.env));
     enforce_max_size(&dest, opts.max_size)?;
