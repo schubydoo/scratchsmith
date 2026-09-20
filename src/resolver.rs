@@ -219,7 +219,7 @@ pub trait LinkInfoSource {
     /// The dynamic-linking facts for `path`.
     ///
     /// The two failure shapes are deliberately DIFFERENT types, because conflating them
-    /// silently ships a short image:
+    /// drops a whole subtree from the resolution, with nothing landing in `missing`:
     ///
     /// - `Ok(None)` — the file was read, and it is not an ELF (a stray data file resolved by
     ///   name). It has no `DT_NEEDED` of its own, so keeping it as a leaf is correct.
