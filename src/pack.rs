@@ -186,18 +186,66 @@ fn staged_size(dir: &Path) -> Result<u64> {
     Ok(total)
 }
 
-// A staged locale that nothing selects is dead weight, because the selection lives in the
-// image environment, not in the locale data. Name it rather than ship a silent no-op.
+// glibc reads LC_ALL first, then each per-category LC_*, then LANG, so any of the three
+// selects a locale.
+fn locale_selectors(env: &[String]) -> Vec<&str> {
+    env.iter()
+        .filter_map(|e| e.split_once('='))
+        .filter(|(key, _)| *key == "LANG" || key.starts_with("LC_"))
+        .map(|(_, value)| value)
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+// glibc resolves these without any data on disk, so selecting one is never a mismatch.
+const BUILTIN_LOCALES: &[&str] = &["C", "POSIX", "C.UTF-8"];
+
+// `LANG=en_US.utf8` and `--locale en_US.UTF-8` name one locale to glibc. Compare names with
+// the case folded and the codeset punctuation dropped, keeping any modifier.
+fn normalize_locale(name: &str) -> String {
+    let (base, modifier) = name.split_once('@').unwrap_or((name, ""));
+    let (lang, codeset) = base.split_once('.').unwrap_or((base, ""));
+    let codeset: String = codeset
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect();
+    format!(
+        "{}.{}@{}",
+        lang.to_ascii_lowercase(),
+        codeset.to_ascii_lowercase(),
+        modifier.to_ascii_lowercase()
+    )
+}
+
+// A staged locale that nothing selects is dead weight, and a selector naming a locale the
+// pack did not stage is worse: glibc falls back to the C locale, and a program that ignores
+// the setlocale return value never says so. The selection lives in the image environment,
+// not in the locale data, so both cases are named rather than shipped silently.
 fn locale_env_warning(locales: &[String], env: &[String]) -> Option<String> {
     let first = locales.first()?;
-    let selected = env
-        .iter()
-        .any(|e| e.starts_with("LANG=") || e.starts_with("LC_ALL="));
-    (!selected).then(|| {
-        format!(
-            "staged {} locale(s), but the image sets neither LANG nor LC_ALL, so the binary \
-             runs in the C locale; add --env LANG={first}",
+    let selectors = locale_selectors(env);
+    if selectors.is_empty() {
+        return Some(format!(
+            "staged {} locale(s), but the image sets no LANG, LC_ALL or LC_* entry, so the \
+             binary runs in the C locale. Add --env LANG={first}",
             locales.len()
+        ));
+    }
+    let staged: Vec<String> = locales.iter().map(|l| normalize_locale(l)).collect();
+    let missing: Vec<&str> = selectors
+        .iter()
+        .filter(|s| {
+            let norm = normalize_locale(s);
+            !staged.contains(&norm) && !BUILTIN_LOCALES.iter().any(|b| normalize_locale(b) == norm)
+        })
+        .copied()
+        .collect();
+    (!missing.is_empty()).then(|| {
+        format!(
+            "the image selects {}, which the pack did not stage, so glibc falls back to the C \
+             locale there. Staged: {}",
+            missing.join(", "),
+            locales.join(", ")
         )
     })
 }
@@ -572,14 +620,61 @@ mod tests {
         );
     }
 
-    #[test]
-    fn staged_locale_without_lang_warns() {
+    // Shorthand for the warning over one staged locale and one env entry.
+    fn locale_warning(env: &[&str]) -> Option<String> {
         let locales = vec!["en_US.UTF-8".to_string()];
-        let warning = locale_env_warning(&locales, &[]).expect("a staged locale needs a selector");
+        let env: Vec<String> = env.iter().map(|e| (*e).to_string()).collect();
+        locale_env_warning(&locales, &env)
+    }
+
+    #[test]
+    fn staged_locale_without_any_selector_warns() {
+        let warning = locale_warning(&[]).expect("a staged locale needs a selector");
         assert!(warning.contains("LANG=en_US.UTF-8"), "{warning}");
-        // Either selector counts, and no locale at all is not worth a warning.
-        assert!(locale_env_warning(&locales, &["LANG=en_US.UTF-8".to_string()]).is_none());
-        assert!(locale_env_warning(&locales, &["LC_ALL=en_US.UTF-8".to_string()]).is_none());
+        // No locale staged means nothing to select, so there is nothing to say.
         assert!(locale_env_warning(&[], &[]).is_none());
+    }
+
+    #[test]
+    fn a_selector_naming_the_staged_locale_is_quiet() {
+        assert!(locale_warning(&["LANG=en_US.UTF-8"]).is_none());
+        assert!(locale_warning(&["LC_ALL=en_US.UTF-8"]).is_none());
+        // glibc reads each per-category LC_* as well, so one of those selects it too.
+        assert!(locale_warning(&["LC_TIME=en_US.UTF-8"]).is_none());
+        // glibc treats en_US.utf8 and en_US.UTF-8 as one locale, so the codeset punctuation
+        // and the case must not decide this.
+        assert!(locale_warning(&["LANG=en_us.utf8"]).is_none());
+        // An empty value selects nothing, so it reads as no selector at all.
+        assert!(locale_warning(&["LANG="]).is_some());
+    }
+
+    #[test]
+    fn a_selector_naming_an_unstaged_locale_warns() {
+        // The invisible failure this feature exists to prevent: the image selects a locale
+        // whose data it does not carry, so glibc silently falls back to C.
+        let warning = locale_warning(&["LANG=fr_FR.UTF-8"]).expect("mismatch must warn");
+        assert!(warning.contains("fr_FR.UTF-8"), "{warning}");
+        assert!(warning.contains("en_US.UTF-8"), "{warning}");
+        // A per-category selector naming an unstaged locale fails for that category alone,
+        // which is just as invisible.
+        assert!(locale_warning(&["LANG=en_US.UTF-8", "LC_TIME=fr_FR.UTF-8"]).is_some());
+        // C and POSIX need no data on disk, so selecting one is never a mismatch.
+        assert!(locale_warning(&["LANG=C"]).is_none());
+        assert!(locale_warning(&["LC_ALL=POSIX"]).is_none());
+        assert!(locale_warning(&["LANG=C.UTF-8"]).is_none());
+    }
+
+    #[test]
+    fn locale_names_normalize_down_to_what_glibc_sees() {
+        assert_eq!(
+            normalize_locale("en_US.UTF-8"),
+            normalize_locale("en_us.utf8")
+        );
+        // A modifier is part of the identity, and a missing codeset is not the same locale.
+        assert_ne!(normalize_locale("de_DE.UTF-8"), normalize_locale("de_DE"));
+        assert_ne!(
+            normalize_locale("de_DE.UTF-8@euro"),
+            normalize_locale("de_DE.UTF-8")
+        );
     }
 }

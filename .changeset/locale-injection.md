@@ -14,6 +14,9 @@ available, the pack fails and names what is missing.
 The host `locale-archive` is never copied, because one archive holds every locale the host has.
 A single locale costs about 3 MB, and most of that is the collation table `LC_COLLATE`.
 
-Staging the data does not select it, so set `LANG` or `LC_ALL` with `--env`. If you stage a
-locale and set neither, the pack warns. The flag repeats, takes a locale name and not a path,
-and the `locale` key in `scratchsmith.toml` takes the same list.
+Staging the data does not select it, so set `LANG`, `LC_ALL`, or a per-category `LC_*` entry
+with `--env`. If nothing selects a staged locale, the pack warns. If a selector names a locale
+the pack did not stage, the pack warns as well. glibc answers that mismatch with a silent
+fallback to the C locale. `scratchsmith doctor` now probes `localedef` too. The flag
+repeats, takes a locale name and not a path, and the `locale` key in `scratchsmith.toml` takes
+the same list.

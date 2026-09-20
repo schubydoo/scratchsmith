@@ -255,8 +255,14 @@ fn localedef_input(name: &str) -> Result<(String, String)> {
         None => (name, None),
     };
     let Some((lang, charmap)) = base.rsplit_once('.') else {
+        // The character map goes BEFORE the modifier, so build the suggestion from the parts.
+        // Appending it to the whole name would suggest `de_DE@euro.UTF-8`, which fails here too.
+        let suggestion = match modifier {
+            Some(m) => format!("{base}.UTF-8@{m}"),
+            None => format!("{base}.UTF-8"),
+        };
         bail!(
-            "--locale '{name}': name the character map too, as in {name}.UTF-8. Only a locale \
+            "--locale '{name}': name the character map too, as in {suggestion}. Only a locale \
              already built at {LOCALE_ROOT}/{name} on this host can leave it out"
         );
     };
@@ -1225,7 +1231,12 @@ mod tests {
         );
         // Without a character map there is nothing to pass to -f, so say which one is missing.
         let err = localedef_input("de_DE").unwrap_err().to_string();
-        assert!(err.contains("character map"), "{err}");
+        assert!(err.contains("as in de_DE.UTF-8"), "{err}");
+        // The suggestion has to be a name that works: the character map goes BEFORE the
+        // modifier, so `de_DE@euro.UTF-8` would send the user straight back here.
+        let err = localedef_input("de_DE@euro").unwrap_err().to_string();
+        assert!(err.contains("as in de_DE.UTF-8@euro"), "{err}");
+        assert!(localedef_input("de_DE.UTF-8@euro").is_ok());
     }
 
     #[test]

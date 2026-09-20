@@ -121,10 +121,12 @@ The host `locale-archive` file is never copied. One archive holds every locale t
 That is hundreds of megabytes on a full distribution, far more than one program needs. A single
 locale costs about 3 MB, and most of that is the collation table `LC_COLLATE`.
 
-Staging the data does not select it. Set `LANG` or `LC_ALL` with `--env`, because the
-environment is what glibc reads at startup. If you stage a locale and set neither, the pack
-warns and the program runs in the C locale. The flag repeats, and the `locale` key in
-`scratchsmith.toml` takes the same list. Locale data counts toward `--max-size`.
+Staging the data does not select it. Set `LANG`, `LC_ALL`, or a per-category entry such as
+`LC_TIME` with `--env`, because the environment is what glibc reads at startup. If you stage a
+locale and set none of them, the pack warns and the program runs in the C locale. If a selector
+names a locale the pack did not stage, the pack warns as well. glibc falls back to the C locale
+for that category. The flag repeats, and the `locale` key in `scratchsmith.toml` takes the same
+list. Locale data counts toward `--max-size`.
 
 ## Inspect the dependency graph
 

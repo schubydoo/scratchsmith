@@ -323,10 +323,20 @@ fn locale_stages_one_locale_and_never_the_archive() {
     );
     let dir = out.join("usr/lib/locale").join(&locale);
     assert!(dir.join("LC_CTYPE").exists(), "{locale} has no LC_CTYPE");
-    assert!(
-        !out.join("usr/lib/locale/locale-archive").exists(),
-        "the host locale-archive must never be copied into the image"
+    // Count the entries rather than name the archive: "no locale-archive" holds by
+    // construction today, so asserting only its absence cannot fail. One entry for one
+    // requested locale catches a later change that copies the whole /usr/lib/locale root,
+    // archive or not.
+    let entries: Vec<_> = std::fs::read_dir(out.join("usr/lib/locale"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "one --locale must stage exactly one entry, got {entries:?}"
     );
+    assert_eq!(entries[0].to_string_lossy(), locale);
     // Nothing selects the locale, so the pack says so rather than shipping a silent no-op.
     let text = String::from_utf8_lossy(&staged.stdout);
     assert!(text.contains("LANG"), "no LANG warning in: {text}");

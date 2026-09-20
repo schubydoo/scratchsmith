@@ -74,6 +74,14 @@ const TOOLS: &[Tool] = &[
         purpose: "--init (minimal pid-1 init wrapping the entrypoint)",
         hint: "install tini",
     },
+    // On a host that keeps every locale in a locale-archive, compiling is the only way to
+    // stage one, so a missing localedef turns --locale into a pack-time failure.
+    Tool {
+        name: "localedef",
+        version_args: &["--version"],
+        purpose: "--locale (compile a locale the host has no directory for)",
+        hint: "install glibc tools (libc-bin) and the locale sources (locales)",
+    },
 ];
 
 /// One tool's availability.
