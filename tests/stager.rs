@@ -9,6 +9,9 @@ use scratchsmith::stager::{
 use std::path::Path;
 use std::process::Command;
 
+mod common;
+use common::walk_contains;
+
 fn strip_available() -> bool {
     Command::new("strip")
         .arg("--version")
@@ -74,24 +77,6 @@ fn default_includes_add_nss_and_passwd_from_host() {
         "libnss_dns.so.2 was not staged (warnings: {:?})",
         report.warnings
     );
-}
-
-// Small recursive check so the test does not hard-code the libc directory triplet.
-fn walk_contains(root: &Path, name: &str) -> bool {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if walk_contains(&path, name) {
-                return true;
-            }
-        } else if path.file_name().is_some_and(|n| n == name) {
-            return true;
-        }
-    }
-    false
 }
 
 #[test]

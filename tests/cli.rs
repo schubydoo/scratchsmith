@@ -4,22 +4,14 @@
 
 use std::process::{Command, Output};
 
+mod common;
+use common::small_fixture_str as small_fixture;
+
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
         .args(args)
         .output()
         .expect("failed to run scratchsmith binary")
-}
-
-// A tiny dynamic-glibc binary to PACK in the sink/profile tests — they exercise the
-// delivery/config logic, not the binary itself. `/usr/bin/id` (~50 KB) packs almost
-// instantly, whereas packing the ~130 MB debug binary dominated their runtime (30–45s
-// each in CI). Returns None when absent so the test skips rather than panicking on a
-// minimal host (parity with tests/pack.rs::small_fixture).
-fn small_fixture() -> Option<&'static str> {
-    ["/usr/bin/id", "/bin/id"]
-        .into_iter()
-        .find(|p| std::path::Path::new(p).exists())
 }
 
 #[test]
