@@ -231,10 +231,16 @@ jobs:
         # silent run), and this was the gap. Resolve the id BEFORE the review: plugin name from
         # the manifest, style name from the output-style files.
         #
-        # The plugin agrees on both candidate rules at the pinned ref (the file is
-        # `simple-english.md` AND its frontmatter says `name: simple-english`), so this ref
-        # CANNOT show which one Claude Code keys on. The match below therefore demands BOTH,
-        # which is correct under either rule.
+        # BOTH halves of the id have two candidate keys, and the pinned checkout agrees on all
+        # four, so this ref cannot show which ones Claude Code uses. The checks below therefore
+        # demand both keys on each half, which is correct under any rule:
+        #   plugin  -> manifest `.name` AND the checkout directory's basename
+        #   style   -> frontmatter `name:` AND the file's stem
+        # The directory key matters most. If the MANIFEST name moves upstream this step goes
+        # red either way, which is a correct outcome. If REVIEW_PLUGIN_PATH moves, the manifest
+        # is unchanged inside whatever directory it now names, so a manifest-only check stays
+        # GREEN while a directory-keyed rule stops resolving the id -- the silent class again,
+        # and one word away since that path was centralized.
         env:
           STYLE: ${{ env.REVIEW_OUTPUT_STYLE }}
           PLUGIN_DIR: ${{ github.workspace }}/${{ env.REVIEW_PLUGIN_PATH }}
@@ -253,8 +259,9 @@ jobs:
             exit 1
           fi
           have_plugin=$(jq -r '.name // empty' "$manifest")
-          if [ "$have_plugin" != "$want_plugin" ]; then
-            echo "::error::plugin manifest declares name '$have_plugin', but the style id asks for '$want_plugin'"
+          have_dir=$(basename "$PLUGIN_DIR")
+          if [ "$have_plugin" != "$want_plugin" ] || [ "$have_dir" != "$want_plugin" ]; then
+            echo "::error::plugin resolves as manifest name '$have_plugin' / directory '$have_dir', but the style id asks for '$want_plugin'"
             exit 1
           fi
 
