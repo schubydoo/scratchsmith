@@ -201,6 +201,18 @@ pub struct Resolution {
     pub edges: Vec<DepEdge>,
 }
 
+impl Resolution {
+    /// The loader's image path, rendered for a report. `None` when the ELF carries no
+    /// `PT_INTERP`. Both the `pack` and `graph` reports publish this under the same
+    /// `interpreter` JSON key, and a consumer can compare the two, so they render it once
+    /// here rather than each spelling it out.
+    pub fn interpreter_path(&self) -> Option<String> {
+        self.interpreter
+            .as_ref()
+            .map(|i| i.image_path.display().to_string())
+    }
+}
+
 /// Supplies the dynamic-linking facts for a file. Abstracted so the search order
 /// can be tested against scripted dependency graphs without building real ELFs.
 pub trait LinkInfoSource {

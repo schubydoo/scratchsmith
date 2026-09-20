@@ -56,7 +56,8 @@ scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate f
 
 The report names the loader the image carries, because the binary's `PT_INTERP` chooses that
 path and not scratchsmith. `--format json` carries it as `interpreter`, so a job can assert it
-without unpacking the image. A static binary has no loader, and the field is null.
+without unpacking the image. An ELF that carries no `PT_INTERP` reports null, which is the
+case for a static binary.
 
 ```sh
 scratchsmith pack --format json ./app | jq -e '.interpreter == "/lib64/ld-linux-x86-64.so.2"'

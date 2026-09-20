@@ -58,8 +58,11 @@ pub struct PackReport {
     /// Entrypoint path inside the image.
     pub entrypoint: String,
     /// The dynamic loader the image carries, at the path the kernel will exec (`PT_INTERP`).
-    /// `None` for a static binary, which needs no loader. Recorded so a build can assert
-    /// which loader shipped without unpacking the image.
+    /// `None` exactly when the ELF carries no `PT_INTERP`, which is the case for a static
+    /// binary. That is NOT the same as "not dynamic": `ElfInfo::linking` calls an object with
+    /// `DT_NEEDED` entries and no interpreter dynamic, so a shared object reports `None` here
+    /// while its libraries still ship. Recorded so a build can assert which loader shipped
+    /// without unpacking the image.
     pub interpreter: Option<String>,
     /// Per-file and total payload sizes.
     pub size: SizeReport,
@@ -83,7 +86,7 @@ impl PackReport {
             out.push_str(&format!("warning: {w}\n"));
         }
         // The loader is the one staged file whose path the kernel, not scratchsmith, chose.
-        // Naming it makes a pack self-documenting; a static binary has none to name.
+        // Naming it makes a pack self-documenting; an ELF with no PT_INTERP has none to name.
         if let Some(interp) = &self.interpreter {
             out.push_str(&format!("loader {interp}\n"));
         }
@@ -589,9 +592,10 @@ mod tests {
     }
 
     #[test]
-    fn a_static_binary_reports_no_loader() {
-        // A static binary has no PT_INTERP, so there is no loader to name. The JSON says
-        // null rather than an empty string, and the text says nothing at all.
+    fn an_elf_with_no_pt_interp_reports_no_loader() {
+        // No PT_INTERP means no loader to name, which is the static-binary case and also a
+        // shared object. The JSON says null rather than an empty string, and the text says
+        // nothing at all.
         let mut r = sample_report();
         r.interpreter = None;
         assert!(!r.to_text().contains("loader"));

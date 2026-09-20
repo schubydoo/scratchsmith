@@ -114,8 +114,10 @@ fn check_lib_policy(
 }
 
 /// What `build_rootfs` produced. A struct rather than a tuple because the pieces are
-/// unrelated to each other and every sink threads all of them into its report.
-struct Rootfs {
+/// unrelated to each other and every sink threads all of them into its report. Named
+/// `StagedRootfs`, not `Rootfs`: `Sink::Rootfs` in this module is the sink that stages a
+/// rootfs and builds no image, and `stage_for_image` (an image sink) destructures this.
+struct StagedRootfs {
     tree: StagedTree,
     size: SizeReport,
     warnings: Vec<String>,
@@ -126,7 +128,7 @@ struct Rootfs {
 // Resolve `binary` and build its complete rootfs (libs, loader, cache, NSS/passwd
 // includes) under `dest`, optionally stripping. The shared core of every pack path.
 // Returns the tree, the size report, the loader path and any include warnings (no printing).
-fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Rootfs> {
+fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<StagedRootfs> {
     let info = resolver::read_elf_info(binary)?;
     // Reject musl up front rather than staging a subtly broken image (Task 2.5).
     resolver::ensure_glibc(&info)?;
@@ -173,14 +175,12 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Rootfs
         &opts.deny,
     )?;
     let sizes = stager::strip_and_measure(dest, &tree, &resolution, opts.strip, opts.upx)?;
-    Ok(Rootfs {
+    let interpreter = resolution.interpreter_path();
+    Ok(StagedRootfs {
         tree,
         size: sizes,
         warnings,
-        interpreter: resolution
-            .interpreter
-            .as_ref()
-            .map(|i| i.image_path.display().to_string()),
+        interpreter,
     })
 }
 
@@ -351,7 +351,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
     if opts.smoke {
         bail!("--smoke needs a built image, so it isn't supported with --no-build; drop --smoke, or set `smoke = false` in the profile");
     }
-    let Rootfs {
+    let StagedRootfs {
         tree,
         size,
         mut warnings,
@@ -403,7 +403,7 @@ struct StagedImage {
 fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
     let work = tempfile::tempdir()?;
     let dest = work.path().join("rootfs");
-    let Rootfs {
+    let StagedRootfs {
         tree,
         size,
         mut warnings,

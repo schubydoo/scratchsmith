@@ -57,10 +57,7 @@ pub fn build(binary: &Path, includes: &[String]) -> Result<DepGraphReport> {
 
     Ok(DepGraphReport {
         root: root_id,
-        interpreter: resolution
-            .interpreter
-            .as_ref()
-            .map(|i| i.image_path.display().to_string()),
+        interpreter: resolution.interpreter_path(),
         nodes,
         missing: resolution.missing,
     })
