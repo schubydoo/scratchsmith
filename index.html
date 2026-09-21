@@ -10,9 +10,7 @@
     the JS/meta redirect to the default version. Mirror the homepage title +
     social card here so the bare root unfurls correctly. Wired in via docs.yml
     `mike set-default --template mike/redirect.html`. URLs are absolute and point
-    at the `latest` alias, which resolves to the newest release once one is cut;
-    before the first release the image 404s (only `dev/` exists) while title +
-    description still unfurl — it self-heals on release.
+    at the `latest` alias, which the newest release re-points on every cut.
   -->
   <title>Scratchsmith — daemonless supply-chain packager</title>
   <meta name="description" content="Package a prebuilt dynamic Linux binary into a minimal, non-root FROM scratch OCI image — no Dockerfile, no static linking.">
