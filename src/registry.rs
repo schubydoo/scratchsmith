@@ -40,10 +40,7 @@ pub fn push_to_registry(
 
     let layers = vec![ImageLayer::oci_v1_gzip(built.layer.gzip, None)];
     let config = OciConfig::oci_v1(built.config_bytes, None);
-    let client = Client::new(ClientConfig {
-        protocol: registry_protocol(&endpoint),
-        ..Default::default()
-    });
+    let client = registry_client(&endpoint)?;
 
     // oci-client is async; run one scoped current-thread runtime for the identity-token
     // exchange (if any) and the push, rather than making the whole CLI async.
@@ -141,10 +138,7 @@ pub fn push_index(target: &str, sources: &[String]) -> Result<IndexOutcome> {
     )?);
     let endpoint = target_ref.resolve_registry().to_string();
     let repository = target_ref.repository().to_string();
-    let client = Client::new(ClientConfig {
-        protocol: registry_protocol(&endpoint),
-        ..Default::default()
-    });
+    let client = registry_client(&endpoint)?;
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -562,6 +556,28 @@ fn registry_scheme(registry: &str) -> &'static str {
     } else {
         "https"
     }
+}
+
+/// Build the oci-client for `endpoint`, reporting a failure instead of dying on it.
+///
+/// NOT `Client::new`. That swallows the builder error, logs it through `log` (which this CLI
+/// installs no subscriber for, so it goes nowhere), and falls back to `Client::default()` —
+/// whose `reqwest::Client::default()` PANICS on the very failure it just caught. On a host with
+/// no CA certificate store, which is most minimal containers and every `FROM scratch` image,
+/// `scratchsmith index` died with SIGSEGV and no message. `try_from` is the same construction
+/// with the error handed back.
+fn registry_client(endpoint: &str) -> Result<Client> {
+    Client::try_from(ClientConfig {
+        protocol: registry_protocol(endpoint),
+        ..Default::default()
+    })
+    .with_context(|| {
+        format!(
+            "building the HTTPS client for {endpoint}; if this names CA certificates, the \
+             environment has no trust store (a FROM scratch or distroless image), so install \
+             ca-certificates or set SSL_CERT_FILE"
+        )
+    })
 }
 
 // Plain-HTTP for a localhost registry (matching Docker's insecure-localhost default),
