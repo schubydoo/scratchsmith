@@ -69,7 +69,7 @@ jobs:
           persist-credentials: false
       # Release download, dist/ layout, buildx, cosign and the GHCR login. Shared with the
       # toolbox job below, which repeated every line of it.
-      - uses: ./.github/actions/release-image-setup
+      - uses: $/.github/actions/release-image-setup
         with:
           ghcr-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Image tags
@@ -114,7 +114,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true # SLSA provenance attestation in the registry
           sbom: true
-      - uses: ./.github/actions/sign-and-verify
+      - uses: $/.github/actions/sign-and-verify
         with:
           digest: ${{ steps.build.outputs.digest }}
 
@@ -142,7 +142,7 @@ jobs:
           persist-credentials: false
       # Same shared setup as the image job. qemu: true because this image's arm64 leg RUNs
       # `apk add`, where the FROM scratch image is COPY-only.
-      - uses: ./.github/actions/release-image-setup
+      - uses: $/.github/actions/release-image-setup
         with:
           ghcr-token: ${{ secrets.GITHUB_TOKEN }}
           qemu: "true"
@@ -196,6 +196,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true # SLSA provenance attestation in the registry
           sbom: true
-      - uses: ./.github/actions/sign-and-verify
+      - uses: $/.github/actions/sign-and-verify
         with:
           digest: ${{ steps.build.outputs.digest }}
