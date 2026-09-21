@@ -506,3 +506,120 @@ fn config_smoke_with_no_build_fails_loud() {
         "got: {stderr}"
     );
 }
+
+#[test]
+fn a_label_without_an_equals_sign_warns_but_still_packs() {
+    // The deprecation contract: the old shape keeps working, the warning goes to stderr, and
+    // the exit code does not move. Run through the CLI because the warning is an eprintln!,
+    // not a report field. The OCI-archive sink needs no Docker.
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let archive = tmp.path().join("img.tar");
+    let out = run(&[
+        "pack",
+        "--label",
+        "build",
+        "--oci-archive",
+        archive.to_str().unwrap(),
+        bin,
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "pack should still succeed: {stderr}");
+    assert!(archive.exists(), "archive not written");
+    assert!(
+        stderr.contains("label `build` has no `=`") && stderr.contains("2.0 rejects it"),
+        "label deprecation warning missing from stderr: {stderr}"
+    );
+}
+
+#[test]
+fn an_env_entry_without_an_equals_sign_warns_but_still_packs() {
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let archive = tmp.path().join("img.tar");
+    let out = run(&[
+        "pack",
+        "--env",
+        "LOG_LEVEL",
+        "--oci-archive",
+        archive.to_str().unwrap(),
+        bin,
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "pack should still succeed: {stderr}");
+    assert!(
+        stderr.contains("env entry `LOG_LEVEL` has no `=`") && stderr.contains("2.0 rejects it"),
+        "env deprecation warning missing from stderr: {stderr}"
+    );
+}
+
+#[test]
+fn a_label_with_an_equals_sign_is_quiet() {
+    // The warning must not fire on the shape we are steering people towards, including the
+    // deliberate empty value `build=`.
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let archive = tmp.path().join("img.tar");
+    let out = run(&[
+        "pack",
+        "--label",
+        "build=ci",
+        "--label",
+        "empty=",
+        "--env",
+        "LOG_LEVEL=info",
+        "--oci-archive",
+        archive.to_str().unwrap(),
+        bin,
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "pack should succeed: {stderr}");
+    assert!(
+        !stderr.contains("has no `=`"),
+        "a well-formed pair must not warn: {stderr}"
+    );
+}
+
+#[test]
+fn a_nested_profile_warns_but_still_packs() {
+    // [profile.a.profile.b] parses and is then dropped, so the keys inside never apply.
+    // Warn, keep packing, leave the exit code alone.
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("scratchsmith.toml");
+    std::fs::write(
+        &cfg,
+        format!("binary = \"{bin}\"\n\n[profile.release]\nstrip = true\n\n[profile.release.profile.signed]\nstrip = false\n"),
+    )
+    .unwrap();
+    let rootfs = tmp.path().join("rootfs");
+    let out = run(&[
+        "pack",
+        "--config",
+        cfg.to_str().unwrap(),
+        "--profile",
+        "release",
+        "--no-build",
+        "-o",
+        rootfs.to_str().unwrap(),
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "pack should still succeed: {stderr}");
+    assert!(
+        stderr.contains("nested profile under [profile.release]")
+            && stderr.contains("2.0 rejects it"),
+        "nested-profile warning missing from stderr: {stderr}"
+    );
+}

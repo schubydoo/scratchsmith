@@ -85,6 +85,7 @@ nav:
   - Usage: usage.md
   - GitHub Action: github-action.md
   - Configuration: configuration.md
+  - Deprecations: deprecations.md
   - Verifying releases: verifying.md
   - Comparison & limitations: comparison.md
   - Architecture: architecture.md

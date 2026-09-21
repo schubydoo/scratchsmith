@@ -452,6 +452,18 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         }
     }
 
+    // A bare name is accepted today: the label lands with an empty value, and the env entry
+    // breaks the KEY=VALUE form the OCI image config specifies. 2.0 rejects both, and
+    // COMPATIBILITY.md wants the warning a major line ahead of the rejection. Exit code
+    // unchanged. Both lists also carry `labels`/`env` read from scratchsmith.toml, so the
+    // text names the value rather than the flag.
+    for entry in cfg.labels.iter().filter(|e| !e.contains('=')) {
+        eprintln!("warning: label `{entry}` has no `=`, so it lands with an empty value; scratchsmith 2.0 rejects it. Write `{entry}=<value>`.");
+    }
+    for entry in cfg.env.iter().filter(|e| !e.contains('=')) {
+        eprintln!("warning: env entry `{entry}` has no `=`, so the image carries something that is not KEY=VALUE; scratchsmith 2.0 rejects it. Write `{entry}=<value>`.");
+    }
+
     let tag = image_tag(binary);
     Ok(StagedImage {
         _work: work,
