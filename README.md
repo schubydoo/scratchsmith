@@ -44,6 +44,8 @@ build. It is purpose-built for the hard case and useful for the easy one.
 
 ## What works today
 
+<!-- --8<-- [start:capabilities] -->
+
 | Capability | State |
 |---|---|
 | Pack a dynamic glibc ELF → runnable `FROM scratch` image | ✅ (loaded via `docker`/`podman`/`nerdctl`) |
@@ -66,8 +68,8 @@ build. It is purpose-built for the hard case and useful for the easy one.
 | Configuration file (`scratchsmith.toml`) + named profiles (`--profile`), JSON output (`--format json`) | ✅ |
 | **Pluggable runtime**: `--runtime` (docker / podman / nerdctl) for the default load sink | ✅ |
 | Shell completions: `--completions <bash\|zsh\|fish>` | ✅ |
-| **Signed releases**: amd64 + arm64 binaries, cosign-signed `checksums.txt` + SLSA provenance, signed multi-arch GHCR image | ✅ ([verify](docs/verifying.md)) |
-| **`:toolbox` image**: a runnable image (Wolfi + the full toolchain) that runs `pack` *inside* a container | ✅ ([usage](docs/usage.md)) |
+| **Signed releases**: amd64 + arm64 binaries, cosign-signed `checksums.txt` + SLSA provenance, signed multi-arch GHCR image | ✅ |
+| **`:toolbox` image**: a runnable image (Wolfi + the full toolchain) that runs `pack` *inside* a container | ✅ |
 | Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc comes first, and a musl backend is a future goal) |
 | **Daemonless OCI archive**: `--oci-archive <file>` (no daemon, and skopeo/buildah/registry-ready) | ✅ |
 | **Daemonless registry push**: `--push <ref>` (no daemon, and it uses your docker credentials) | ✅ |
@@ -75,6 +77,11 @@ build. It is purpose-built for the hard case and useful for the easy one.
 | **Multi-arch image index**: `index` (combine per-arch pushes into one tag, daemonless) | ✅ |
 | **Image diff**: `diff <a> <b>` (files added, removed and changed, plus the size delta, and `--exit-code` gates CI) | ✅ |
 | **Unpack an OCI image**: `unpack <archive> <dir>` (extract the layers to audit an image you did not build) | ✅ |
+
+<!-- --8<-- [end:capabilities] -->
+
+For a release's signatures and provenance, see [Verifying releases](docs/verifying.md).
+To run `pack` inside a container, see the `:toolbox` section of [Usage](docs/usage.md).
 
 ## Install
 

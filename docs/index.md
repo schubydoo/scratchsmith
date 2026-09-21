@@ -35,37 +35,8 @@ report, a non-root image, and no Dockerfile, it is equally handy. More:
 
 ## What works today
 
-| Capability | State |
-|---|---|
-| Pack a dynamic glibc ELF → runnable `FROM scratch` image | ✅ (loaded via `docker`/`podman`/`nerdctl`) |
-| `ld.so`-faithful dependency resolution (RPATH/RUNPATH/`$ORIGIN`, interpreter, sonames) | ✅ |
-| glibc **NSS** support staged, so name-service lookups like `getent hosts` work. Trim the modules with `--nss` | ✅ |
-| **Non-root** by default (UID 65532), reproducible layers | ✅ |
-| **SBOM** generation: `--sbom` (CycloneDX or SPDX, via syft) | ✅ |
-| **Vulnerability scan**: `--scan` (grype), gate with `--scan-fail-on <severity>` | ✅ |
-| **ELF hardening lint**: `lint` (PIE/RELRO/NX/canary/FORTIFY), gate with `--fail-on` | ✅ |
-| **Library policy gate**: `pack --deny`/`--require <soname>` (a forbidden or missing library fails the pack) | ✅ |
-| `dlopen` gap **detection** + `--include` escape hatch | ✅ |
-| **Dependency graph**: `graph` (the resolved dependency tree, ASCII or `--format json`) | ✅ |
-| Symbol strip (`--strip`), UPX compression (`--upx`), size report, smoke-run (`--smoke`) | ✅ |
-| Image **size budget**: `--max-size <SIZE>` (if the staged image exceeds the budget, the build fails) | ✅ |
-| Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`) | ✅ |
-| **Add host files**: `--add-file SRC[:DST]` (copy any host file into the image) | ✅ |
-| **Locale data**: `--locale NAME` (stage one compiled glibc locale, never the host archive) | ✅ |
-| **Symlink modes**: `--symlinks` (keep a named symlink as a link, or flatten it) | ✅ |
-| Image metadata: labels (`--label`), `HEALTHCHECK` (`--healthcheck`) | ✅ |
-| Configuration file (`scratchsmith.toml`) + named profiles (`--profile`), JSON output (`--format json`) | ✅ |
-| **Pluggable runtime**: `--runtime` (docker / podman / nerdctl) for the default load sink | ✅ |
-| Shell completions: `--completions <bash\|zsh\|fish>` | ✅ |
-| **Signed releases**: amd64 + arm64 binaries, cosign-signed `checksums.txt` + SLSA provenance, signed multi-arch GHCR image | ✅ ([verify](verifying.md)) |
-| **`:toolbox` image**: a runnable image (Wolfi + the full toolchain) that runs `pack` *inside* a container | ✅ ([usage](usage.md)) |
-| Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc comes first, and a musl backend is a future goal) |
-| **Daemonless OCI archive**: `--oci-archive <file>` (no daemon, and skopeo/buildah/registry-ready) | ✅ |
-| **Daemonless registry push**: `--push <ref>` (no daemon, and it uses your docker credentials) | ✅ |
-| **Signing the image `pack` produces**: `--push --sign` (cosign keyless, by digest) | ✅ |
-| **Multi-arch image index**: `index` (combine per-arch pushes into one tag, daemonless) | ✅ |
-| **Image diff**: `diff <a> <b>` (files added, removed and changed, plus the size delta, and `--exit-code` gates CI) | ✅ |
-| **Unpack an OCI image**: `unpack <archive> <dir>` (extract the layers to audit an image you did not build) | ✅ |
+<!-- The capability table lives in README.md; mkdocs pulls it in via pymdownx.snippets. -->
+--8<-- "README.md:capabilities"
 
 ## Next
 

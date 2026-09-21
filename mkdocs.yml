@@ -64,7 +64,13 @@ markdown_extensions:
       permalink: true
   - pymdownx.details
   - pymdownx.inlinehilite
-  - pymdownx.snippets
+  # base_path reaches the repo root so docs/index.md can include the capability table from
+  # README.md. README is the one copy on purpose: GitHub renders it natively and ignores the
+  # HTML-comment section markers, whereas a snippet directive in README would render as literal
+  # text there. check_paths makes a moved or renamed snippet a build failure, not a silent gap.
+  - pymdownx.snippets:
+      base_path: ['.', 'docs']
+      check_paths: true
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.superfences:
