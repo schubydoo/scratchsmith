@@ -39,13 +39,15 @@ that loses a tool then reports a green suite having run nothing.
 
 Six tools are strict in CI: `cc`, `strip`, `upx`, Docker, `getent` and `/usr/bin/id`. A missing
 one **fails** the test instead of skipping it. The workflow installs or guarantees all six, so a
-miss there is a broken runner. If the `CI` environment variable holds anything other than `false` or
-`0`, the strict gate turns on.
+miss there is a broken runner. If the `CI` environment variable holds anything other than an opt-out
+word, the strict gate turns on. The opt-out words are `0`, `false`, `no`, `off` and the empty
+string, in any case.
 
 `musl-gcc`, `tini`, the `registry:2` pull and the host locale sources stay optional everywhere.
 
 If your own machine has `CI` set for an unrelated reason, set `SCRATCHSMITH_NO_CI_GATE=1` to
-get the local behavior back. The gate lives in `tests/common/mod.rs`.
+get the local behavior back. That variable reads by the same opt-out words, so an empty value
+does not turn the gate off. The gate lives in `tests/common/mod.rs`.
 
 One tool is neither required nor skipped: **`syft`**. Its `--sbom` test runs in both cases.
 With `syft` present, the test asserts success. With `syft` absent, it asserts a clean

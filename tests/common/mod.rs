@@ -134,7 +134,7 @@ pub fn skip_required(reason: &str) {
 
 /// Report that a test cannot run, for a thing CI does not guarantee. Skips everywhere.
 ///
-/// Three shapes, all seven sites covered:
+/// Three shapes:
 ///
 /// - **Absent on the runner.** `musl-gcc` and `tini` are absent on `ubuntu-latest` and no
 ///   workflow step adds them, proven by CI run 35544425984: both gated tests returned in 0.05s
@@ -148,15 +148,26 @@ pub fn skip_optional(reason: &str) {
     eprintln!("skipping: {reason}");
 }
 
-// GitHub Actions sets CI=true. Read the VALUE, not just presence: `CI=false` is a deliberate
-// opt-out in several toolchains, and a developer who set it does not want the strict gate.
-// `SCRATCHSMITH_NO_CI_GATE` is the documented escape hatch (`CONTRIBUTING.md`), for a machine
-// that has CI set for an unrelated reason.
+// GitHub Actions sets CI=true. `SCRATCHSMITH_NO_CI_GATE` is the documented escape hatch
+// (`CONTRIBUTING.md`), for a machine that has CI set for an unrelated reason.
+//
+// Both go through one value test, because presence is wrong in BOTH directions. `CI=false` is a
+// deliberate opt-out in several toolchains, so presence would hand someone the strict gate they
+// were avoiding. An empty `SCRATCHSMITH_NO_CI_GATE`, which is what a workflow writes for an
+// unset input, would turn the gate off with no signal at all, quietly re-opening the hole this
+// module exists to close.
 fn in_ci() -> bool {
-    if std::env::var_os("SCRATCHSMITH_NO_CI_GATE").is_some() {
-        return false;
+    env_truthy("CI") && !env_truthy("SCRATCHSMITH_NO_CI_GATE")
+}
+
+/// Is `name` set to something other than an opt-out word? Unset, empty, `0`, `false`, `no` and
+/// `off` are all false, in any case and ignoring surrounding space.
+fn env_truthy(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "no" | "off"
+        ),
+        Err(_) => false,
     }
-    std::env::var("CI")
-        .map(|v| !matches!(v.as_str(), "" | "0" | "false" | "False" | "FALSE"))
-        .unwrap_or(false)
 }
