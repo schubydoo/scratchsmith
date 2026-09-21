@@ -1,7 +1,6 @@
 //! Stage a resolved binary into a rootfs: place the loader, libraries, and binary
 //! at the paths the runtime expects, recreate soname symlinks, and regenerate the
 //! loader cache. Consumes the [`Resolution`] produced by [`crate::resolver`].
-//! See Tasks 1.4-1.5.
 
 use crate::resolver::Resolution;
 use anyhow::{bail, Context, Result};

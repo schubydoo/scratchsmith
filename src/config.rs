@@ -1,5 +1,5 @@
 //! Load `scratchsmith.toml`, optionally select a `[profile.<name>]`, and merge with CLI
-//! flags (flags win). See Tasks 2.6 and 5.5.
+//! flags (flags win).
 
 use crate::supplychain::{SbomFormat, Severity};
 use anyhow::{bail, Context, Result};

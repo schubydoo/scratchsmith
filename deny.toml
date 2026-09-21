@@ -1,4 +1,4 @@
-# cargo-deny configuration (TAD §6 supply-chain gate). The license allow-list
+# cargo-deny configuration: the supply-chain gate. The license allow-list
 # covers scratchsmith's current dependency tree (clap, goblin, tar, flate2,
 # sha2, serde, toml, walkdir, tempfile, anyhow, …); extend as deps land.
 
