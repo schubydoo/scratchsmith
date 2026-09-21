@@ -691,7 +691,7 @@ fn a_registry_command_without_a_ca_store_fails_instead_of_panicking() {
     assert_eq!(code, 1, "expected a plain failure exit: {stderr}");
     assert!(!stderr.contains("panicked"), "must not panic: {stderr}");
     assert!(
-        stderr.contains("building the HTTPS client for ghcr.io")
+        stderr.contains("building the registry client for ghcr.io")
             && stderr.contains("no trust store"),
         "the error must name the cause and the fix: {stderr}"
     );
