@@ -12,11 +12,13 @@
         <meta name="author" content="schubydoo">
       
       
-        <link rel="canonical" href="https://schubydoo.github.io/scratchsmith/dev/architecture/">
+        <link rel="canonical" href="https://schubydoo.github.io/scratchsmith/dev/deprecations/">
       
       
-        <link rel="prev" href="../comparison/">
+        <link rel="prev" href="../configuration/">
       
+      
+        <link rel="next" href="../verifying/">
       
       
         
@@ -29,7 +31,7 @@
   
     
       
-        <title>Architecture - Scratchsmith</title>
+        <title>Deprecations - Scratchsmith</title>
       
     
   
@@ -71,15 +73,15 @@
   
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Scratchsmith">
-  <meta property="og:title" content="Architecture - Scratchsmith">
+  <meta property="og:title" content="Deprecations - Scratchsmith">
   <meta property="og:description" content="Package a prebuilt dynamic Linux binary into a minimal, non-root FROM scratch OCI image — no Dockerfile, no static linking.">
   <meta property="og:image" content="https://schubydoo.github.io/scratchsmith/dev/assets/og-card.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="Scratchsmith">
-  <meta property="og:url" content="https://schubydoo.github.io/scratchsmith/dev/architecture/">
+  <meta property="og:url" content="https://schubydoo.github.io/scratchsmith/dev/deprecations/">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Architecture - Scratchsmith">
+  <meta name="twitter:title" content="Deprecations - Scratchsmith">
   <meta name="twitter:description" content="Package a prebuilt dynamic Linux binary into a minimal, non-root FROM scratch OCI image — no Dockerfile, no static linking.">
   <meta name="twitter:image" content="https://schubydoo.github.io/scratchsmith/dev/assets/og-card.png">
   <meta name="twitter:image:alt" content="Scratchsmith">
@@ -103,7 +105,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#architecture" class="md-skip">
+        <a href="#deprecations" class="md-skip">
           Skip to content
         </a>
       
@@ -152,7 +154,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Architecture
+              Deprecations
             
           </span>
         </div>
@@ -431,10 +433,37 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../deprecations/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deprecations
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -450,6 +479,76 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#deprecated-input-shapes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deprecated input shapes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Deprecated input shapes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-label-or-an-environment-variable-with-no-equals-sign" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A label or an environment variable with no equals sign
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-nested-profile-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A nested profile table
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tolerances-ending-in-20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tolerances ending in 2.0
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -512,37 +611,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
         
   
   
@@ -558,48 +630,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How it works
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#stability" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Stability
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -712,21 +742,49 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
+  <a href="#deprecated-input-shapes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        How it works
+        Deprecated input shapes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Deprecated input shapes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-label-or-an-environment-variable-with-no-equals-sign" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A label or an environment variable with no equals sign
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#stability" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#a-nested-profile-table" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Stability
+        A nested profile table
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tolerances-ending-in-20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tolerances ending in 2.0
       
     </span>
   </a>
@@ -753,37 +811,87 @@
   
 
 
-<h1 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h1>
-<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
-<ol>
-<li><strong>Resolve</strong>: emulate the <code>ld.so</code> search order from the ELF itself (RPATH is transitive,
-   RUNPATH is not, <code>$ORIGIN</code> is per-object). It never scrapes the host's <code>ldd</code>, <code>ld.so.cache</code>,
-   or <code>LD_LIBRARY_PATH</code>, so the result is deterministic.</li>
-<li><strong>Stage</strong>: copy the interpreter to its verbatim path, mirror the libraries, recreate
-   versioned-soname symlinks, regenerate <code>ld.so.cache</code>, and add the glibc NSS pieces.</li>
-<li><strong>Assemble</strong>: build a non-root image with reproducible layers (sorted entries, zeroed
-   mtime/uid/gid). The uncompressed <code>diff_id</code> and the gzip layer digest are computed
-   separately, which avoids the classic unpullable-image bug.</li>
-</ol>
-<h2 id="stability">Stability<a class="headerlink" href="#stability" title="Permanent link">&para;</a></h2>
-<p>Scratchsmith follows <a href="https://semver.org/">Semantic Versioning</a>. As of <strong>1.0</strong>, these surfaces are a
-stable contract. A breaking change to any of them requires a new major version:</p>
-<ul>
-<li><strong>CLI flags</strong>: the names and meaning of <code>pack</code> / <code>lint</code> / <code>doctor</code> / <code>index</code> / <code>graph</code> / <code>diff</code> /
-  <code>unpack</code> flags, and the top-level <code>--completions</code>. New flags arrive in minor releases. A removed
-  or renamed flag, or a changed default, is a major change.</li>
-<li><strong><code>scratchsmith.toml</code></strong>: the configuration keys and their types (the <a href="../configuration/">Configuration</a> reference).</li>
-<li><strong><code>--format json</code></strong>: the field names and types of the <code>pack</code>, <code>index</code>, <code>graph</code>, <code>diff</code>, and <code>unpack</code>
-  reports (the schema CI gates consume). Each is pinned by a golden test, so a change is always deliberate.</li>
-<li><strong>Exit codes</strong>: <code>0</code> on success, <code>2</code> on an argument-parse error, and non-zero on any other failure.</li>
-</ul>
-<p><strong>Not</strong> frozen (these can change in any release): human-readable text and warning wording, log
-output, <code>doctor</code>'s exact phrasing, the Rust <strong>library API</strong>, and the exact bytes of the produced
-image. The crate's <code>pub</code> items exist for its own tests, not as a supported API. Layers stay
-reproducible for identical inputs, but that is a property, not a frozen API.</p>
-<p><strong><a href="https://github.com/schubydoo/scratchsmith/blob/main/COMPATIBILITY.md">COMPATIBILITY.md</a></strong> covers
-how the contract changes over time. It describes the deprecation cycle (keep it working, warn on
-stderr, remove only in the next major), and how a test guards each surface.</p>
+<h1 id="deprecations">Deprecations<a class="headerlink" href="#deprecations" title="Permanent link">&para;</a></h1>
+<p>Scratchsmith keeps the version 1.0 contract in
+<a href="https://github.com/schubydoo/scratchsmith/blob/main/COMPATIBILITY.md">COMPATIBILITY.md</a>.
+Nothing on that contract disappears without notice. This page lists everything on the way out,
+and what you write instead.</p>
+<p>This page has two lists, because two different things end in a major version.</p>
+<p>A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
+standard error, and exits with the same code as before. The next major version refuses it.</p>
+<p>A tolerance is different. Scratchsmith accepts input today that it cannot use, and says nothing.
+The next major version reports it as an error. A tolerance is not a deprecation, because there
+is no warning to act on yet.</p>
+<h2 id="deprecated-input-shapes">Deprecated input shapes<a class="headerlink" href="#deprecated-input-shapes" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Deprecated in</th>
+<th>Removed in</th>
+<th>Write this instead</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--label NAME</code> with no <code>=</code></td>
+<td>1.5.0</td>
+<td>2.0.0</td>
+<td><code>--label NAME=value</code></td>
+</tr>
+<tr>
+<td><code>--env NAME</code> with no <code>=</code></td>
+<td>1.5.0</td>
+<td>2.0.0</td>
+<td><code>--env NAME=value</code></td>
+</tr>
+<tr>
+<td>A nested <code>[profile.a.profile.b]</code> table</td>
+<td>1.5.0</td>
+<td>2.0.0</td>
+<td>A top-level <code>[profile.b]</code> table</td>
+</tr>
+</tbody>
+</table>
+<h3 id="a-label-or-an-environment-variable-with-no-equals-sign">A label or an environment variable with no equals sign<a class="headerlink" href="#a-label-or-an-environment-variable-with-no-equals-sign" title="Permanent link">&para;</a></h3>
+<p><code>--label</code> and <code>--env</code> take a <code>NAME=value</code> pair. Scratchsmith accepts a bare name.</p>
+<p>A bare <code>--label build</code> writes the label <code>build</code> with an empty value. That is legal in an image
+configuration, and it is almost never what you meant. A bare <code>--env build</code> is worse: the OCI image
+specification defines <code>Env</code> as a list of <code>KEY=VALUE</code> strings, so an entry with no <code>=</code> is not a
+valid environment variable. A runtime can drop it, or pass it on as a name with no value.</p>
+<p>A bare <code>--env PATH</code> is worse than a stray entry. Scratchsmith keys each entry on the text before
+the first <code>=</code>, so <code>PATH</code> matches the default <code>PATH</code> entry and replaces it. The image then ships
+with no usable <code>PATH</code> at all.</p>
+<p>The same applies to the <code>label</code> and <code>env</code> keys in <code>scratchsmith.toml</code>, which take the same
+strings.</p>
+<p>Add the <code>=</code> and the value you meant:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--label<span class="w"> </span><span class="nv">build</span><span class="o">=</span>ci<span class="w"> </span>--env<span class="w"> </span><span class="nv">LOG_LEVEL</span><span class="o">=</span>info<span class="w"> </span>./myapp
+</code></pre></div>
+<p>To set an empty value on purpose, write the <code>=</code> and stop there: <code>--label build=</code>.</p>
+<h3 id="a-nested-profile-table">A nested profile table<a class="headerlink" href="#a-nested-profile-table" title="Permanent link">&para;</a></h3>
+<p>A profile is a <code>[profile.&lt;name&gt;]</code> table that layers over the base configuration. A profile can
+itself contain a <code>[profile.&lt;name&gt;]</code> table, because a profile has the same shape as the base
+configuration. Scratchsmith parses <code>[profile.a.profile.b]</code> and then drops it. No <code>--profile</code>
+value reaches it, so the keys inside it never apply.</p>
+<p>Move the inner table up to the top level:</p>
+<p>Before. The keys under <code>profile.release.profile.signed</code> never apply:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">[profile.release]</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="k">[profile.release.profile.signed]</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/me/app:latest"</span>
+</code></pre></div>
+<p>After. <code>--profile signed</code> now reaches them:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">[profile.release]</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="k">[profile.signed]</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/me/app:latest"</span>
+</code></pre></div>
+<p>Profiles do not inherit from each other, so repeat the keys the inner table relied on.</p>
+<h2 id="tolerances-ending-in-20">Tolerances ending in 2.0<a class="headerlink" href="#tolerances-ending-in-20" title="Permanent link">&para;</a></h2>
+<p>This list is empty today.</p>
 
 
 
