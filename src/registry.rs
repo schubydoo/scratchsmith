@@ -10,9 +10,9 @@ use oci_client::manifest::OciImageIndex;
 use oci_client::secrets::RegistryAuth;
 use oci_client::{Client, Reference};
 
-/// Push the assembled image straight to a registry — **no Docker daemon**.
-/// The config + layer blobs and the manifest go up over HTTPS; oci-client HEAD-skips any
-/// blob the registry already has. Credentials come from the local Docker config
+/// Push the assembled image straight to a registry — **no Docker daemon**. The config and
+/// layer blobs and the manifest go up over HTTPS; oci-client HEAD-skips any blob the
+/// registry already has. Credentials come from the local Docker config
 /// (`~/.docker/config.json`, incl. credential helpers); a localhost registry is treated as
 /// plain-HTTP (matching Docker's insecure-localhost default), which also lets CI test
 /// against a local `registry:2`. Returns the pushed image's by-digest reference

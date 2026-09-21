@@ -501,8 +501,8 @@ pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
     })
 }
 
-/// Pack `binary` into a daemonless OCI-archive tarball at `out`. No Docker
-/// daemon is contacted; `docker load` / `skopeo copy oci-archive:<out>` accept the result.
+/// Pack `binary` into a daemonless OCI-archive tarball at `out`. No Docker daemon is
+/// contacted; `docker load` / `skopeo copy oci-archive:<out>` accept the result.
 fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackReport> {
     if opts.smoke {
         bail!("--smoke needs a running image, so it isn't supported with --oci-archive; load the archive (docker load / skopeo) and run it separately, or drop --smoke");
@@ -525,9 +525,9 @@ fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackR
     })
 }
 
-/// Pack `binary` and push it straight to a registry reference — no Docker
-/// daemon. Credentials come from the local Docker config; blobs the registry already has
-/// are skipped.
+/// Pack `binary` and push it straight to a registry reference — no Docker daemon.
+/// Credentials come from the local Docker config; blobs the registry already has are
+/// skipped.
 fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackReport> {
     if opts.smoke {
         bail!("--smoke needs a running image, so it isn't supported with --push; pull the pushed image and run it separately, or drop --smoke");

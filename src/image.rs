@@ -1,6 +1,6 @@
 //! Assemble the staged rootfs into a container image. Sinks: the local Docker daemon
-//! via a docker-archive tarball, and a daemonless **OCI archive**.
-//! Registry push (5.2) is next. Layers are reproducible (2.9).
+//! via a docker-archive tarball, a daemonless **OCI archive**, and a direct registry
+//! push. Layers are reproducible.
 
 use crate::stager::StagedTree;
 use anyhow::{bail, Context, Result};
@@ -9,8 +9,8 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
-/// User-configurable image metadata. Empty fields fall back to defaults:
-/// the entrypoint defaults to the packed binary, and PATH is always present.
+/// User-configurable image metadata. Empty fields fall back to defaults: the entrypoint
+/// defaults to the packed binary, and PATH is always present.
 #[derive(Debug, Clone, Default)]
 pub struct ImageConfig {
     /// Overrides the default entrypoint (the packed binary) when non-empty.

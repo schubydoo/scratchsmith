@@ -19,9 +19,9 @@ pub struct StagedTree {
     pub entrypoint: PathBuf,
 }
 
-/// Optional runtime files a user can inject. Unlike the always-on NSS
-/// includes, these are opt-in, and an explicit request that can't be satisfied is an
-/// error (the user asked for it), not a warning.
+/// Optional runtime files a user can inject. Unlike the always-on NSS includes, these
+/// are opt-in, and an explicit request that can't be satisfied is an error (the user
+/// asked for it), not a warning.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RuntimeExtras {
     /// TLS CA bundle at /etc/ssl/certs/ca-certificates.crt.

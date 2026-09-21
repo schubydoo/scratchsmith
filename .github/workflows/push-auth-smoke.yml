@@ -71,7 +71,7 @@ jobs:
           set -euo pipefail
           docker pull "$PUSH_REF"
           docker run --rm "$PUSH_REF"
-      # Prove the signature scratchsmith created actually verifies (AC 4.4). Identity is this
+      # Prove the signature scratchsmith created actually verifies. Identity is this
       # workflow via keyless OIDC; the regexp is ref-agnostic so it holds on any branch/tag.
       - name: Verify the signature with cosign
         run: |

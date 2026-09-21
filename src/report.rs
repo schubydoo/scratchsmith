@@ -43,8 +43,8 @@ pub fn human_size(bytes: u64) -> String {
     format!("{bytes} B")
 }
 
-/// The outcome of a pack, emitted as text or JSON. Fields are stable so
-/// the JSON can gate CI.
+/// The outcome of a pack, emitted as text or JSON. Fields are stable so the JSON can
+/// gate CI.
 #[derive(Debug, Clone, Serialize)]
 pub struct PackReport {
     /// Image tag when an image was built (loaded into Docker).
