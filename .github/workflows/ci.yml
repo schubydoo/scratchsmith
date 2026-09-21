@@ -94,6 +94,8 @@ jobs:
         with:
           tool: cargo-nextest
       # upx isn't preinstalled; the --upx pack tests skip without it (Task 5.3).
+      # ⚠️ Required by tests/common::skip_required — dropping this step FAILS the upx tests
+      # under CI rather than skipping them. That is the point: a skip reads as a pass.
       - name: Install upx
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends upx-ucl
       - name: Test (nextest → JUnit)
@@ -131,6 +133,7 @@ jobs:
       # writes lcov.info before the threshold check, so the upload still runs on a
       # floor failure.
       # upx isn't preinstalled; without it the --upx pack tests skip and their lines look uncovered.
+      # ⚠️ Required by tests/common::skip_required — see the note on the test job's copy.
       - name: Install upx
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends upx-ucl
       - name: Coverage (lcov + line floor)
