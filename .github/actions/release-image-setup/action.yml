@@ -1,0 +1,67 @@
+name: Release image setup
+description: >-
+  Download the published release tarballs for this tag, lay out dist/ for a Dockerfile, and
+  install buildx, cosign and a GHCR login. Shared by the `image` and `toolbox` jobs in
+  release.yml, which repeated all of it word for word.
+
+# The checkout stays in the CALLING job on purpose. A local action referenced by path only
+# exists on the runner once the repository is checked out, so it cannot check itself out.
+
+inputs:
+  ghcr-token:
+    description: >-
+      Token for the GHCR login. Passed in because a composite action cannot read the `secrets`
+      context; the caller supplies `secrets.GITHUB_TOKEN`.
+    required: true
+  qemu:
+    description: >-
+      Install QEMU for cross-arch emulation. The :toolbox image RUNs `apk add`, so its arm64 leg
+      needs it. The FROM scratch image is COPY-only and does not.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Download the published release tarballs
+      # Source the binaries from the release knope-release.yml published for this tag, so the
+      # image packs the exact signed artifacts users download.
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        TAG: ${{ github.ref_name }}
+      run: |
+        set -euo pipefail
+        mkdir -p artifacts
+        gh release download "$TAG" --pattern 'scratchsmith-*.tar.gz' --dir artifacts
+    - name: Lay out dist/ for the Dockerfile
+      # Both Dockerfiles consume the two static binaries at dist/${TARGETARCH}/scratchsmith.
+      # Extract each from its release tarball.
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p dist/amd64 dist/arm64 /tmp/x
+        tar -xzf artifacts/scratchsmith-*-linux-amd64.tar.gz -C /tmp/x
+        tar -xzf artifacts/scratchsmith-*-linux-arm64.tar.gz -C /tmp/x
+        cp /tmp/x/scratchsmith-*-linux-amd64/scratchsmith dist/amd64/scratchsmith
+        cp /tmp/x/scratchsmith-*-linux-arm64/scratchsmith dist/arm64/scratchsmith
+        chmod +x dist/amd64/scratchsmith dist/arm64/scratchsmith
+        # Assert each binary is the arch its path claims — a tarball/glob mix-up would
+        # otherwise sign and publish a wrong-arch image. arm64 can't be run here without
+        # emulation, so this is its only gate.
+        file dist/amd64/scratchsmith | grep -q 'x86-64' || { echo "::error::amd64 binary is not x86-64"; exit 1; }
+        file dist/arm64/scratchsmith | grep -q 'aarch64' || { echo "::error::arm64 binary is not aarch64"; exit 1; }
+    # The :toolbox arm64 leg RUNs `apk add`, so it needs QEMU. The scratch image is COPY-only.
+    - name: Install QEMU
+      if: inputs.qemu == 'true'
+      uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+    - name: Install cosign
+      uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+    - name: Log in to GHCR
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.ghcr-token }}
