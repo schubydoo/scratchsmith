@@ -1227,9 +1227,16 @@ not two healthchecks. It is the same as <code>healthcheck = ["/app", "--health"]
 <p>To pack in a GitHub Actions workflow with the composite action instead of shelling out to the CLI,
 see <strong><a href="../github-action/">GitHub Action</a></strong>.</p>
 <h2 id="run-pack-in-a-container-the-toolbox-image">Run <code>pack</code> in a container — the <code>:toolbox</code> image<a class="headerlink" href="#run-pack-in-a-container-the-toolbox-image" title="Permanent link">&para;</a></h2>
-<p>The <code>FROM scratch</code> release image can only run <code>--version</code> / <code>lint</code> / <code>doctor</code> / <code>--completions</code>. The <strong><code>:toolbox</code></strong>
-image bundles the full <code>pack</code> toolchain (ldconfig, strip, syft, grype, cosign, upx, tini, the
-docker CLI) on a Wolfi base. With it, <code>pack</code> itself runs inside a container:</p>
+<p>The <code>FROM scratch</code> release image carries the binary and nothing else: no shell, no tools, and no
+certificate store. It runs every subcommand that needs none of those. That is <code>lint</code>, <code>doctor</code>,
+<code>graph</code>, <code>diff</code>, and <code>unpack</code>, plus the <code>--version</code> and <code>--completions</code> flags. <code>doctor</code> is the
+one that looks like an exception: it probes for each external tool and reports every one as
+missing, which is the right answer on an image that carries none.</p>
+<p>Two subcommands do not run there. <code>pack</code> needs ldconfig, strip, and the SBOM tools, and under
+<code>--push</code> it also needs the certificate store. <code>index</code> reaches a registry over HTTPS, which needs
+that same certificate store.</p>
+<p>The <strong><code>:toolbox</code></strong> image bundles the full <code>pack</code> toolchain (ldconfig, strip, syft, grype, cosign,
+upx, tini, the docker CLI) on a Wolfi base. With it, <code>pack</code> itself runs inside a container:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># Daemonless — no socket needed; write an OCI archive or push straight to a registry.</span>
 <a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">  </span>pack<span class="w"> </span>--oci-archive<span class="w"> </span>app.oci.tar<span class="w"> </span>./app
