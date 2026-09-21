@@ -48,8 +48,8 @@ if tests pass — flag it Important:
 6. **Non-root + reproducible by default.** Images default to the non-root user; layer
    construction stays deterministic (sorted entries, zeroed mtime/uid/gid, fixed gzip).
 7. **Docs honesty.** Behaviour changes update the docs in the same PR. **Never claim a
-   capability the code doesn't have** — "daemonless", "signed", "reproducible images" have specific gates;
-   overstating one is an Important finding.
+   capability the code doesn't have** — "daemonless", "signed", "reproducible images"
+   have specific gates; overstating one is an Important finding.
 
 ## Do not report
 
