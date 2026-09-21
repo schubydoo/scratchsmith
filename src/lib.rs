@@ -6,8 +6,6 @@
 //! lint / supplychain / report as cross-cutting steps.
 
 pub mod cli;
-
-// Implemented pipeline stages.
 pub mod config;
 pub mod diff;
 pub mod doctor;
@@ -15,11 +13,9 @@ pub mod graph;
 pub mod image;
 pub mod lint;
 pub mod pack;
+pub mod registry;
+pub mod report;
 pub mod resolver;
 pub mod stager;
 pub mod supplychain;
 pub mod unpack;
-
-// Stages still stubbed until their tasks land. Each file states its own scope.
-pub mod registry;
-pub mod report;
