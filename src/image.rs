@@ -141,7 +141,7 @@ fn blob_path(digest_hex: &str) -> String {
 }
 
 /// The reusable pieces of a built image — the layer plus the config blob — shared by
-/// every sink (docker-archive, OCI archive, later registry push). Building it once keeps
+/// every sink (docker-archive, OCI archive, registry push). Building it once keeps
 /// the digests byte-identical across sinks.
 pub(crate) struct BuiltImage {
     pub(crate) layer: Layer,

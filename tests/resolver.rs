@@ -1,6 +1,6 @@
 //! Parse a real, guaranteed-present dynamic binary: the scratchsmith binary itself.
-//! Synthetic fixtures with crafted RPATH/RUNPATH/$ORIGIN layouts come with Task 1.8;
-//! this proves the parser reads a genuine glibc-linked executable.
+//! This proves the parser reads a genuine glibc-linked executable. `tests/fixtures.rs`
+//! is the companion, with crafted RPATH/RUNPATH/$ORIGIN layouts built by a real linker.
 
 use scratchsmith::resolver::{read_elf_info, resolve, Linking, Sysroot};
 use std::path::Path;

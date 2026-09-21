@@ -6,8 +6,10 @@
 # PR titles are still enforced (pr-title.yml) for a clean history, but ignored for
 # release purposes.
 #
-# The two halves live in .github/workflows/knope-{prepare,release}.yml and are
-# gated OFF behind the `KNOPE_ENABLED` repo variable until the flow is proven.
+# The two halves live in .github/workflows/knope-{prepare,release}.yml, behind the
+# `KNOPE_ENABLED` repo variable. That variable is a live kill switch, not a pre-launch
+# gate: releases are live and every tag shipped through this flow. Set it to anything
+# but `true` to stop both halves, and the changeset check, without reverting anything.
 # knope-prepare opens the version/changelog PR; knope-release BUILDS + cosign-signs
 # the release tarballs and stages them into dist/release-assets/ BEFORE `knope
 # release` runs. With `assets` set (below), that step creates the GitHub Release as
@@ -20,8 +22,8 @@
 
 [package]
 # Single crate. Anchored to line-start so it targets the [package] `version = "X.Y.Z"`
-# and NOT the `{ version = "..." }` dependency pins. VERIFY on enable that only the
-# package version line is rewritten.
+# and NOT the `{ version = "..." }` dependency pins. Verified by every release so far:
+# only the package version line is rewritten.
 versioned_files = [
   { path = "Cargo.toml", regex = '(?m)^version = "(?<version>\d+\.\d+\.\d+)"' },
 ]

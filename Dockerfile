@@ -3,8 +3,9 @@
 # The release container image: the static scratchsmith binary in a FROM scratch
 # image — the minimal-image philosophy scratchsmith itself embodies.
 #
-# Built with buildx, NOT by scratchsmith: its own daemonless multi-arch registry
-# push is a future milestone. The rule for what runs here: every subcommand that
+# Built with buildx, NOT by scratchsmith: bootstrapping its own release image with
+# itself is a milestone it has not taken, though `scratchsmith index` does assemble a
+# multi-arch index daemonlessly. The rule for what runs here: every subcommand that
 # needs no external tool and no certificate store. `pack` needs docker, ldconfig,
 # syft, and strip, and `index` needs a CA bundle for HTTPS, so neither works here.
 # Everything else does, `doctor` included — it probes for each tool and reports

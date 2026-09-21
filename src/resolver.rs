@@ -1,8 +1,11 @@
 //! Resolve a binary's shared-library deps by emulating the `ld.so` search order
-//! (not by scraping host `ldd`). The correctness core; see Tasks 1.2-1.3.
+//! (not by scraping host `ldd`). The correctness core.
 //!
-//! This file covers Task 1.2: read the raw dynamic-linking facts from an ELF. The
-//! search-order emulation that turns sonames into real paths lands in Task 1.3.
+//! Two halves, both here: `parse_elf_info` reads the raw dynamic-linking facts out of an
+//! ELF, and `resolve_with` turns each soname into a real path by searching DT_RPATH (the
+//! object's own, then its ancestors' — RPATH is transitive, and ignored when the object
+//! also declares RUNPATH), then its own DT_RUNPATH, then the sysroot default dirs.
+//! `$ORIGIN`, `$LIB` and `$PLATFORM` are expanded inside those entries, not searched.
 
 use anyhow::{bail, Context, Result};
 use std::collections::{HashSet, VecDeque};
@@ -40,8 +43,8 @@ pub struct ElfInfo {
     pub is_64: bool,
     /// ELF machine (`e_machine`). Drives `$PLATFORM` and the default lib triplet.
     pub machine: u16,
-    /// References `dlopen`/`dlsym` — its runtime plugins are NOT in the dependency
-    /// graph, so resolution may be incomplete (the user may need `--include`).
+    /// References `dlopen` or `dlmopen` — its runtime plugins are NOT in the dependency
+    /// graph, so resolution can be incomplete (the user may need `--include`).
     pub uses_dlopen: bool,
 }
 
@@ -110,8 +113,8 @@ pub fn parse_elf_info(bytes: &[u8]) -> Result<ElfInfo> {
     })
 }
 
-// A binary that calls dlopen imports the symbol, so its presence in the dynamic
-// symbols means runtime plugin loading the static graph can't see.
+// A binary that calls dlopen imports the symbol, so finding it among the dynamic symbols
+// means the binary loads plugins at run time, which the static graph cannot see.
 fn references_dlopen(elf: &goblin::elf::Elf) -> bool {
     elf.dynsyms
         .iter()

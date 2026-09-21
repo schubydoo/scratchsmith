@@ -1,6 +1,6 @@
 //! End-to-end checks against the built binary: exit codes and top-level output.
-//! These pin the contract Task 1.1 promises (help lists subcommands, version works,
-//! stubs fail loudly) independent of the library's internals.
+//! These pin the `COMPATIBILITY.md` surface — help lists every subcommand, `--version`
+//! works, a usage error exits 2 — independent of the library's internals.
 
 use std::process::{Command, Output};
 

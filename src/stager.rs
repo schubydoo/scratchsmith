@@ -581,9 +581,9 @@ services:       files
 }
 
 // A `passwd: files` nsswitch is a lie without a passwd database, and binaries that
-// call getpwuid() at startup (to find $HOME) get a null and may misbehave. Ship a
-// minimal one, matching dockerize2's template. The non-root default user (Task 2.3)
-// will extend this later.
+// call getpwuid() at startup (to find $HOME) get a null and can misbehave. Ship a
+// minimal one. `nonroot` at 65532 is the image's default user, so it has to resolve
+// here or the default pack ships a user with no passwd entry.
 const MINIMAL_PASSWD: &str = "\
 root:x:0:0:root:/root:/sbin/nologin
 nonroot:x:65532:65532:nonroot:/home/nonroot:/sbin/nologin
