@@ -2,6 +2,7 @@
 //! and changed between them, plus the total size delta. An image-drift regression gate.
 //! Pairs with `unpack` — an OCI image extracted to a directory is diffed the same way.
 
+use crate::image::hex;
 use crate::report::{DiffFile, DiffReport};
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
@@ -24,7 +25,7 @@ fn scan(root: &Path) -> Result<BTreeMap<String, Entry>> {
         let rel = entry
             .path()
             .strip_prefix(root)
-            .unwrap_or_else(|_| entry.path())
+            .with_context(|| format!("{} is not under {}", entry.path().display(), root.display()))?
             .to_string_lossy()
             .into_owned();
         if rel.is_empty() {
@@ -88,14 +89,6 @@ pub fn build(a: &Path, b: &Path) -> Result<DiffReport> {
         changed,
         size_before: old.values().map(|e| e.size).sum(),
         size_after: new.values().map(|e| e.size).sum(),
-    })
-}
-
-fn hex(digest: impl AsRef<[u8]>) -> String {
-    use std::fmt::Write as _;
-    digest.as_ref().iter().fold(String::new(), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
     })
 }
 

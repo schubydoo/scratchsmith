@@ -124,9 +124,13 @@ impl Hardening {
 
 fn gate_name(gate: Gate) -> String {
     use clap::ValueEnum;
+    // `to_possible_value` returns None only for a `#[value(skip)]` variant, and Gate has none:
+    // every variant IS the --fail-on surface. An empty fallback would report "hardening gate
+    // failed:" with no gate named, which is the one thing the message exists to say.
     gate.to_possible_value()
-        .map(|v| v.get_name().to_string())
-        .unwrap_or_default()
+        .expect("every Gate variant is a clap value")
+        .get_name()
+        .to_string()
 }
 
 fn has_dynsym(elf: &Elf, pred: impl Fn(&str) -> bool) -> bool {

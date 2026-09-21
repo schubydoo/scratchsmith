@@ -90,9 +90,9 @@ pub struct IndexOutcome {
 // manifests are valid children; the two list types are accepted only so a mistakenly
 // passed index is fetched and rejected with a clear message rather than an opaque error.
 const CHILD_MANIFEST_TYPES: &[&str] = &[
-    "application/vnd.oci.image.manifest.v1+json",
+    crate::image::OCI_MANIFEST,
     "application/vnd.docker.distribution.manifest.v2+json",
-    "application/vnd.oci.image.index.v1+json",
+    crate::image::OCI_INDEX,
     "application/vnd.docker.distribution.manifest.list.v2+json",
 ];
 
@@ -233,7 +233,7 @@ pub fn parse_child_manifest(raw: &[u8], source: &str) -> Result<(String, String)
     let media_type = manifest
         .get("mediaType")
         .and_then(|v| v.as_str())
-        .unwrap_or("application/vnd.oci.image.manifest.v1+json")
+        .unwrap_or(crate::image::OCI_MANIFEST)
         .to_string();
     if is_multi_arch_media_type(&media_type) {
         bail!(
@@ -324,7 +324,7 @@ fn build_index(children: &[Child]) -> Result<OciImageIndex> {
         .collect();
     let index = serde_json::json!({
         "schemaVersion": 2,
-        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "mediaType": crate::image::OCI_INDEX,
         "manifests": manifests,
     });
     serde_json::from_value(index).context("assembling the OCI image index")

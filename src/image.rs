@@ -115,8 +115,15 @@ pub fn write_oci_archive(
     Ok(())
 }
 
-const OCI_MANIFEST: &str = "application/vnd.oci.image.manifest.v1+json";
-const OCI_INDEX: &str = "application/vnd.oci.image.index.v1+json";
+// Crate-visible, for the four `registry` sites that spell the same strings. Only one of them
+// EMITS: `build_index` writes OCI_INDEX into the index it pushes. The other three describe what
+// a remote registry may send — the Accept list for a manifest pull, and the fallback for a
+// manifest that omits `mediaType`. Both halves are fixed by the OCI spec, so sharing one
+// constant is safe; if we ever emit something else, split the emit constant from the accept
+// list rather than changing this one. The tests keep their own literals on purpose, because a
+// test comparing a constant against itself proves nothing.
+pub(crate) const OCI_MANIFEST: &str = "application/vnd.oci.image.manifest.v1+json";
+pub(crate) const OCI_INDEX: &str = "application/vnd.oci.image.index.v1+json";
 const OCI_CONFIG: &str = "application/vnd.oci.image.config.v1+json";
 const OCI_LAYER_GZIP: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
 
@@ -177,19 +184,21 @@ fn write_docker_archive(built: &BuiltImage, tag: &str, out: &Path) -> Result<()>
 }
 
 /// A built image layer: the gzip bytes, plus the two hashes that must stay distinct.
-pub struct Layer {
+///
+/// `pub(crate)`, matching `BuiltImage` above: nothing outside this module builds a layer.
+pub(crate) struct Layer {
     /// gzip-compressed layer tar (what goes in the archive / is pushed).
-    pub gzip: Vec<u8>,
+    pub(crate) gzip: Vec<u8>,
     /// sha256 of the UNCOMPRESSED tar — the config's `rootfs.diff_ids` entry.
-    pub diff_id: String,
+    pub(crate) diff_id: String,
     /// sha256 of the GZIP blob — the manifest's `layers[].digest`.
-    pub digest: String,
+    pub(crate) digest: String,
 }
 
 /// Build a reproducible, gzipped layer from the staged rootfs. The diff_id (from the
 /// uncompressed tar) and the digest (from the gzip) are computed separately —
 /// conflating them is the classic bug that yields unpullable images.
-pub fn build_layer(root: &Path) -> Result<Layer> {
+pub(crate) fn build_layer(root: &Path) -> Result<Layer> {
     let tar_bytes = deterministic_tar(root)?;
     let diff_id = hex(Sha256::digest(&tar_bytes));
     let gzip = gzip(&tar_bytes)?;
@@ -416,14 +425,14 @@ fn distinct_bare(entries: &[String]) -> Vec<&str> {
 /// True when an image user string denotes root (uid 0 or `root`), so the caller can
 /// warn. Accepts the `uid`, `uid:gid`, and name forms.
 pub fn is_root_user(user: &str) -> bool {
-    let uid = user.split(':').next().unwrap_or(user);
+    let uid = user.split_once(':').map_or(user, |(uid, _)| uid);
     uid == "0" || uid == "root"
 }
 
 // Start from the default PATH, then apply user env entries, overriding by key so a
 // user-supplied PATH replaces the default rather than duplicating it.
 fn merged_env(user: &[String]) -> Vec<String> {
-    let key_of = |e: &str| e.split('=').next().unwrap_or(e).to_string();
+    let key_of = |e: &str| e.split_once('=').map_or(e, |(key, _)| key).to_string();
     let mut env = vec![DEFAULT_PATH.to_string()];
     for entry in user {
         let key = key_of(entry);
@@ -504,7 +513,11 @@ fn append_bytes<W: Write>(ar: &mut tar::Builder<W>, name: &str, data: &[u8]) -> 
     Ok(())
 }
 
-fn hex(digest: impl AsRef<[u8]>) -> String {
+/// Lowercase hex, the form an OCI digest takes after `sha256:`.
+///
+/// One copy on purpose: `diff` and `unpack` both compare digests this produces against digests
+/// this produces, so two implementations that drift would report every layer as changed.
+pub(crate) fn hex(digest: impl AsRef<[u8]>) -> String {
     use std::fmt::Write as _;
     digest.as_ref().iter().fold(String::new(), |mut s, b| {
         let _ = write!(s, "{b:02x}");
