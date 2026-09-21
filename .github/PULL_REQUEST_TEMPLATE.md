@@ -19,7 +19,7 @@ Fixes #(issue number)
 - [ ] `cargo fmt --all --check` passes
 - [ ] `cargo clippy --all-targets --all-features -- -D warnings` passes
 - [ ] `cargo test --all-features` passes on Linux (Docker/`cc` tests skip without
-      those tools)
+      those tools locally, and fail rather than skip in CI)
 - [ ] Added or updated tests for the change
 - [ ] Added a `.changeset/<slug>.md` fragment (or the `no-changelog` label applies).
       For a user-visible change, also updated the docs. `CHANGELOG.md` is generated,

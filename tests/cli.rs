@@ -5,6 +5,7 @@
 use std::process::{Command, Output};
 
 mod common;
+use common::skip_required;
 use common::small_fixture_str as small_fixture;
 
 fn run(args: &[&str]) -> Output {
@@ -108,7 +109,7 @@ fn lint_reports_hardening_for_a_real_binary() {
 #[test]
 fn graph_prints_a_dependency_tree() {
     let Some(bin) = small_fixture() else {
-        eprintln!("skipping: no id binary to inspect");
+        skip_required("no id binary to inspect");
         return;
     };
     let out = run(&["graph", bin]);
@@ -127,7 +128,7 @@ fn graph_prints_a_dependency_tree() {
 #[test]
 fn graph_json_is_valid_and_lists_nodes() {
     let Some(bin) = small_fixture() else {
-        eprintln!("skipping: no id binary to inspect");
+        skip_required("no id binary to inspect");
         return;
     };
     let out = run(&["graph", "--format", "json", bin]);
@@ -196,7 +197,7 @@ fn pack_deny_gate_fails_when_library_present() {
     // `id` links libc, so `--deny libc.so.6` must fail the pack (a CI policy gate). Uses the
     // daemonless -n -o sink — the policy check runs before staging, so no Docker is needed.
     let Some(bin) = small_fixture() else {
-        eprintln!("skipping: no id binary to pack");
+        skip_required("no id binary to pack");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -227,7 +228,7 @@ fn pack_deny_gate_covers_nss_modules() {
     // resolved dependency graph. The gate must still catch it (regression for the split
     // between resolution.libs and the default-includes).
     let Some(bin) = small_fixture() else {
-        eprintln!("skipping: no id binary to pack");
+        skip_required("no id binary to pack");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -264,7 +265,7 @@ fn tree_has(root: &std::path::Path, name: &str) -> bool {
 fn unpack_round_trips_an_oci_archive() {
     // Pack daemonlessly to an OCI archive, then unpack it and confirm the rootfs is back.
     let Some(bin) = small_fixture() else {
-        eprintln!("skipping: no id binary to pack");
+        skip_required("no id binary to pack");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -297,7 +298,7 @@ fn unpack_round_trips_an_oci_archive() {
 fn pack_oci_archive_writes_the_file() {
     // Exercises the `--oci-archive` sink through the CLI (daemonless — no Docker needed).
     let Some(bin) = small_fixture() else {
-        eprintln!("skipping: no id binary to pack");
+        skip_required("no id binary to pack");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -323,7 +324,7 @@ fn pack_nss_files_only_through_the_cli() {
     // Exercises `--nss` from the command line (the CLI-supplied selection path in dispatch)
     // via the daemonless -n -o sink — no Docker needed.
     let Some(bin) = small_fixture() else {
-        eprintln!("skipping: no id binary to pack");
+        skip_required("no id binary to pack");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -350,7 +351,7 @@ fn pack_nss_files_only_through_the_cli() {
 #[test]
 fn profile_selects_options_and_reports_unknown() {
     let Some(bin) = small_fixture() else {
-        eprintln!("skipping: no id binary to pack");
+        skip_required("no id binary to pack");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -432,7 +433,7 @@ fn profile_sign_without_a_push_target_errors() {
 #[test]
 fn cli_delivery_sink_beats_a_config_push_target() {
     let Some(bin) = small_fixture() else {
-        eprintln!("skipping: no id binary to pack");
+        skip_required("no id binary to pack");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -505,7 +506,7 @@ fn a_label_without_an_equals_sign_warns_but_still_packs() {
     // the exit code does not move. Run through the CLI because the warning is an eprintln!,
     // not a report field. The OCI-archive sink needs no Docker.
     let Some(bin) = small_fixture() else {
-        eprintln!("skipping: no id binary to pack");
+        skip_required("no id binary to pack");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -531,7 +532,7 @@ fn a_label_without_an_equals_sign_warns_but_still_packs() {
 #[test]
 fn an_env_entry_without_an_equals_sign_warns_but_still_packs() {
     let Some(bin) = small_fixture() else {
-        eprintln!("skipping: no id binary to pack");
+        skip_required("no id binary to pack");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -558,7 +559,7 @@ fn a_label_with_an_equals_sign_is_quiet() {
     // The warning must not fire on the shape we are steering people towards, including the
     // deliberate empty value `build=`.
     let Some(bin) = small_fixture() else {
-        eprintln!("skipping: no id binary to pack");
+        skip_required("no id binary to pack");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -588,7 +589,7 @@ fn a_nested_profile_warns_but_still_packs() {
     // [profile.a.profile.b] parses and is then dropped, so the keys inside never apply.
     // Warn, keep packing, leave the exit code alone.
     let Some(bin) = small_fixture() else {
-        eprintln!("skipping: no id binary to pack");
+        skip_required("no id binary to pack");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
@@ -624,7 +625,7 @@ fn a_bare_label_warns_on_the_rootfs_sink_too() {
     // entirely. `--label` carries no conflicts_with for --no-build, so this invocation is valid
     // and the user is exactly the one 2.0 would break without notice.
     let Some(bin) = small_fixture() else {
-        eprintln!("skipping: no id binary to pack");
+        skip_required("no id binary to pack");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
