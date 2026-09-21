@@ -292,7 +292,10 @@ const DEFAULT_USER: &str = "65532:65532";
 
 /// The published Deprecations page. Every deprecation warning ends with it, so a reader has the
 /// whole list rather than the one line in front of them (`COMPATIBILITY.md:53`).
-pub const DEPRECATIONS_URL: &str = "https://schubydoo.github.io/scratchsmith/deprecations/";
+/// The `latest/` segment is load-bearing: `mike` writes each build into its own version
+/// directory and leaves only a redirect stub at the site root, so the bare path is a 404
+/// (measured: `/scratchsmith/usage/` 404, `/scratchsmith/latest/usage/` 200).
+pub const DEPRECATIONS_URL: &str = "https://schubydoo.github.io/scratchsmith/latest/deprecations/";
 
 // The host CPU architecture as an OCI/Go `GOARCH` value, for the image config's
 // `architecture` field. Split from the host lookup so every arm is unit-testable.
@@ -378,8 +381,8 @@ fn image_config(default_entrypoint: &Path, diff_id: &str, cfg: &ImageConfig) -> 
 pub fn warn_about_bare_entries(cfg: &ImageConfig) {
     for entry in distinct_bare(&cfg.labels) {
         eprintln!(
-            "warning: label `{entry}` has no `=`, so it lands with an empty value; \
-             scratchsmith 2.0 rejects it. Write `{entry}=<value>`. See {DEPRECATIONS_URL}"
+            "warning: a label with no `=` is deprecated; `{entry}` lands with an empty value. \
+             Write `{entry}=<value>`. scratchsmith 2.0 rejects it. See {DEPRECATIONS_URL}"
         );
     }
     for entry in distinct_bare(&cfg.env) {
@@ -391,9 +394,9 @@ pub fn warn_about_bare_entries(cfg: &ImageConfig) {
             ""
         };
         eprintln!(
-            "warning: env entry `{entry}` has no `=`, so the image carries something that is not \
-             KEY=VALUE; scratchsmith 2.0 rejects it. Write `{entry}=<value>`.{extra} See \
-             {DEPRECATIONS_URL}"
+            "warning: an env entry with no `=` is deprecated; `{entry}` is not KEY=VALUE, so a \
+             runtime can drop it.{extra} Write `{entry}=<value>`. scratchsmith 2.0 rejects it. \
+             See {DEPRECATIONS_URL}"
         );
     }
 }

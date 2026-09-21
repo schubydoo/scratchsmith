@@ -522,7 +522,8 @@ fn a_label_without_an_equals_sign_warns_but_still_packs() {
     assert!(out.status.success(), "pack should still succeed: {stderr}");
     assert!(archive.exists(), "archive not written");
     assert!(
-        stderr.contains("label `build` has no `=`") && stderr.contains("2.0 rejects it"),
+        stderr.contains("a label with no `=` is deprecated")
+            && stderr.contains("`build` lands with an empty value"),
         "label deprecation warning missing from stderr: {stderr}"
     );
 }
@@ -546,7 +547,8 @@ fn an_env_entry_without_an_equals_sign_warns_but_still_packs() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "pack should still succeed: {stderr}");
     assert!(
-        stderr.contains("env entry `LOG_LEVEL` has no `=`") && stderr.contains("2.0 rejects it"),
+        stderr.contains("an env entry with no `=` is deprecated")
+            && stderr.contains("`LOG_LEVEL` is not KEY=VALUE"),
         "env deprecation warning missing from stderr: {stderr}"
     );
 }
@@ -576,7 +578,7 @@ fn a_label_with_an_equals_sign_is_quiet() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "pack should succeed: {stderr}");
     assert!(
-        !stderr.contains("has no `=`"),
+        !stderr.contains("is deprecated"),
         "a well-formed pair must not warn: {stderr}"
     );
 }
@@ -610,8 +612,8 @@ fn a_nested_profile_warns_but_still_packs() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "pack should still succeed: {stderr}");
     assert!(
-        stderr.contains("nested profile under [profile.release]")
-            && stderr.contains("2.0 rejects it"),
+        stderr.contains("a nested profile is deprecated")
+            && stderr.contains("under [profile.release]"),
         "nested-profile warning missing from stderr: {stderr}"
     );
 }
@@ -643,15 +645,16 @@ fn a_bare_label_warns_on_the_rootfs_sink_too() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "pack should still succeed: {stderr}");
     assert!(
-        stderr.matches("label `build` has no `=`").count() == 1,
+        stderr.matches("`build` lands with an empty value").count() == 1,
         "a repeated entry must warn exactly once: {stderr}"
     );
     assert!(
         stderr.contains("replaces the image's default PATH"),
         "a bare PATH must say what it replaces: {stderr}"
     );
+    // The `latest/` segment is the whole point: mike versions the site, so the bare path 404s.
     assert!(
-        stderr.contains("scratchsmith/deprecations/"),
-        "the warning must point at the Deprecations page: {stderr}"
+        stderr.contains("https://schubydoo.github.io/scratchsmith/latest/deprecations/"),
+        "the warning must point at the versioned Deprecations page: {stderr}"
     );
 }

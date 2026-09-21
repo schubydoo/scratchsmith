@@ -51,15 +51,19 @@ value reaches it, so the keys inside it never apply.
 
 Move the inner table up to the top level:
 
+Before. The keys under `profile.release.profile.signed` never apply:
+
 ```toml
-# Before. The keys under `profile.release.profile.signed` never apply.
 [profile.release]
 sign = true
 
 [profile.release.profile.signed]
 push = "ghcr.io/me/app:latest"
+```
 
-# After. `--profile signed` now reaches them.
+After. `--profile signed` now reaches them:
+
+```toml
 [profile.release]
 sign = true
 
