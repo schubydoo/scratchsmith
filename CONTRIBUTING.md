@@ -24,14 +24,30 @@ required for `cargo test` to pass. The suite *fails* (not skips) without it:
   bail without it. It is normally already present on any glibc system, so this rarely bites.
   A stripped container image is one place it can be missing.
 
-Everything else is optional. If the tool is absent, these tests **skip** and `cargo test`
-still passes:
+On your own machine, everything else is optional. If the tool is absent, these tests **skip**
+and `cargo test` still passes:
 
 - a C compiler (`cc`) and `musl-gcc`: build the resolver / lint / musl fixtures
 - Docker: the end-to-end pack/run tests
 - `strip` (binutils): the `--strip` test
+- `upx`: the compression tests
 - `tini`: the `--init` test. With `tini` absent, a companion test instead checks that
   `--init` *fails loudly*.
+
+**In CI, some of those stop being optional.** A skipped test is recorded as a pass. A runner
+that loses a tool then reports a green suite having run nothing.
+
+Six tools are strict in CI: `cc`, `strip`, `upx`, Docker, `getent` and `/usr/bin/id`. A missing
+one **fails** the test instead of skipping it. The workflow installs or guarantees all six, so a
+miss there is a broken runner. If the `CI` environment variable holds anything other than an opt-out
+word, the strict gate turns on. The opt-out words are `0`, `false`, `no`, `off` and the empty
+string, in any case.
+
+`musl-gcc`, `tini`, the `registry:2` pull and the host locale sources stay optional everywhere.
+
+If your own machine has `CI` set for an unrelated reason, set `SCRATCHSMITH_NO_CI_GATE=1` to
+get the local behavior back. That variable reads by the same opt-out words, so an empty value
+does not turn the gate off. The gate lives in `tests/common/mod.rs`.
 
 One tool is neither required nor skipped: **`syft`**. Its `--sbom` test runs in both cases.
 With `syft` present, the test asserts success. With `syft` absent, it asserts a clean
@@ -42,6 +58,7 @@ git clone https://github.com/schubydoo/scratchsmith
 cd scratchsmith
 cargo build
 cargo test            # ldconfig required; other tool-specific tests skip if absent
+                      # (in CI they fail instead — see above)
 cargo run -- doctor   # shows which external tools are present
 ```
 

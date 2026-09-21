@@ -34,6 +34,20 @@ jobs:
       # Keep the curl|bash installer clean. shellcheck ships on the runner, so no action.
       - name: ShellCheck (install.sh)
         run: shellcheck install.sh
+      # A bare `eprintln!("skipping: …"); return;` makes nextest record the test as PASSED, so a
+      # runner that lost a tool reports a green suite having run nothing. tests/common's
+      # skip_required and skip_optional are the only two ways to skip. This keeps it that way:
+      # the 56 existing sites were converted by hand, and the next one would have to be too.
+      - name: No hand-rolled test skips
+        run: |
+          set -euo pipefail
+          hits=$(grep -rn 'eprintln!("skipping' tests/ --include='*.rs' \
+            --exclude-dir=common || true)
+          if [ -n "$hits" ]; then
+            echo "::error::Use tests/common::skip_required or skip_optional, not a bare eprintln."
+            echo "$hits"
+            exit 1
+          fi
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           toolchain: stable
@@ -94,6 +108,8 @@ jobs:
         with:
           tool: cargo-nextest
       # upx isn't preinstalled; the --upx pack tests skip without it (Task 5.3).
+      # ⚠️ Required by tests/common::skip_required — dropping this step FAILS the upx tests
+      # under CI rather than skipping them. That is the point: a skip reads as a pass.
       - name: Install upx
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends upx-ucl
       - name: Test (nextest → JUnit)
@@ -131,6 +147,7 @@ jobs:
       # writes lcov.info before the threshold check, so the upload still runs on a
       # floor failure.
       # upx isn't preinstalled; without it the --upx pack tests skip and their lines look uncovered.
+      # ⚠️ Required by tests/common::skip_required — see the note on the test job's copy.
       - name: Install upx
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends upx-ucl
       - name: Coverage (lcov + line floor)

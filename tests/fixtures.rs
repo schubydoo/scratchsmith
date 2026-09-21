@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod common;
-use common::{cc_available, tool_available, walk_contains};
+use common::{cc_available, skip_optional, skip_required, tool_available, walk_contains};
 
 fn cc(args: &[&str]) {
     let out = Command::new("cc").args(args).output().expect("run cc");
@@ -64,7 +64,7 @@ fn build_fixture(dir: &Path, app_name: &str, dtag_flag: &str) -> PathBuf {
 #[test]
 fn goblin_reads_rpath_and_runpath_as_the_linker_emits_them() {
     if !cc_available() {
-        eprintln!("skipping: no C compiler");
+        skip_required("no C compiler");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -83,7 +83,7 @@ fn goblin_reads_rpath_and_runpath_as_the_linker_emits_them() {
 #[test]
 fn resolves_a_real_binary_via_origin_rpath_and_versioned_soname() {
     if !cc_available() {
-        eprintln!("skipping: no C compiler");
+        skip_required("no C compiler");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -116,7 +116,7 @@ fn resolves_a_real_binary_via_origin_rpath_and_versioned_soname() {
 #[test]
 fn musl_binaries_are_detected_and_pack_hard_fails() {
     if !tool_available("musl-gcc") {
-        eprintln!("skipping: no musl-gcc");
+        skip_optional("no musl-gcc");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -149,7 +149,7 @@ fn musl_binaries_are_detected_and_pack_hard_fails() {
 #[test]
 fn dlopen_use_is_detected() {
     if !cc_available() {
-        eprintln!("skipping: no C compiler");
+        skip_required("no C compiler");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -189,7 +189,7 @@ fn dlopen_use_is_detected() {
 #[test]
 fn pack_warns_about_dlopen_and_include_stages_extra_libs() {
     if !cc_available() {
-        eprintln!("skipping: no C compiler");
+        skip_required("no C compiler");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
