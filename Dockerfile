@@ -5,9 +5,10 @@
 #
 # Built with buildx, NOT by scratchsmith: its own daemonless multi-arch registry
 # push is a future milestone. The rule for what runs here: every subcommand that
-# shells out to nothing and needs no certificate store. `pack` needs docker,
-# ldconfig, syft, and strip, and `index` needs a CA bundle for HTTPS, so neither
-# works here. Everything else does. To run `pack` in a container, use the
+# needs no external tool and no certificate store. `pack` needs docker, ldconfig,
+# syft, and strip, and `index` needs a CA bundle for HTTPS, so neither works here.
+# Everything else does, `doctor` included — it probes for each tool and reports
+# them all missing, which is the right answer. To run `pack` in a container, use the
 # `:toolbox` image instead (Dockerfile.toolbox, a Wolfi base with the
 # toolchain) — see docs/usage.md, which lists the subcommands.
 #
