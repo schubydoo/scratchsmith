@@ -110,7 +110,31 @@ impl Config {
     pub fn load(path: &Path) -> Result<Config> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading config {}", path.display()))?;
-        toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))
+        let cfg: Config =
+            toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
+        cfg.warn_about_nested_profiles(path);
+        Ok(cfg)
+    }
+
+    /// `[profile.a.profile.b]` parses, because a profile has the same shape as the base config,
+    /// and then `layer` drops it. No `--profile` value can name it, so the keys inside never
+    /// apply. Warn rather than reject: rejecting a file that packs today is a tightening, which
+    /// `COMPATIBILITY.md` makes major-only. 2.0 rejects it.
+    fn warn_about_nested_profiles(&self, path: &Path) {
+        let mut names: Vec<&str> = self
+            .profile
+            .iter()
+            .filter(|(_, nested)| !nested.profile.is_empty())
+            .map(|(name, _)| name.as_str())
+            .collect();
+        names.sort();
+        for name in names {
+            eprintln!(
+                "warning: a nested profile is deprecated; {} defines one under [profile.{name}], and scratchsmith ignores it. Move it to a top-level [profile.<name>] table. scratchsmith 2.0 rejects it. See {}",
+                path.display(),
+                crate::image::DEPRECATIONS_URL
+            );
+        }
     }
 
     /// Layer the named profile over this base config and return the result. Unknown name is a

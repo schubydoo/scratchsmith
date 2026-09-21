@@ -404,6 +404,10 @@ fn dispatch(cli: Cli) -> Result<()> {
                 runtime: runtime.or(file.runtime).unwrap_or_default(),
             };
 
+            // Deprecation warnings go here, not in a sink path: the effective config is complete,
+            // every sink is still ahead, and no staging failure can swallow the line.
+            crate::image::warn_about_bare_entries(&opts.image);
+
             // An explicit CLI delivery sink always wins; `push` from the config/profile is only
             // the default when no CLI sink flag was given — otherwise a `[profile.ci]` `push`
             // would silently override `--oci-archive`/`--no-build` and turn a local pack into a
