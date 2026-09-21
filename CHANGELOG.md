@@ -5,6 +5,71 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 1.5.0 (2026-09-21)
+
+### Features
+
+#### `locale` and `symlinks` GitHub Action inputs ([#196](https://github.com/schubydoo/scratchsmith/pull/196))
+
+The action now takes `locale` and `symlinks` directly, instead of through the `args` escape
+hatch. `locale` takes one locale name per line. `symlinks` takes one of `copy-all`, `preserve`,
+`copy-unsafe`, or `skip-unsafe`. Both pass straight to the pack flag of the same name.
+
+Under a `symlinks` mode that stages a link, an `add-file` source that is a link to a directory
+no longer fails. `skip-unsafe` stages nothing for a link it cannot honor.
+
+#### Three silently accepted input shapes now warn ([#207](https://github.com/schubydoo/scratchsmith/pull/207))
+
+`--label NAME` and `--env NAME` without an `=`, and a nested `[profile.a.profile.b]` table, each
+print one warning line to standard error. The pack still succeeds and the exit code does not
+change. A well-formed pair, including a deliberate empty value like `--label build=`, stays
+quiet.
+
+### Fixes
+
+#### A rootfs entry that cannot be read now fails the pack ([#200](https://github.com/schubydoo/scratchsmith/pull/200))
+
+Building the image layer skipped unreadable files, and everything under an unreadable directory.
+The pack reported success, and under `--push --sign` it signed the short image. It failed at run
+time instead, on a library that was never there.
+
+The build now stops at the file and names its path in the staged rootfs under `TMPDIR`.
+
+#### `index` and `--push` now report a missing certificate store ([#216](https://github.com/schubydoo/scratchsmith/pull/216))
+
+On a host with no CA trust store, which covers most minimal containers and every `FROM scratch`
+image, both commands died with no message. They now fail with an error that names the cause and
+what to install. Nothing changes where a trust store is present.
+
+#### A broken credential helper no longer pushes anonymously ([#202](https://github.com/schubydoo/scratchsmith/pull/202))
+
+A failed credential lookup counted as "no credential here", so the push went ahead anonymously.
+You saw a bare 401, or a push that worked under an identity you did not choose.
+
+A lookup that fails now stops the push and names the registry. No credential is still anonymous,
+which is how you push to a public or local registry.
+
+Separately, a token response body that cannot be read now reports the dropped connection instead
+of a token-decoding problem.
+
+#### A library that cannot be read now fails the pack ([#201](https://github.com/schubydoo/scratchsmith/pull/201))
+
+The resolver skipped a library it cannot read and carried on, so nothing that library needs was
+resolved or staged. `graph` then printed a tree with a branch missing. `pack` failed later, at
+the copy, naming the wrong thing.
+
+It now stops at the library and names the path.
+
+### Deprecated
+
+#### A label, an environment entry, or a profile table that scratchsmith cannot use ([#207](https://github.com/schubydoo/scratchsmith/pull/207))
+
+Scratchsmith 2.0 rejects `--label NAME` and `--env NAME` without an `=`, and a nested
+`[profile.a.profile.b]` table. Write `--label NAME=value` and `--env NAME=value`, and move a
+nested profile to a top-level `[profile.<name>]` table. The new
+[Deprecations](https://schubydoo.github.io/scratchsmith/latest/deprecations/) page carries the
+migration for each.
+
 ## 1.4.0 (2026-09-20)
 
 ### Features
