@@ -31,6 +31,10 @@ configuration, and it is almost never what you meant. A bare `--env build` is wo
 specification defines `Env` as a list of `KEY=VALUE` strings, so an entry with no `=` is not a
 valid environment variable. A runtime can drop it, or pass it on as a name with no value.
 
+A bare `--env PATH` is worse than a stray entry. Scratchsmith keys each entry on the text before
+the first `=`, so `PATH` matches the default `PATH` entry and replaces it. The image then ships
+with no usable `PATH` at all.
+
 The same applies to the `label` and `env` keys in `scratchsmith.toml`, which take the same
 strings.
 
