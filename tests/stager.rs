@@ -7,15 +7,9 @@ use scratchsmith::stager::{
     stage, stage_default_includes, strip_and_measure, NssSelection, SymlinkMode,
 };
 use std::path::Path;
-use std::process::Command;
 
-fn strip_available() -> bool {
-    Command::new("strip")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
+mod common;
+use common::{strip_available, upx_available, walk_contains};
 
 #[test]
 fn stages_a_real_binary_into_a_runnable_tree() {
@@ -76,24 +70,6 @@ fn default_includes_add_nss_and_passwd_from_host() {
     );
 }
 
-// Small recursive check so the test does not hard-code the libc directory triplet.
-fn walk_contains(root: &Path, name: &str) -> bool {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if walk_contains(&path, name) {
-                return true;
-            }
-        } else if path.file_name().is_some_and(|n| n == name) {
-            return true;
-        }
-    }
-    false
-}
-
 #[test]
 fn strip_reduces_payload_size() {
     if !strip_available() {
@@ -116,14 +92,6 @@ fn strip_reduces_payload_size() {
         report.total_before,
         report.total_after
     );
-}
-
-fn upx_available() -> bool {
-    Command::new("upx")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 #[test]

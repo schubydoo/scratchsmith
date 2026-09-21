@@ -8,21 +8,8 @@ use scratchsmith::resolver::{read_elf_info, resolve, Sysroot};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn tool_available(tool: &str) -> bool {
-    Command::new(tool)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-fn cc_available() -> bool {
-    Command::new("cc")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
+mod common;
+use common::{cc_available, tool_available, walk_contains};
 
 fn cc(args: &[&str]) {
     let out = Command::new("cc").args(args).output().expect("run cc");
@@ -238,21 +225,4 @@ fn pack_warns_about_dlopen_and_include_stages_extra_libs() {
         walk_contains(&out, "libz.so.1"),
         "--include libz.so.1 should be staged"
     );
-}
-
-fn walk_contains(root: &Path, name: &str) -> bool {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if walk_contains(&path, name) {
-                return true;
-            }
-        } else if path.file_name().is_some_and(|n| n == name) {
-            return true;
-        }
-    }
-    false
 }

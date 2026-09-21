@@ -8,6 +8,9 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Mutex;
 
+mod common;
+use common::{docker_available, grype_available, small_fixture, syft_available, upx_available};
+
 // Docker tests pack the same binary into the same derived tag, so they must not run
 // concurrently or one test's cleanup deletes another's image. Serialize them.
 static DOCKER: Mutex<()> = Mutex::new(());
@@ -16,40 +19,8 @@ fn docker_lock() -> std::sync::MutexGuard<'static, ()> {
     DOCKER.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn docker_available() -> bool {
-    Command::new("docker")
-        .arg("info")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
 fn rmi(tag: &str) {
     let _ = Command::new("docker").args(["rmi", "-f", tag]).output();
-}
-
-fn syft_available() -> bool {
-    Command::new("syft")
-        .arg("version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-fn upx_available() -> bool {
-    Command::new("upx")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-fn grype_available() -> bool {
-    Command::new("grype")
-        .arg("version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 fn find_tini_exists() -> bool {
@@ -61,20 +32,6 @@ fn find_tini_exists() -> bool {
     ]
     .iter()
     .any(|p| Path::new(p).exists())
-}
-
-// A small dynamic-glibc system binary for the docker/registry tests that don't need to
-// dogfood scratchsmith itself. Packing the 40 MB debug binary dominates their runtime;
-// `id` is tiny, dynamically linked against glibc, exercises the NSS staging, and prints a
-// checkable `uid=`. Returns None when absent so callers skip gracefully (parity with the
-// getent/tini optional-tool tests) rather than panicking on a minimal host. The one dogfood
-// test (packs_a_binary_that_runs_in_docker) still packs scratchsmith to prove the real
-// binary works.
-fn small_fixture() -> Option<&'static Path> {
-    ["/usr/bin/id", "/bin/id"]
-        .into_iter()
-        .map(Path::new)
-        .find(|p| p.exists())
 }
 
 #[test]

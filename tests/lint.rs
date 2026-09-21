@@ -4,14 +4,8 @@
 use scratchsmith::lint::{analyze, Relro};
 use std::path::Path;
 use std::process::Command;
-
-fn cc_available() -> bool {
-    Command::new("cc")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
+mod common;
+use common::cc_available;
 
 fn compile(dir: &Path, name: &str, extra: &[&str]) -> std::path::PathBuf {
     let src = dir.join("m.c");
