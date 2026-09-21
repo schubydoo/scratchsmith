@@ -17,6 +17,11 @@ runs:
         DIGEST: ${{ inputs.digest }}
       run: |
         set -euo pipefail
+        # `required: true` above is documentation only — the runner does not enforce it for a
+        # composite action, and actionlint's input check is suppressed for `$/` call sites. An
+        # empty digest would reach cosign as `ghcr.io/owner/repo@` and fail naming cosign
+        # rather than the real cause.
+        [ -n "$DIGEST" ] || { echo "::error::sign-and-verify got an empty digest input; check the build-push step id and outputs"; exit 1; }
         ref="ghcr.io/${GITHUB_REPOSITORY}@${DIGEST}"
         # --recursive also signs each per-platform manifest, not just the index, so a consumer
         # pinning a per-arch digest can still verify.

@@ -1,7 +1,9 @@
 name: Actionlint
 
 # Lints GitHub Actions workflows: YAML schema, `${{ }}` expression types, and — via
-# shellcheck — the shell in every `run:` block, which nothing else covered. Runs on every
+# shellcheck — the shell in every `run:` block, which nothing else covered. actionlint reads
+# .github/workflows/** only and never opens a composite action, so a second step below
+# shellchecks the `run:` blocks under .github/actions/. Runs on every
 # pull request and on push to main with no `paths:` filter: actionlint over the tree takes
 # seconds, and a paths-filtered check that is also required hangs a non-workflow PR at
 # "Expected — waiting for status", so always-on keeps it safe to mark required. The `$/`
@@ -50,3 +52,39 @@ jobs:
           shellcheck --version >/dev/null \
             || { echo "::error::shellcheck missing — run: blocks would go unlinted"; exit 1; }
           ./actionlint -color
+      - name: ShellCheck the composite actions
+        # actionlint does not read .github/actions/*/action.yml, so the `run:` blocks there
+        # would go unchecked — including the release image's per-arch assertions and the
+        # cosign sign-and-verify tail. Extract each one and run the same shellcheck.
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r f; do
+            found=1
+            python3 - "$f" <<'PY'
+          import pathlib, subprocess, sys, yaml
+          path = pathlib.Path(sys.argv[1])
+          doc = yaml.safe_load(path.read_text())
+          rc = 0
+          for i, step in enumerate(doc.get("runs", {}).get("steps", [])):
+              if "run" not in step:
+                  continue
+              shell = step.get("shell", "bash")
+              if shell not in ("bash", "sh"):
+                  continue
+              name = step.get("name", f"step {i}")
+              script = f"#!/usr/bin/env {shell}\n{step['run']}"
+              out = subprocess.run(
+                  ["shellcheck", "--shell", shell, "--format", "gcc", "-"],
+                  input=script, capture_output=True, text=True,
+              )
+              if out.returncode != 0:
+                  rc = 1
+                  print(f"::error file={path}::shellcheck failed for '{name}'")
+                  print(out.stdout, end="")
+          sys.exit(rc)
+          PY
+          done < <(find .github/actions -name 'action.yml' -o -name 'action.yaml')
+          if [ "$found" -eq 0 ]; then
+            echo "no composite actions found under .github/actions — nothing to check"
+          fi
