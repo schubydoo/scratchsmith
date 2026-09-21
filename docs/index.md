@@ -35,10 +35,8 @@ report, a non-root image, and no Dockerfile, it is equally handy. More:
 
 ## What works today
 
+<!-- The capability table lives in README.md; mkdocs pulls it in via pymdownx.snippets. -->
 --8<-- "README.md:capabilities"
-
-For a release's signatures and provenance, see [Verifying releases](verifying.md).
-To run `pack` inside a container, see the `:toolbox` section of [Usage](usage.md).
 
 ## Next
 
