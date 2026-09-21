@@ -213,10 +213,10 @@ pub fn stage_added_files(dest: &Path, files: &[AddFile], mode: SymlinkMode) -> R
                     }
                     continue;
                 }
-                // Both fall through to the copy below. CopyAll never links, and CopyUnsafe
-                // with an unsafe target copies the content, which is what the mode name
-                // promises. Named rather than `_` so a new SymlinkMode is a compile error
-                // here instead of silently copying.
+                // CopyUnsafe with an unsafe target falls through to the copy below, which is
+                // what the mode name promises. CopyAll never reaches this match (line 178
+                // gates on it) and is named only for exhaustiveness, so a new SymlinkMode is
+                // a compile error here instead of a silent copy.
                 SymlinkMode::CopyAll | SymlinkMode::CopyUnsafe => {}
             }
         }

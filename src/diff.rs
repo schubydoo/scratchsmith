@@ -25,7 +25,7 @@ fn scan(root: &Path) -> Result<BTreeMap<String, Entry>> {
         let rel = entry
             .path()
             .strip_prefix(root)
-            .with_context(|| format!("walking {}", root.display()))?
+            .with_context(|| format!("{} is not under {}", entry.path().display(), root.display()))?
             .to_string_lossy()
             .into_owned();
         if rel.is_empty() {

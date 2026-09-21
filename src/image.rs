@@ -115,9 +115,12 @@ pub fn write_oci_archive(
     Ok(())
 }
 
-// Crate-visible: `registry` writes the same two strings into a pushed manifest and index, and a
-// mismatch between the archive we write and the manifest we push is exactly the bug a registry
-// reports as an opaque pull failure. The tests keep their own literals on purpose, because a
+// Crate-visible, for the four `registry` sites that spell the same strings. Only one of them
+// EMITS: `build_index` writes OCI_INDEX into the index it pushes. The other three describe what
+// a remote registry may send — the Accept list for a manifest pull, and the fallback for a
+// manifest that omits `mediaType`. Both halves are fixed by the OCI spec, so sharing one
+// constant is safe; if we ever emit something else, split the emit constant from the accept
+// list rather than changing this one. The tests keep their own literals on purpose, because a
 // test comparing a constant against itself proves nothing.
 pub(crate) const OCI_MANIFEST: &str = "application/vnd.oci.image.manifest.v1+json";
 pub(crate) const OCI_INDEX: &str = "application/vnd.oci.image.index.v1+json";
