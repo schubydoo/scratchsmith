@@ -53,10 +53,11 @@ Pull the signed image:
 docker pull ghcr.io/schubydoo/scratchsmith:latest
 ```
 
-`:latest` is a minimal `FROM scratch` image. It runs `--version`, `lint`, `doctor`, and
-`--completions`, but **not `pack`** (a scratch image has none of the toolchain `pack` needs).
-To run `pack` inside a container, pull the **`:toolbox`** image instead (Wolfi base + the full
-toolchain). See the [toolbox section in Usage](usage.md).
+`:latest` is a minimal `FROM scratch` image. It runs every subcommand that shells out to nothing
+and needs no certificate store. It does **not** run `pack`, which needs a toolchain a scratch
+image has none of, and it does not run `index`. To run `pack` inside a container, pull the
+**`:toolbox`** image instead (Wolfi base + the full toolchain). The
+[toolbox section in Usage](usage.md) lists which subcommands run where.
 
 ## Build from source
 

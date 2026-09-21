@@ -272,9 +272,17 @@ see **[GitHub Action](github-action.md)**.
 
 ## Run `pack` in a container — the `:toolbox` image
 
-The `FROM scratch` release image can only run `--version` / `lint` / `doctor` / `--completions`. The **`:toolbox`**
-image bundles the full `pack` toolchain (ldconfig, strip, syft, grype, cosign, upx, tini, the
-docker CLI) on a Wolfi base. With it, `pack` itself runs inside a container:
+The `FROM scratch` release image carries the binary and nothing else: no shell, no tools, and no
+certificate store. It runs every subcommand that needs none of those. That is `--version`,
+`--completions`, `lint`, `doctor`, `graph`, `diff`, and `unpack`. `doctor` runs and reports every
+external tool as missing, which is correct, because none are there.
+
+Two subcommands do not run there. `pack` shells out to ldconfig, strip, and the SBOM tools.
+`index` and `pack --push` reach a registry over HTTPS, which needs the certificate store the
+image does not carry.
+
+The **`:toolbox`** image bundles the full `pack` toolchain (ldconfig, strip, syft, grype, cosign,
+upx, tini, the docker CLI) on a Wolfi base. With it, `pack` itself runs inside a container:
 
 ```sh
 # Daemonless — no socket needed; write an OCI archive or push straight to a registry.
