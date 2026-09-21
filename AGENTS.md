@@ -25,7 +25,7 @@ product story and `CONTRIBUTING.md` for the flow.
 
 ## Hard rules
 
-- **IMPORTANT: Every change is a PR.** Never commit to `main`. Squash-merge, use a **conventional PR title**, and **resolve every review thread** (the ruleset blocks merge otherwise). Label CI/docs-only PRs `no-changelog`.
+- **IMPORTANT: Every change is a PR.** Never commit to `main`. Squash-merge, use a **conventional PR title**, and **resolve every review thread** (the ruleset blocks merge otherwise). An internal-only PR (CI, **refactor**, tests, non-user-facing docs) needs no `.changeset/*.md` fragment, and gets the `no-changelog` label instead. The list matches `CONTRIBUTING.md`, which leads. A refactor that touches `src/` still counts as internal-only, which is exactly what that label is for.
 - **YOU MUST keep the musl-static build working**: TLS is **rustls + aws-lc-rs only, never OpenSSL or native-tls**. Add a networking dep only with oci-client's exact TLS feature. Then check the build with `cargo zigbuild` (musl).
 - **IMPORTANT: never Renovate-bump the MSRV.** To raise it, change three things together: `Cargo.toml` `rust-version`, the `msrv` CI job, and the README badge. Never raise it through a CI dep bump.
 - **Never hand-edit `CHANGELOG.md`**. knope generates it from `.changeset/*.md` fragments, one per user-facing change. A `.changeset/README.md` aborts `prepare-release`.

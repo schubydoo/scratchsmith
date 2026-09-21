@@ -72,7 +72,7 @@ jobs:
                   'Scratchsmith releases are changesets-only: a user-facing change needs a fragment, or it ships with',
                   '**no changelog entry and no version bump**. Add one — run `knope document-change`, or commit a',
                   '`.changeset/<slug>.md` with front-matter `default: patch|minor|major|perf|security` and a one-line',
-                  'summary (see `CONTRIBUTING.md`). Internal-only PRs (CI, refactor, tests) can add the',
+                  'summary (see `CONTRIBUTING.md`). Internal-only PRs (CI, refactor, tests, non-user-facing docs) can add the',
                   '**`no-changelog`** label instead.',
                   '',
                   '_Advisory only — this check never blocks the merge._',
