@@ -5,6 +5,7 @@
 //! treats the archive as hostile: blobs are digest-verified, decompression is capped, and
 //! both extraction and whiteout deletion refuse any path that escapes the target.
 
+use crate::image::hex;
 use crate::report::UnpackReport;
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
@@ -232,14 +233,6 @@ fn gunzip(data: &[u8]) -> Result<Vec<u8>> {
         bail!("layer decompresses past {MAX_LAYER_BYTES} bytes; refusing (possible decompression bomb)");
     }
     Ok(out)
-}
-
-fn hex(digest: impl AsRef<[u8]>) -> String {
-    use std::fmt::Write as _;
-    digest.as_ref().iter().fold(String::new(), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
 }
 
 #[cfg(test)]

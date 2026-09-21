@@ -3,7 +3,7 @@
 //! audit view: it stages nothing.
 
 use crate::report::{DepGraphReport, DepNode};
-use crate::resolver::{self, Sysroot};
+use crate::resolver::{self, push_unique, Sysroot};
 use anyhow::{bail, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -79,13 +79,6 @@ fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
-}
-
-// Append `item` to `v` unless already present (a parent can list a soname twice).
-fn push_unique(v: &mut Vec<String>, item: String) {
-    if !v.contains(&item) {
-        v.push(item);
-    }
 }
 
 #[cfg(test)]

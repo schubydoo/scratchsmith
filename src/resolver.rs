@@ -438,7 +438,8 @@ fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn push_unique(v: &mut Vec<String>, item: String) {
+/// Append `item` to `v` unless already present. A parent can list a soname twice.
+pub(crate) fn push_unique(v: &mut Vec<String>, item: String) {
     if !v.contains(&item) {
         v.push(item);
     }
