@@ -52,6 +52,8 @@ comment:
 # Codecov's component matcher silently ignores `**` globs here (the component
 # renders empty even at 100%), whereas explicit file paths match. Add a module's
 # `.rs` file here when it appears. No `statuses` = visibility only, no extra checks.
+# The map covers every file under src/ EXCEPT the ones in `ignore:` above, which
+# Codecov drops at ingest — a component path for an ignored file matches nothing.
 component_management:
   individual_components:
     - component_id: resolver
@@ -92,6 +94,18 @@ component_management:
         - src/cli.rs
         - src/config.rs
         - src/doctor.rs
+    - component_id: diff
+      name: diff (rootfs drift)
+      paths:
+        - src/diff.rs
+    - component_id: graph
+      name: graph (dependency tree)
+      paths:
+        - src/graph.rs
+    - component_id: unpack
+      name: unpack (OCI archive extraction)
+      paths:
+        - src/unpack.rs
     # Crate root: `pub mod` re-exports only, so this renders near-empty (no coverable
     # lines) — listed for a complete module map, not for a coverage signal.
     - component_id: lib

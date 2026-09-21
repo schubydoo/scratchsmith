@@ -1,6 +1,7 @@
 site_name: Scratchsmith
-# Lead the SEO/unfurl meta description with what ships today: it travels detached
-# from the "not daemonless yet" caveat. The visible tagline stays "daemonless".
+# The meta description travels detached from the page, into search results and unfurls,
+# so it has to stand alone. It names the outcome rather than the mechanism. The visible
+# tagline on the page stays "daemonless".
 site_description: Package a prebuilt dynamic Linux binary into a minimal, non-root FROM scratch OCI image — no Dockerfile, no static linking.
 site_url: https://schubydoo.github.io/scratchsmith/
 site_author: schubydoo

@@ -11,8 +11,9 @@ name: Packaging manifest bump
 # (and therefore the hashes) exist. The `packaging-bump/*` PR merge then fires
 # tap-sync-trigger.yml, which dispatches the tap to mirror the new formula.
 #
-# The formula is absent-safe: bump_packaging.py no-ops if Formula/scratchsmith.rb isn't
-# on main yet, so this can merge ahead of the Homebrew packaging and light it up later.
+# The formula is absent-safe: bump_packaging.py no-ops if Formula/scratchsmith.rb is not
+# on main. That is defensive only now — the formula is tracked and current. Keep the
+# no-op, so deleting or renaming the formula never fails a release.
 #
 # Trust root: checksums.txt is cosign-verified against checksums.txt.sigstore.json
 # (keyless, bound to knope-release.yml) BEFORE the script trusts it.
