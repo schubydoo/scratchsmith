@@ -130,8 +130,9 @@ impl Config {
         names.sort();
         for name in names {
             eprintln!(
-                "warning: {} defines a nested profile under [profile.{name}]; scratchsmith ignores it and 2.0 rejects it. Move it to a top-level [profile.<name>] table.",
-                path.display()
+                "warning: {} defines a nested profile under [profile.{name}]; scratchsmith ignores it and 2.0 rejects it. Move it to a top-level [profile.<name>] table. See {}",
+                path.display(),
+                crate::image::DEPRECATIONS_URL
             );
         }
     }

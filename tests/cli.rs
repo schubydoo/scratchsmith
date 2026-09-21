@@ -615,3 +615,43 @@ fn a_nested_profile_warns_but_still_packs() {
         "nested-profile warning missing from stderr: {stderr}"
     );
 }
+
+#[test]
+fn a_bare_label_warns_on_the_rootfs_sink_too() {
+    // The rootfs sink builds no image, so an earlier placement inside the image path missed it
+    // entirely. `--label` carries no conflicts_with for --no-build, so this invocation is valid
+    // and the user is exactly the one 2.0 would break without notice.
+    let Some(bin) = small_fixture() else {
+        eprintln!("skipping: no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let rootfs = tmp.path().join("rootfs");
+    let out = run(&[
+        "pack",
+        "--label",
+        "build",
+        "--label",
+        "build",
+        "--env",
+        "PATH",
+        "--no-build",
+        "-o",
+        rootfs.to_str().unwrap(),
+        bin,
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "pack should still succeed: {stderr}");
+    assert!(
+        stderr.matches("label `build` has no `=`").count() == 1,
+        "a repeated entry must warn exactly once: {stderr}"
+    );
+    assert!(
+        stderr.contains("replaces the image's default PATH"),
+        "a bare PATH must say what it replaces: {stderr}"
+    );
+    assert!(
+        stderr.contains("scratchsmith/deprecations/"),
+        "the warning must point at the Deprecations page: {stderr}"
+    );
+}

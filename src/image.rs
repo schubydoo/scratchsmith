@@ -290,6 +290,10 @@ const DEFAULT_PATH: &str = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/b
 /// Distroless-style non-root uid:gid; the default so images never run as root.
 const DEFAULT_USER: &str = "65532:65532";
 
+/// The published Deprecations page. Every deprecation warning ends with it, so a reader has the
+/// whole list rather than the one line in front of them (`COMPATIBILITY.md:53`).
+pub const DEPRECATIONS_URL: &str = "https://schubydoo.github.io/scratchsmith/deprecations/";
+
 // The host CPU architecture as an OCI/Go `GOARCH` value, for the image config's
 // `architecture` field. Split from the host lookup so every arm is unit-testable.
 // Unknown arches pass through rather than mislabeling as `amd64`; scratchsmith runs on
@@ -359,6 +363,51 @@ fn image_config(default_entrypoint: &Path, diff_id: &str, cfg: &ImageConfig) -> 
         "rootfs": { "type": "layers", "diff_ids": [format!("sha256:{diff_id}")] },
         "history": [{ "created": "1970-01-01T00:00:00Z", "created_by": "scratchsmith" }],
     })
+}
+
+/// Warn on a `--label` or `--env` value with no `=`, one line per distinct entry.
+///
+/// A bare name is accepted today: the label lands with an empty value, and the env entry breaks
+/// the `KEY=VALUE` form the OCI image config specifies. 2.0 rejects both, and
+/// `COMPATIBILITY.md:41` wants the warning a major line ahead of the rejection, so the exit code
+/// stays where it is. The values also arrive from the `label` and `env` keys in
+/// `scratchsmith.toml`, which is why the text names the value rather than the flag.
+///
+/// Call this once per run, before staging. It reads the effective config, so it covers every
+/// sink, including `--no-build -o DIR`, which builds no image at all.
+pub fn warn_about_bare_entries(cfg: &ImageConfig) {
+    for entry in distinct_bare(&cfg.labels) {
+        eprintln!(
+            "warning: label `{entry}` has no `=`, so it lands with an empty value; \
+             scratchsmith 2.0 rejects it. Write `{entry}=<value>`. See {DEPRECATIONS_URL}"
+        );
+    }
+    for entry in distinct_bare(&cfg.env) {
+        // A bare `PATH` is worse than a stray entry: `merged_env` keys on the text before the
+        // first `=`, finds the default PATH and replaces it, so the image ends up with no PATH.
+        let extra = if entry == "PATH" {
+            " It also replaces the image's default PATH, leaving no PATH at all."
+        } else {
+            ""
+        };
+        eprintln!(
+            "warning: env entry `{entry}` has no `=`, so the image carries something that is not \
+             KEY=VALUE; scratchsmith 2.0 rejects it. Write `{entry}=<value>`.{extra} See \
+             {DEPRECATIONS_URL}"
+        );
+    }
+}
+
+/// The entries with no `=`, sorted and deduplicated, so `--label x --label x` warns once.
+fn distinct_bare(entries: &[String]) -> Vec<&str> {
+    let mut bare: Vec<&str> = entries
+        .iter()
+        .map(String::as_str)
+        .filter(|e| !e.contains('='))
+        .collect();
+    bare.sort_unstable();
+    bare.dedup();
+    bare
 }
 
 /// True when an image user string denotes root (uid 0 or `root`), so the caller can

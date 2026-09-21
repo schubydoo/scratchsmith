@@ -31,7 +31,7 @@ configuration, and it is almost never what you meant. A bare `--env build` is wo
 specification defines `Env` as a list of `KEY=VALUE` strings, so an entry with no `=` is not a
 valid environment variable. A runtime can drop it, or pass it on as a name with no value.
 
-The same applies to the `labels` and `env` keys in `scratchsmith.toml`, which take the same
+The same applies to the `label` and `env` keys in `scratchsmith.toml`, which take the same
 strings.
 
 Add the `=` and the value you meant:
