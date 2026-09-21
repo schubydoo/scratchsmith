@@ -1,5 +1,5 @@
 //! `scratchsmith doctor`: report which external tools are available and what each
-//! is for, so a user can see what will and won't work before packing. See Task 2.7.
+//! is for, so a user can see what will and won't work before packing.
 
 use anyhow::Result;
 use std::path::PathBuf;

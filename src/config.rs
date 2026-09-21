@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// A pack configuration read from `scratchsmith.toml`. Every field is optional so a config
 /// can set just what it needs; a selected profile layers over the base, and the CLI overrides
-/// whatever it also specifies. Covers every *packing* flag (Task 5.5) — the delivery sinks
+/// whatever it also specifies. Covers every *packing* flag — the delivery sinks
 /// `--oci-archive` / `-n -o` and the display-only `--format` stay CLI-only.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)] // an unknown key is a typo, not a silent no-op

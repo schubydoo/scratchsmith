@@ -107,7 +107,7 @@ jobs:
       - uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
         with:
           tool: cargo-nextest
-      # upx isn't preinstalled; the --upx pack tests skip without it (Task 5.3).
+      # upx isn't preinstalled; the --upx pack tests skip without it.
       # ⚠️ Required by tests/common::skip_required — dropping this step FAILS the upx tests
       # under CI rather than skipping them. That is the point: a skip reads as a pass.
       - name: Install upx
@@ -183,7 +183,7 @@ jobs:
 
   completions:
     # Generate the shell completion scripts and prove each one sources cleanly
-    # under its own shell (Task 3.6 AC). bash ships on the runner; install zsh/fish.
+    # under its own shell. bash ships on the runner; install zsh/fish.
     name: shell completions
     runs-on: ubuntu-latest
     steps:

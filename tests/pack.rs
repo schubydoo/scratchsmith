@@ -624,7 +624,7 @@ fn image_config_is_reflected_in_docker_inspect() {
     assert!(inspect("{{json .Config.Env}}").contains("FOO=bar"));
     assert!(inspect("{{json .Config.Cmd}}").contains("--version"));
     assert!(inspect("{{.Config.WorkingDir}}").contains("/work"));
-    // Non-root by default (Task 2.3).
+    // Non-root by default.
     assert!(inspect("{{.Config.User}}").contains("65532"));
     // Labels + healthcheck (exec form) reach the image config.
     assert!(inspect("{{index .Config.Labels \"role\"}}").contains("api"));
@@ -767,7 +767,7 @@ fn smoke_run_proves_nss_lookups_work_in_image() {
     rmi(&tag);
 }
 
-// --- Sink dispatch (Task 5.1). The OCI-archive and rootfs sinks need no Docker daemon. ---
+// --- Sink dispatch. The OCI-archive and rootfs sinks need no Docker daemon. ---
 
 #[test]
 fn oci_archive_sink_writes_daemonless() {

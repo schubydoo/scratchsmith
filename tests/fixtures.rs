@@ -1,7 +1,7 @@
-//! Real-ELF fixtures compiled at test time. Task 1.3 exercises the search logic with
-//! scripted dependency graphs; these confirm the goblin-backed parser and resolver
-//! agree with what an actual linker emits (DT_RPATH vs DT_RUNPATH, $ORIGIN, versioned
-//! sonames). Skipped when no C compiler is available.
+//! Real-ELF fixtures compiled at test time. The unit tests in `src/resolver.rs` drive the
+//! search logic through scripted dependency graphs; these confirm the goblin-backed parser
+//! and resolver agree with what an actual linker emits (DT_RPATH vs DT_RUNPATH, $ORIGIN,
+//! versioned sonames). Skipped when no C compiler is available.
 
 use scratchsmith::pack::PackOptions;
 use scratchsmith::resolver::{read_elf_info, resolve, Sysroot};

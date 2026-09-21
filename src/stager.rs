@@ -19,7 +19,7 @@ pub struct StagedTree {
     pub entrypoint: PathBuf,
 }
 
-/// Optional runtime files a user can inject (Task 4.5). Unlike the always-on NSS
+/// Optional runtime files a user can inject. Unlike the always-on NSS
 /// includes, these are opt-in, and an explicit request that can't be satisfied is an
 /// error (the user asked for it), not a warning.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -612,7 +612,7 @@ pub fn stage(
 /// user lookups work: a minimal nsswitch.conf, the NSS modules (version-matched to
 /// the staged libc), and — when `files` is staged — a minimal passwd/group. `nss`
 /// selects which modules and nsswitch sources are staged (`--nss`). Missing NSS modules
-/// become warnings, not errors. TLS CA certs are a separate opt-in (`--ca-certs`, Task 4.5).
+/// become warnings, not errors. TLS CA certs are a separate opt-in (`--ca-certs`).
 pub fn stage_default_includes(
     resolution: &Resolution,
     dest: &Path,

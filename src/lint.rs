@@ -1,4 +1,4 @@
-//! ELF hardening checks (PIE/RELRO/NX/canary/fortify) read from goblin. See Task 4.1.
+//! ELF hardening checks (PIE/RELRO/NX/canary/fortify) read from goblin.
 //!
 //! Each property is derived from the exact ELF structure that encodes it, so the
 //! report matches what checksec-style tools show.

@@ -43,7 +43,7 @@ pub fn human_size(bytes: u64) -> String {
     format!("{bytes} B")
 }
 
-/// The outcome of a pack, emitted as text or JSON (Task 2.8). Fields are stable so
+/// The outcome of a pack, emitted as text or JSON. Fields are stable so
 /// the JSON can gate CI.
 #[derive(Debug, Clone, Serialize)]
 pub struct PackReport {

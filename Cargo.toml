@@ -49,7 +49,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "j
 wiremock = "=0.6.5"
 
 [profile.release]
-# Ship a small single binary — the size claim is part of the pitch (TAD 8.1).
+# Ship a small single binary — the size claim is part of the pitch.
 lto = true
 strip = true
 panic = "abort"

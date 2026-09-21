@@ -2,7 +2,7 @@ name: Push auth smoke (live GHCR)
 
 # Manual, opt-in end-to-end proof that `pack --push --sign` authenticates to a REAL token-auth
 # registry (GHCR), completes the daemonless round-trip (pack -> push -> pull -> run), and that
-# the cosign signature it creates verifies (Task 4.4 AC). This exercises the username/password
+# the cosign signature it creates verifies. This exercises the username/password
 # -> registry-token exchange path against real GHCR; the identity-token refresh-grant path is
 # covered deterministically by the unit tests in src/registry.rs (a live identity-token source
 # isn't reproducible here). SBOM attestation (`--sbom --sign`) is unit-tested for arg/predicate

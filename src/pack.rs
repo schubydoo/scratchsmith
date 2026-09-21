@@ -130,7 +130,7 @@ struct StagedRootfs {
 // Returns the tree, the size report, the loader path and any include warnings (no printing).
 fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<StagedRootfs> {
     let info = resolver::read_elf_info(binary)?;
-    // Reject musl up front rather than staging a subtly broken image (Task 2.5).
+    // Reject musl up front rather than staging a subtly broken image.
     resolver::ensure_glibc(&info)?;
 
     let mut warnings = Vec::new();
@@ -501,7 +501,7 @@ pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
     })
 }
 
-/// Pack `binary` into a daemonless OCI-archive tarball at `out` (Task 5.1). No Docker
+/// Pack `binary` into a daemonless OCI-archive tarball at `out`. No Docker
 /// daemon is contacted; `docker load` / `skopeo copy oci-archive:<out>` accept the result.
 fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackReport> {
     if opts.smoke {
@@ -525,7 +525,7 @@ fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackR
     })
 }
 
-/// Pack `binary` and push it straight to a registry reference (Task 5.2) — no Docker
+/// Pack `binary` and push it straight to a registry reference — no Docker
 /// daemon. Credentials come from the local Docker config; blobs the registry already has
 /// are skipped.
 fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackReport> {

@@ -24,7 +24,7 @@ pub enum Linking {
 ///
 /// RPATH and RUNPATH are kept separate on purpose: they differ in search
 /// precedence and scope, and conflating them is the classic resolution bug —
-/// RUNPATH is not inherited by a library's own dependencies (see Task 1.3).
+/// RUNPATH is not inherited by a library's own dependencies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElfInfo {
     /// Program interpreter (PT_INTERP) — the dynamic loader. Absent for static
@@ -123,7 +123,7 @@ fn references_dlopen(elf: &goblin::elf::Elf) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Task 1.3: emulate the ld.so search order.
+// Emulate the ld.so search order.
 // ---------------------------------------------------------------------------
 
 /// A pinned root filesystem to resolve against, plus the loader's default search
@@ -522,7 +522,7 @@ mod tests {
         assert!(ensure_glibc(&glibc).is_ok());
     }
 
-    // --- Task 1.3: ld.so search-order emulation --------------------------------
+    // --- ld.so search-order emulation ------------------------------------------
     // These drive the search logic through a scripted dependency graph so we can
     // exercise RPATH/RUNPATH/$ORIGIN precisely without building real ELF files.
 

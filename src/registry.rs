@@ -1,7 +1,6 @@
 //! Daemonless registry push via oci-client: blobs before manifest, auth from the Docker
 //! config. Username/password creds ride oci-client's own token exchange; an identity-token
 //! credential is exchanged here for a bearer access token (oci-client can't do that grant).
-//! See Task 5.2.
 
 use crate::image::{self, ImageConfig};
 use crate::stager::StagedTree;
@@ -11,7 +10,7 @@ use oci_client::manifest::OciImageIndex;
 use oci_client::secrets::RegistryAuth;
 use oci_client::{Client, Reference};
 
-/// Push the assembled image straight to a registry (Task 5.2) — **no Docker daemon**.
+/// Push the assembled image straight to a registry — **no Docker daemon**.
 /// The config + layer blobs and the manifest go up over HTTPS; oci-client HEAD-skips any
 /// blob the registry already has. Credentials come from the local Docker config
 /// (`~/.docker/config.json`, incl. credential helpers); a localhost registry is treated as
