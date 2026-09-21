@@ -9,7 +9,7 @@ use std::process::Command;
 use std::sync::Mutex;
 
 mod common;
-use common::{docker_available, small_fixture};
+use common::{docker_available, grype_available, small_fixture, syft_available, upx_available};
 
 // Docker tests pack the same binary into the same derived tag, so they must not run
 // concurrently or one test's cleanup deletes another's image. Serialize them.
@@ -18,32 +18,9 @@ static DOCKER: Mutex<()> = Mutex::new(());
 fn docker_lock() -> std::sync::MutexGuard<'static, ()> {
     DOCKER.lock().unwrap_or_else(|e| e.into_inner())
 }
+
 fn rmi(tag: &str) {
     let _ = Command::new("docker").args(["rmi", "-f", tag]).output();
-}
-
-fn syft_available() -> bool {
-    Command::new("syft")
-        .arg("version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-fn upx_available() -> bool {
-    Command::new("upx")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-fn grype_available() -> bool {
-    Command::new("grype")
-        .arg("version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 fn find_tini_exists() -> bool {

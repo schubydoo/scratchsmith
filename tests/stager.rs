@@ -7,18 +7,9 @@ use scratchsmith::stager::{
     stage, stage_default_includes, strip_and_measure, NssSelection, SymlinkMode,
 };
 use std::path::Path;
-use std::process::Command;
 
 mod common;
-use common::walk_contains;
-
-fn strip_available() -> bool {
-    Command::new("strip")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
+use common::{strip_available, upx_available, walk_contains};
 
 #[test]
 fn stages_a_real_binary_into_a_runnable_tree() {
@@ -101,14 +92,6 @@ fn strip_reduces_payload_size() {
         report.total_before,
         report.total_after
     );
-}
-
-fn upx_available() -> bool {
-    Command::new("upx")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 #[test]

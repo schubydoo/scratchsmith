@@ -9,15 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod common;
-use common::{cc_available, walk_contains};
+use common::{cc_available, tool_available, walk_contains};
 
-fn tool_available(tool: &str) -> bool {
-    Command::new(tool)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
 fn cc(args: &[&str]) {
     let out = Command::new("cc").args(args).output().expect("run cc");
     assert!(

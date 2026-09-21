@@ -6,9 +6,9 @@
 //! `walk_contains` twice byte-for-byte, `cc_available` twice, `small_fixture` twice with two
 //! different return types.
 //!
-//! Not every helper is used by every crate, so `#![allow(dead_code)]` is load-bearing here: an
-//! unused-import warning per crate is the price of sharing, and `-D warnings` would otherwise
-//! fail the build.
+//! Not every helper is used by every crate, so `#![allow(dead_code)]` is load-bearing here: a
+//! helper no crate calls is dead code in that crate, and `-D warnings` would otherwise fail the
+//! build.
 #![allow(dead_code)]
 
 use std::path::Path;
@@ -33,15 +33,35 @@ pub fn small_fixture() -> Option<&'static Path> {
 /// `small_fixture` as a `&str`, for building argv.
 ///
 /// A second accessor rather than a second fixture: the candidate paths stay defined once, so
-/// the two crates that want different types cannot drift apart on WHICH binary they pack. The
-/// unwrap is sound because the candidates are ASCII literals.
+/// the two crates that want different types cannot drift apart on WHICH binary they pack.
+/// `to_str` cannot return `None` here, because the candidates are ASCII literals.
 pub fn small_fixture_str() -> Option<&'static str> {
     small_fixture().and_then(Path::to_str)
 }
 
 /// Is a C compiler on PATH? The fixture builders need one to compile real ELFs at test time.
 pub fn cc_available() -> bool {
-    tool_runs("cc", &["--version"])
+    tool_available("cc")
+}
+
+/// Is `strip` on PATH? `stage`'s strip pass needs it.
+pub fn strip_available() -> bool {
+    tool_available("strip")
+}
+
+/// Is `upx` on PATH? The compression tests need it.
+pub fn upx_available() -> bool {
+    tool_available("upx")
+}
+
+/// Is `syft` on PATH? `syft` answers a bare `version` subcommand, not `--version`.
+pub fn syft_available() -> bool {
+    tool_runs("syft", &["version"])
+}
+
+/// Is `grype` on PATH? Same bare `version` subcommand as `syft`.
+pub fn grype_available() -> bool {
+    tool_runs("grype", &["version"])
 }
 
 /// Is a usable Docker daemon reachable? `docker info` rather than `docker --version`, because
@@ -69,6 +89,11 @@ pub fn walk_contains(root: &Path, name: &str) -> bool {
         }
     }
     false
+}
+
+/// Does `tool` answer `--version`? The generic probe, for a tool with no named helper here.
+pub fn tool_available(tool: &str) -> bool {
+    tool_runs(tool, &["--version"])
 }
 
 // Shared by the tool probes above: a tool counts as present only when it RUNS successfully,
