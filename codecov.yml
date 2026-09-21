@@ -87,11 +87,24 @@ component_management:
       paths:
         - src/supplychain.rs
     - component_id: cli
-      name: cli · config · doctor
+      name: cli · config · doctor · main
       paths:
         - src/cli.rs
         - src/config.rs
         - src/doctor.rs
+        - src/main.rs
+    - component_id: diff
+      name: diff (rootfs drift)
+      paths:
+        - src/diff.rs
+    - component_id: graph
+      name: graph (dependency tree)
+      paths:
+        - src/graph.rs
+    - component_id: unpack
+      name: unpack (OCI archive extraction)
+      paths:
+        - src/unpack.rs
     # Crate root: `pub mod` re-exports only, so this renders near-empty (no coverable
     # lines) — listed for a complete module map, not for a coverage signal.
     - component_id: lib
