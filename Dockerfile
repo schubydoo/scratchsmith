@@ -4,11 +4,13 @@
 # image — the minimal-image philosophy scratchsmith itself embodies.
 #
 # Built with buildx, NOT by scratchsmith: its own daemonless multi-arch registry
-# push is a future milestone. Note that `scratchsmith pack` needs docker,
-# ldconfig, syft, and strip at runtime, none of which exist inside a scratch
-# image — so `pack` will not work here, but `--version`, `lint`, `doctor`, and
-# `--completions` do. To run `pack` in a container, use the `:toolbox` image
-# instead (Dockerfile.toolbox, a Wolfi base with the toolchain) — see docs/usage.md.
+# push is a future milestone. The rule for what runs here: every subcommand that
+# needs no external tool and no certificate store. `pack` needs docker, ldconfig,
+# syft, and strip, and `index` needs a CA bundle for HTTPS, so neither works here.
+# Everything else does, `doctor` included — it probes for each tool and reports
+# them all missing, which is the right answer. To run `pack` in a container, use the
+# `:toolbox` image instead (Dockerfile.toolbox, a Wolfi base with the
+# toolchain) — see docs/usage.md, which lists the subcommands.
 #
 # The release workflow lays out dist/<arch>/scratchsmith before building. To
 # build locally:

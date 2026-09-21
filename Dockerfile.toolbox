@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
 #
 # The :toolbox image — a FUNCTIONAL scratchsmith image. Unlike the FROM scratch release image
-# (which can only run --version/lint/doctor), this bundles the full `pack` toolchain on a Wolfi
-# base, so `scratchsmith pack` runs inside a container:
+# (which runs no subcommand that needs a tool or a certificate — see docs/usage.md), this bundles the full `pack`
+# toolchain on a Wolfi base, so `scratchsmith pack` runs inside a container:
 #
 #   docker run --rm -v "$PWD:/w" -w /w ghcr.io/schubydoo/scratchsmith:toolbox \
 #     pack --oci-archive out.oci.tar ./app          # daemonless — no socket needed

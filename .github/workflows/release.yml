@@ -129,6 +129,11 @@ jobs:
           set -euo pipefail
           docker run --rm scratchsmith:smoke --version
           docker run --rm scratchsmith:smoke doctor >/dev/null
+          # docs/usage.md claims the scratch image runs every subcommand that needs no
+          # external tool and no certificate store. These two make that claim a gate
+          # rather than prose. Both take the image's own binary, so no fixture or mount.
+          docker run --rm scratchsmith:smoke lint /scratchsmith >/dev/null
+          docker run --rm scratchsmith:smoke graph /scratchsmith >/dev/null
       - name: Build and push
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
