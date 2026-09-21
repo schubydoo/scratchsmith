@@ -2,8 +2,10 @@
 //! (not by scraping host `ldd`). The correctness core.
 //!
 //! Two halves, both here: `parse_elf_info` reads the raw dynamic-linking facts out of an
-//! ELF, and `resolve_with` turns each soname into a real path by walking DT_RPATH,
-//! DT_RUNPATH, `$ORIGIN`, `$LIB`, `$PLATFORM` and the default directories, in that order.
+//! ELF, and `resolve_with` turns each soname into a real path by searching DT_RPATH (the
+//! object's own, then its ancestors' — RPATH is transitive, and ignored when the object
+//! also declares RUNPATH), then its own DT_RUNPATH, then the sysroot default dirs.
+//! `$ORIGIN`, `$LIB` and `$PLATFORM` are expanded inside those entries, not searched.
 
 use anyhow::{bail, Context, Result};
 use std::collections::{HashSet, VecDeque};
