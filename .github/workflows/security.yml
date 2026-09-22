@@ -91,7 +91,7 @@ jobs:
           private-key: ${{ secrets.SCRATCHSMITH_CI_APP_PRIVATE_KEY }}
           permission-contents: read
       - name: Set up uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - name: Install zizmor
         # Pinned so a required check never depends on whatever zizmor ships that
         # hour, and so Renovate has a version to bump. Keep in step with the SHAs above.
