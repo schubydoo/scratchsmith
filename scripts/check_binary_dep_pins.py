@@ -8,27 +8,29 @@ the ``github-releases`` datasource exposes the git-tag commit, not the asset's f
 GitHub publishes a per-asset SHA-256 (the ``digest`` field of a release asset), so this
 script reads that digest and compares it with the pin.
 
-* verify (default): a stale hash fails and the script prints the correct value.
+* verify (default): a stale hash fails and the script prints the correct value. The
+  ``binary-dep-pins`` workflow runs this mode.
 * ``--fix``: a stale hash is rewritten in place. The self-hosted Renovate CE runs this as a
   ``postUpgradeTask`` (see ``schubydoo/renovate-config``), so the new hash lands in the
   same commit as the version bump.
 
-Fetch and lookup errors fail in both modes, so a bump that cannot be verified never passes.
-Stdlib only: the postUpgradeTask runs a bare ``python3`` with no virtualenv.
+Every pin must be verified against a published digest. A fetch error, a missing asset, or
+an asset with no published digest fails in both modes, so a bump that cannot be verified
+never passes. Stdlib only: the postUpgradeTask runs a bare ``python3`` with no virtualenv.
 Ported from clauster's ``scripts/check_binary_dep_pins.py`` (the workflow-pin half only).
 
 Exit codes: ``0`` every pin matches (or, with ``--fix``, now matches); ``1`` a pin is stale
-(verify mode) or could not be fetched, located, or parsed.
+(verify mode) or could not be fetched, located, parsed, or verified.
 """
 
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
 import sys
-import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -43,7 +45,7 @@ class WorkflowPin:
     owner: str
     repo: str
     version_re: re.Pattern[str]  # one group: the pinned version
-    sha_re: re.Pattern[str]  # one group: the pinned 64-hex sha256
+    sha_re: re.Pattern[str]  # one group: the pinned 64-hex sha256 (the rewrite target)
     tag: Callable[[str], str]  # version -> release tag
     asset: Callable[[str], str]  # version -> downloaded asset name
 
@@ -74,24 +76,27 @@ def fetch_release(owner: str, repo: str, tag: str) -> dict:
         return json.load(resp)
 
 
-def resolve(pin: WorkflowPin, root: Path) -> tuple[str, str, str | None]:
+def resolve(pin: WorkflowPin, root: Path) -> tuple[str, str, str]:
     """Return ``(status, detail, current_sha)`` for one pin.
 
-    ``status`` is ``ok``, ``mismatch`` (``detail`` is the published sha256), ``warn``
-    (GitHub publishes no digest for the asset), or ``error``.
+    ``status`` is ``ok`` (``detail`` is empty), ``mismatch`` (``detail`` is the published
+    sha256), or ``error`` (``detail`` says why the pin could not be verified; this includes an
+    asset with no published digest). ``current_sha`` is empty when the pin could not be read.
     """
     try:
         text = (root / pin.path).read_text(encoding="utf-8")
     except OSError as exc:
-        return "error", f"could not read {pin.path}: {exc}", None
+        return "error", f"could not read {pin.path}: {exc}", ""
     vmatch, smatch = pin.version_re.search(text), pin.sha_re.search(text)
     if vmatch is None or smatch is None:
-        return "error", f"could not find the VERSION/SHA256 pin in {pin.path}", None
+        return "error", f"could not find the VERSION/SHA256 pin in {pin.path}", ""
     version, current = vmatch.group(1), smatch.group(1)
     tag, asset_name = pin.tag(version), pin.asset(version)
     try:
         release = fetch_release(pin.owner, pin.repo, tag)
-    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+    except (OSError, http.client.HTTPException, ValueError) as exc:
+        # OSError covers urllib.error.URLError/HTTPError and timeouts, HTTPException covers a
+        # truncated or dropped response, and ValueError covers malformed JSON.
         return "error", f"could not fetch {pin.owner}/{pin.repo}@{tag}: {exc}", current
     assets = [a for a in release.get("assets", []) if isinstance(a, dict)]
     asset = next((a for a in assets if a.get("name") == asset_name), None)
@@ -99,7 +104,12 @@ def resolve(pin: WorkflowPin, root: Path) -> tuple[str, str, str | None]:
         return "error", f"release {tag} has no asset named {asset_name}", current
     digest = asset.get("digest")
     if not (isinstance(digest, str) and digest.startswith("sha256:")):
-        return "warn", f"GitHub publishes no sha256 for {asset_name}", current
+        return (
+            "error",
+            f"GitHub publishes no sha256 for {asset_name}; set the *_SHA256 by hand "
+            "from the release's checksums file",
+            current,
+        )
     published = digest.removeprefix("sha256:")
     if re.fullmatch(r"[0-9a-f]{64}", published) is None:
         return "error", f"GitHub published a malformed sha256 for {asset_name}: {digest!r}", current
@@ -115,18 +125,16 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(__file__).resolve().parent.parent
 
     failures = 0
-    fixes: dict[Path, dict[str, str]] = {}
+    fixes: list[tuple[WorkflowPin, str]] = []
     for pin in PINS:
         status, detail, current = resolve(pin, root)
         if status == "ok":
             print(f"OK   {pin.path}: sha256 matches GitHub's published digest")
-        elif status == "warn":
-            print(f"WARN {pin.path}: {detail}")
-        elif status == "error" or current is None:
+        elif status == "error":
             print(f"FAIL {pin.path}: {detail}")
             failures += 1
         elif args.fix:
-            fixes.setdefault(root / pin.path, {})[current] = detail
+            fixes.append((pin, detail))
             print(f"FIX  {pin.path}: sha256\n       was:  {current}\n       now:  {detail}")
         else:
             print(
@@ -138,21 +146,22 @@ def main(argv: list[str] | None = None) -> int:
 
     if fixes and failures:
         # All or nothing: never write a subset while another pin failed to verify.
-        print(f"SKIP not rewriting {len(fixes)} file(s): {failures} pin(s) failed")
+        print(f"SKIP not rewriting {len(fixes)} pin(s): {failures} pin(s) failed")
     elif fixes:
-        # Locate every pin in every file before writing any file.
+        # Rewrite each hash through the regex that located it, so only the *_SHA256 value
+        # changes. Build every new file text before writing any file.
         updated: dict[Path, str] = {}
-        for path, repl in fixes.items():
-            text = path.read_text(encoding="utf-8")
-            for old, new in repl.items():
-                if text.count(old) != 1:
-                    print(f"FAIL could not locate sha256 {old} exactly once in {path.name}")
-                    return 1
-                text = text.replace(old, new)
-            updated[path] = text
+        for pin, new in fixes:
+            path = root / pin.path
+            text = updated.get(path) or path.read_text(encoding="utf-8")
+            match = pin.sha_re.search(text)
+            if match is None:
+                print(f"FAIL could not locate the SHA256 pin in {pin.path} to rewrite")
+                return 1
+            updated[path] = text[: match.start(1)] + new + text[match.end(1) :]
         for path, text in updated.items():
             path.write_text(text, encoding="utf-8")
-        print(f"wrote {sum(len(r) for r in fixes.values())} refreshed sha256 pin(s)")
+        print(f"wrote {len(fixes)} refreshed sha256 pin(s)")
     return 1 if failures else 0
 
 

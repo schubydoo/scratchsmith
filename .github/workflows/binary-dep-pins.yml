@@ -1,0 +1,51 @@
+name: Binary dep pins
+
+# Verify each version + sha256 release-asset pin against the digest GitHub publishes for the
+# asset (scripts/check_binary_dep_pins.py, verify mode). Today that is the actionlint pin in
+# actionlint.yml. Renovate CE runs the same script with --fix as a postUpgradeTask, so this job
+# also proves that the script still works: an upstream change (a renamed asset, a dropped
+# digest) fails here instead of first appearing as a failed Renovate PR.
+#
+# Path-filtered on PRs and pushes, so it never runs on an unrelated PR, and weekly on a
+# schedule. It is NOT a required check: a required path-filtered check leaves every other PR
+# waiting for a status that never posts.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "scripts/check_binary_dep_pins.py"
+      - ".github/workflows/actionlint.yml"
+      - ".github/workflows/binary-dep-pins.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/check_binary_dep_pins.py"
+      - ".github/workflows/actionlint.yml"
+      - ".github/workflows/binary-dep-pins.yml"
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: binary-dep-pins-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pins:
+    name: binary-dep pin checksums
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # GITHUB_TOKEN only raises the API rate limit for reading a public repo's release
+      # metadata. The job's contents: read permission caps it.
+      - name: Verify pins against GitHub's published asset digests
+        run: python3 scripts/check_binary_dep_pins.py
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
