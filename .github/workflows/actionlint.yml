@@ -38,7 +38,9 @@ jobs:
           # renovate: datasource=github-releases depName=rhysd/actionlint
           ACTIONLINT_VERSION: "1.7.12"
           # sha256 of actionlint_1.7.12_linux_amd64.tar.gz from the release's checksums.txt.
-          # Renovate can bump the pair; a moved artifact fails the -c.
+          # Renovate bumps the version, and the Renovate CE postUpgradeTask
+          # `python3 scripts/check_binary_dep_pins.py --fix` rewrites this hash in the same
+          # commit. A moved artifact fails the -c.
           ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
         run: |
           set -euo pipefail
