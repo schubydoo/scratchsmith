@@ -5,6 +5,16 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 1.5.1 (2026-09-25)
+
+### Fixes
+
+#### `install.sh` no longer stops silently when it resolves the latest release ([#232](https://github.com/schubydoo/scratchsmith/pull/232))
+
+Without `VERSION`, the installer sometimes exited with no message right after "resolving the latest
+release". The cause was a race in a shell pipe. The installer now reads the full GitHub answer
+before it parses the tag. If GitHub cannot be reached, it prints an error that names `VERSION`.
+
 ## 1.5.0 (2026-09-21)
 
 ### Features
