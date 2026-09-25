@@ -9,17 +9,17 @@
 class Scratchsmith < Formula
   desc "Pack a dynamic glibc Linux binary into a minimal non-root scratch container"
   homepage "https://github.com/schubydoo/scratchsmith"
-  version "1.5.0"
+  version "1.5.1"
   license "MIT"
 
   on_linux do
     on_intel do
-      url "https://github.com/schubydoo/scratchsmith/releases/download/v1.5.0/scratchsmith-v1.5.0-linux-amd64.tar.gz"
-      sha256 "8bdcb6efb272441148d56faa8a53bdde95f3f3b057353aa369e134c99464c475"
+      url "https://github.com/schubydoo/scratchsmith/releases/download/v1.5.1/scratchsmith-v1.5.1-linux-amd64.tar.gz"
+      sha256 "3cc93aa731c42d5848bbf170eedb33b999fbb9c8b28c7245f3d571cee3ae1451"
     end
     on_arm do
-      url "https://github.com/schubydoo/scratchsmith/releases/download/v1.5.0/scratchsmith-v1.5.0-linux-arm64.tar.gz"
-      sha256 "5913414ead5f04e4969fa9c83a99c9503c11cfab981a94d0830a7aa56e43faa8"
+      url "https://github.com/schubydoo/scratchsmith/releases/download/v1.5.1/scratchsmith-v1.5.1-linux-arm64.tar.gz"
+      sha256 "ed14285e4687f3427b491170b81ad1d150e4ca74b9d09a3aa3998fec86abc117"
     end
   end
 
