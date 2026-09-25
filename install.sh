@@ -107,9 +107,11 @@ fi
 tag="${VERSION:-}"
 if [ -z "$tag" ]; then
   info "resolving the latest release…"
-  tag="$(fetch "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep -m1 '"tag_name"' \
-    | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')"
+  # Read the whole answer before parsing it. `fetch | grep -m1` let grep exit early,
+  # curl then died on SIGPIPE, and pipefail + set -e ended the script with no message.
+  latest="$(fetch "https://api.github.com/repos/${REPO}/releases/latest")" \
+    || die "could not ask GitHub for the latest release; set VERSION=vX.Y.Z"
+  tag="$(sed -nE '/"tag_name"/{s/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/p;q;}' <<<"$latest")"
   [ -n "$tag" ] || die "could not resolve the latest release tag; set VERSION=vX.Y.Z"
 fi
 base="https://github.com/${REPO}/releases/download/${tag}"
