@@ -23,6 +23,11 @@ else
   rustup update nightly
   export RUSTUP_TOOLCHAIN=nightly
 fi
+# aws-lc-sys must compile jitterentropy at -O0 and rewrites CFLAGS to do so, but cc >= 1.6.0
+# caches the environment, so the image's -O1 leaks through and the file #errors. No fuzz target
+# does TLS, so skip jitterentropy here. Mirrored in ci.yml's fuzz-check; drop both once the
+# build passes without it.
+export AWS_LC_SYS_NO_JITTER_ENTROPY=1
 cargo fuzz build -O --debug-assertions
 FUZZ_TARGET_OUTPUT_DIR="$SRC/scratchsmith/fuzz/target/x86_64-unknown-linux-gnu/release"
 for f in fuzz/fuzz_targets/*.rs; do
