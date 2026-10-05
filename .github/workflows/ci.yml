@@ -284,9 +284,15 @@ jobs:
       # -D warnings holds the harness to the main crate's clippy bar: catches warning-only drift
       # (unused import, a newly-#[deprecated] call) that a bare `check` exits 0 on. Deps are
       # --cap-lints'd by cargo, so only scratchsmith + the harness are held to it.
+      # CFLAGS mirrors the optimization level the ClusterFuzzLite image forces on C deps: a
+      # build script that only works at the default flags (aws-lc-sys's jitterentropy, broken
+      # by a cc bump) otherwise fails first in the NON-required fuzzing run.
+      # AWS_LC_SYS_NO_JITTER_ENTROPY must match .clusterfuzzlite/build.sh.
       - run: cargo check --manifest-path fuzz/Cargo.toml
         env:
           RUSTFLAGS: "-D warnings"
+          CFLAGS: "-O1"
+          AWS_LC_SYS_NO_JITTER_ENTROPY: "1"
 
   semver:
     # INFORMATIONAL ONLY — deliberately NOT in ci-required-checks below, so it never
