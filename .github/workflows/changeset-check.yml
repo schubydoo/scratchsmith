@@ -14,9 +14,11 @@ permissions:
   contents: read
   pull-requests: write # post/update the advisory sticky comment
 
-concurrency:
-  group: changeset-check-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+# NO `concurrency` block, on purpose. Renokeeper labels a PR seconds after it
+# opens it, and a group would cancel the `opened` run. That leaves a `cancelled`
+# check run on the head commit, which Renovate counts as pending forever, so
+# its own automerge never fires. `cancel-in-progress: false` does not help: a
+# third event still cancels the run that waits in the queue.
 
 jobs:
   changeset:
@@ -47,7 +49,12 @@ jobs:
             const pr = context.payload.pull_request;
             const marker = '<!-- changeset-check -->';
             try {
-              const labels = (pr.labels || []).map(l => l.name);
+              // Live labels, not the payload: the `opened` run now finishes, and
+              // its payload predates a label added seconds later.
+              const { data: live } = await github.rest.pulls.get({
+                owner, repo, pull_number: pr.number,
+              });
+              const labels = (live.labels || []).map(l => l.name);
               if (labels.includes('no-changelog')) {
                 core.info('no-changelog label set; skipping.');
                 return;

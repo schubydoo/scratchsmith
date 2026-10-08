@@ -12,9 +12,10 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: pr-title-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+# NO `concurrency` block, on purpose. Renokeeper edits the PR body seconds after
+# it opens the PR, and a group would cancel the `opened` run. That leaves a
+# `cancelled` check run on the head commit, which Renovate counts as pending
+# forever, so its own automerge never fires. See changeset-check.yml.
 
 jobs:
   validate:
