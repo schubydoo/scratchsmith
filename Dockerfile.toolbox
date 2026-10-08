@@ -18,7 +18,7 @@
 #
 # Wolfi is rolling and glibc-based (matching scratchsmith's glibc target). The base digest is
 # Renovate-tracked; the apk toolchain is pulled fresh on every release build.
-FROM cgr.dev/chainguard/wolfi-base@sha256:238642d42c5613936474d00b900c4e65fb6f637d8991c913403ff09a09cf43a3
+FROM cgr.dev/chainguard/wolfi-base@sha256:05d24163df148be377275af8374c16523a1dc7e19bf4f1c689784791553c5e45
 ARG TARGETARCH
 # The runtime toolchain `pack` shells out to: ldconfig (glibc), strip (binutils), syft (--sbom),
 # grype (--scan), cosign (--sign), upx (--upx), tini (--init), and the docker CLI (default sink).
