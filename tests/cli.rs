@@ -696,3 +696,94 @@ fn a_registry_command_without_a_ca_store_fails_instead_of_panicking() {
         "the error must name the cause and the fix: {stderr}"
     );
 }
+
+#[test]
+fn watch_packs_again_when_the_binary_changes() {
+    let Some(fixture) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let app = tmp.path().join("app");
+    std::fs::copy(fixture, &app).unwrap();
+    let rootfs = tmp.path().join("rootfs");
+    let stderr_path = tmp.path().join("stderr");
+
+    // stderr goes to a file, not a pipe: the child never exits by itself, and a file can be
+    // read while it runs without a reader thread.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["pack", "-n", "-o", rootfs.to_str().unwrap(), "--watch"])
+        .arg(&app)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::fs::File::create(&stderr_path).unwrap())
+        .spawn()
+        .expect("failed to run scratchsmith binary");
+
+    // One "watching" line is printed after each pack attempt, so the count is the number
+    // of packs finished. Poll for it under a deadline; on a timeout, kill and show stderr.
+    let mut wait_for_packs = |n: usize| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+            if stderr.matches("watching ").count() >= n {
+                return;
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = child.kill();
+                panic!("timed out waiting for pack {n}; stderr so far: {stderr}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    };
+
+    wait_for_packs(1);
+    // A rebuild: same bytes, new file, new mtime.
+    let rebuilt = tmp.path().join("app.new");
+    std::fs::copy(fixture, &rebuilt).unwrap();
+    std::fs::rename(&rebuilt, &app).unwrap();
+    wait_for_packs(2);
+
+    // A broken build must be reported and must not end the watch.
+    std::fs::write(&app, b"not an ELF").unwrap();
+    wait_for_packs(3);
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "a failed rebuild must not end the watch"
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let stderr = std::fs::read_to_string(&stderr_path).unwrap();
+    assert!(
+        stderr.contains("error: "),
+        "the failure is reported: {stderr}"
+    );
+}
+
+#[test]
+fn watch_refuses_to_push() {
+    // clap owns the flag pair; a `push` that arrives from the config is caught in dispatch.
+    let out = run(&[
+        "pack",
+        "--watch",
+        "--push",
+        "localhost:5000/x:1",
+        "/bin/true",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("scratchsmith.toml");
+    std::fs::write(
+        &cfg,
+        format!("binary = \"{bin}\"\npush = \"localhost:5000/x:1\"\n"),
+    )
+    .unwrap();
+    let out = run(&["pack", "--watch", "--config", cfg.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("--watch cannot push"), "{stderr}");
+}

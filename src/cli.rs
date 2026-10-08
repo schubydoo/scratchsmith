@@ -176,6 +176,9 @@ pub enum Command {
         /// Fail the pack if this library does NOT ship (same scope as --deny); repeatable.
         #[arg(long = "require", value_name = "SONAME")]
         require: Vec<String>,
+        /// Pack again each time the binary changes, until interrupted. Not with --push.
+        #[arg(long, conflicts_with = "push")]
+        watch: bool,
         /// Report format.
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
@@ -311,6 +314,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             nss,
             deny,
             require,
+            watch,
             format,
         } => {
             // Load the config file (if any), apply a selected profile, then let CLI flags win.
@@ -431,13 +435,26 @@ fn dispatch(cli: Cli) -> Result<()> {
                     "--sign needs a push target — pass --push or set `push` in the config/profile"
                 );
             }
-            let report = crate::pack::pack(&binary, &opts, sink)?;
-
-            match format {
-                Format::Text => println!("{}", report.to_text()),
-                Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+            let pack_once = || -> Result<()> {
+                let report = crate::pack::pack(&binary, &opts, sink.clone())?;
+                match format {
+                    Format::Text => println!("{}", report.to_text()),
+                    Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+                }
+                Ok(())
+            };
+            if !watch {
+                return pack_once();
             }
-            Ok(())
+            // clap rejects `--watch --push`; this catches a `push` that came from the config.
+            // A watch packs on every save, and a registry is not the place for each of those.
+            if matches!(sink, crate::pack::Sink::Push(_)) {
+                bail!(
+                    "--watch cannot push: it packs again on every change. Pass a local sink \
+                     (the default load, --oci-archive, or --no-build --output), or drop --watch"
+                );
+            }
+            crate::watch::run(&binary, pack_once)
         }
         Command::Doctor => crate::doctor::run(),
         Command::Lint { binary, fail_on } => crate::lint::run(&binary, &fail_on),
