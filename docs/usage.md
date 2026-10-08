@@ -265,6 +265,43 @@ command. So `--healthcheck /app --healthcheck --health` is the one command `["/a
 not two healthchecks. It is the same as `healthcheck = ["/app", "--health"]` in the
 [configuration file](configuration.md).
 
+## Pack again on every change
+
+While you develop the program that you pack, `--watch` packs it again after each build. It
+packs one time, and then packs again each time the binary changes:
+
+```sh
+scratchsmith pack --watch ./target/release/app
+```
+
+Scratchsmith looks at the binary two times each second. After a change, it waits until the file
+is the same on two looks in a row. That keeps most half-written binaries out. If the linker
+stalls for longer, the pack of the half-written file fails, and the finished file packs next.
+If the binary is gone for five seconds, scratchsmith says so one time and continues to watch.
+
+Each pack prints its text report. To stop, press Ctrl-C. Scratchsmith does not catch the
+interrupt, so the exit status is the one your shell gives a process that Ctrl-C ended.
+
+Only the binary is watched. A change to a library or to an `--add-file` source does not start a
+pack. The next pack that the binary starts picks it up. A change to the configuration file is
+not picked up at all, because scratchsmith reads that file one time. Stop the watch and start it
+again.
+
+If the first pack fails, the command exits with an error, the same as a pack with no `--watch`.
+If a later pack fails, scratchsmith prints the error and continues to watch. A build that fails
+halfway does not end the watch.
+
+`--watch` works with the default load and with `--oci-archive`. It refuses three things:
+
+- `--push`, and a `push` key from the configuration file. A registry is not the place for an
+  image from every save.
+- `--no-build`. That sink stages into one directory, and a second pack into the same directory
+  collides with the files from the first.
+- `--format json`. Each pack prints a text report.
+
+`--watch` is a command-line flag only. It has no key in the configuration file and no input on
+the GitHub Action.
+
 ## In CI
 
 To pack in a GitHub Actions workflow with the composite action instead of shelling out to the CLI,

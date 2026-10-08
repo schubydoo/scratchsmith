@@ -19,3 +19,4 @@ pub mod resolver;
 pub mod stager;
 pub mod supplychain;
 pub mod unpack;
+pub mod watch;
