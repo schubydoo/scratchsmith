@@ -202,6 +202,10 @@ pub struct Resolution {
     /// Parent->child edges, keyed by real path, for graph reconstruction. Unlike `libs`,
     /// this keeps every edge (repeats, diamonds, unresolved), so no edge dangles.
     pub edges: Vec<DepEdge>,
+    /// Inputs the resolver tolerated and scratchsmith 2.0 will reject, one line each. The
+    /// resolution itself is unchanged by them; callers print them with
+    /// `warn_about_tolerances`.
+    pub warnings: Vec<String>,
 }
 
 impl Resolution {
@@ -214,6 +218,17 @@ impl Resolution {
             .as_ref()
             .map(|i| i.image_path.display().to_string())
     }
+
+    /// Print each tolerance warning as one stderr line, never stdout: stdout carries the
+    /// `--format json` report (`COMPATIBILITY.md`). The exit code stays where it is.
+    pub fn warn_about_tolerances(&self) {
+        for w in &self.warnings {
+            eprintln!(
+                "warning: {w} scratchsmith 2.0 rejects it. See {}",
+                crate::image::DEPRECATIONS_URL
+            );
+        }
+    }
 }
 
 /// Supplies the dynamic-linking facts for a file. Abstracted so the search order
@@ -224,8 +239,10 @@ pub trait LinkInfoSource {
     /// The two failure shapes are deliberately DIFFERENT types, because conflating them
     /// drops a whole subtree from the resolution, with nothing landing in `missing`:
     ///
-    /// - `Ok(None)` — the file was read, and it is not an ELF (a stray data file resolved by
-    ///   name). It has no `DT_NEEDED` of its own, so keeping it as a leaf is correct.
+    /// - `Ok(None)` — the file was read, and it does not parse as an ELF. For a stray data
+    ///   file resolved by name that is correct: it has no `DT_NEEDED` of its own, so it is a
+    ///   leaf. A truncated or corrupt ELF lands here too and is kept as a leaf until 2.0;
+    ///   `resolve_with` tells the two apart by the magic bytes and warns about the second.
     /// - `Err` — the file could not be READ. Nothing is known about its dependencies, so
     ///   treating it as a leaf would drop its whole subtree from the resolution without
     ///   anything landing in `Resolution::missing`.
@@ -239,13 +256,11 @@ impl LinkInfoSource for GoblinSource {
     fn read(&self, path: &Path) -> Result<Option<ElfInfo>> {
         // The IO error propagates; a PARSE failure stays a leaf, exactly as before.
         //
-        // Keying the leaf on the `\x7fELF` magic instead -- so a truncated or corrupt `.so`
-        // propagates -- is a real improvement and is NOT done here. It would refuse to pack a
-        // graph that packs today: such a file survives the stager's copy, the hardening lint
-        // returns Option, and only `--strip` rejects it, so a default pack exited 0 and wrote
-        // an image. That is "tighten validation", which is a separate decision from this fix.
-        // Tracked in the scratch backlog beside DEF F12, which was split out for the same
-        // property.
+        // That includes a truncated or corrupt `.so`, which loses its DT_NEEDED subtree.
+        // Failing on it would refuse to pack a graph that packs today: such a file survives
+        // the stager's copy, the hardening lint returns Option, and only `--strip` rejects it.
+        // That is "tighten validation", so it waits for 2.0, and `resolve_with` warns until
+        // then.
         let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
         Ok(parse_elf_info(&bytes).ok())
     }
@@ -310,11 +325,38 @@ pub fn resolve_with(
         let obj_dir = obj_path.parent().unwrap_or(Path::new("/"));
 
         // An object's own RPATH is ignored when it also declares RUNPATH (glibc rule).
-        let own_rpaths: Vec<PathBuf> = if obj.runpaths.is_empty() {
-            build_dirs(&obj.rpaths, obj_dir, &sysroot.root, &root_info)
+        let used_rpaths: &[String] = if obj.runpaths.is_empty() {
+            &obj.rpaths
         } else {
-            Vec::new()
+            &[]
         };
+        // `$PLATFORM` has no value here, so the entry is searched with the token gone and a
+        // same-named file in that other directory can stage in place of the arch-specific
+        // one. Warn only where a search can use the entry. A soname with a slash is a path
+        // and skips the search list, so a RUNPATH entry needs a bare soname on this object.
+        // An RPATH entry is also handed to every child, so any DT_NEEDED at all is enough.
+        if root_info.platform().is_empty() {
+            let bare_soname = obj.needed.iter().any(|n| !n.contains('/'));
+            let rpaths = used_rpaths.iter().filter(|_| !obj.needed.is_empty());
+            let runpaths = obj.runpaths.iter().filter(|_| bare_soname);
+            for entry in rpaths.chain(runpaths) {
+                if entry.contains("$PLATFORM") || entry.contains("${PLATFORM}") {
+                    push_unique(
+                        &mut resolution.warnings,
+                        format!(
+                            "`$PLATFORM` has no value for this architecture ({}), so the \
+                             search path `{}` in {} was searched as `{}` and a library from \
+                             the wrong directory can ship.",
+                            goblin::elf::header::machine_to_str(root_info.machine),
+                            entry.escape_debug(),
+                            printable(&obj_path),
+                            expand_tokens(entry, obj_dir, &root_info).escape_debug()
+                        ),
+                    );
+                }
+            }
+        }
+        let own_rpaths = build_dirs(used_rpaths, obj_dir, &sysroot.root, &root_info);
         let runpath_dirs = build_dirs(&obj.runpaths, obj_dir, &sysroot.root, &root_info);
 
         // Search order: RPATH (own, then ancestors' — transitive) -> RUNPATH (this
@@ -366,8 +408,16 @@ pub fn resolve_with(
             // just above, and the stager's copy of that same unreadable file failed, so the
             // error named a copy. `check_lib_policy` runs after `stager::stage`, so the
             // --require/--deny gate was never reached rather than blind.
-            if let Some(child) = source.read(&real)? {
-                queue.push_back((real, child, child_rpaths.clone()));
+            match source.read(&real)? {
+                Some(child) => queue.push_back((real, child, child_rpaths.clone())),
+                // Not a stray data file: it claims to be an ELF and will not parse, so its
+                // own DT_NEEDED entries are unknown and nothing under it was resolved.
+                None if has_elf_magic(&real) => resolution.warnings.push(format!(
+                    "{} starts like an ELF and cannot be parsed (truncated or corrupt), so the \
+                     libraries it needs were not resolved and can be absent from the image.",
+                    printable(&real)
+                )),
+                None => {}
             }
         }
     }
@@ -433,6 +483,24 @@ fn reroot(root: &Path, path: &Path) -> PathBuf {
         Ok(rel) => root.join(rel),
         Err(_) => path.to_path_buf(),
     }
+}
+
+// A path for a warning line. The search-path text comes out of the packed binary, and a file
+// name can hold anything but `/` and NUL, so escape control characters: a raw newline or
+// terminal escape would let the input forge a line of scratchsmith's own output.
+fn printable(path: &Path) -> String {
+    path.to_string_lossy().escape_debug().to_string()
+}
+
+// True when the file opens and begins with the ELF magic. Any IO failure reads as "no",
+// which only loses a warning. A 2.0 rejection must not gate on this: it would fail open.
+fn has_elf_magic(path: &Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut magic))
+        .is_ok()
+        && magic == *b"\x7fELF"
 }
 
 // Best-effort real path; falls back to the input if canonicalization fails so a
@@ -669,6 +737,107 @@ mod tests {
             !has(&res, "libleaf.so"),
             "a leaf contributes no DT_NEEDED children"
         );
+    }
+
+    #[test]
+    fn an_unparsable_elf_leaf_warns_and_a_data_file_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (exe, mid, _leaf, mut infos) = chain_fixture(root);
+        // No scripted info for libmid, and `touch` wrote the ELF magic into it: an ELF by
+        // its own claim that the source could not parse.
+        infos.remove(&canonical(&mid));
+        let src = MapSource { infos };
+
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &src).unwrap();
+        assert!(has(&res, "libmid.so"), "the tolerance keeps the leaf");
+        assert_eq!(res.warnings.len(), 1, "{:?}", res.warnings);
+        assert!(
+            res.warnings[0].contains(&canonical(&mid).display().to_string()),
+            "the warning must name the file: {:?}",
+            res.warnings
+        );
+
+        // Same graph, but the file makes no claim to be an ELF. A stray data file is a
+        // legitimate leaf, and 2.0 keeps accepting it, so it must stay quiet.
+        fs::write(&mid, b"just data").unwrap();
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &src).unwrap();
+        assert!(has(&res, "libmid.so"));
+        assert_eq!(res.warnings, Vec::<String>::new());
+    }
+
+    #[test]
+    fn goblin_source_keeps_an_unparsable_file_and_fails_an_unreadable_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let junk = tmp.path().join("libjunk.so");
+        fs::write(&junk, b"\x7fELF then nothing an ELF parser accepts").unwrap();
+        assert_eq!(GoblinSource.read(&junk).unwrap(), None);
+        assert!(has_elf_magic(&junk));
+
+        let short = tmp.path().join("short");
+        fs::write(&short, b"\x7fE").unwrap();
+        assert!(
+            !has_elf_magic(&short),
+            "fewer than four bytes is not the magic"
+        );
+
+        let absent = tmp.path().join("absent.so");
+        assert!(GoblinSource.read(&absent).is_err());
+        assert!(!has_elf_magic(&absent));
+    }
+
+    #[test]
+    fn a_platform_token_warns_only_where_it_has_no_value() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        touch(&exe);
+        let resolve_with_needed =
+            |machine: u16, needed: &[&str], rpaths: &[&str], runpaths: &[&str]| {
+                // One bare soname, so the object has a search to run. It need not resolve.
+                let mut info = elf(needed, rpaths, runpaths, None);
+                info.machine = machine;
+                let infos = HashMap::from([(canonical(&exe), info)]);
+                resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos })
+                    .unwrap()
+                    .warnings
+            };
+        let resolve_as = |machine: u16, rpaths: &[&str], runpaths: &[&str]| {
+            resolve_with_needed(machine, &["libx.so"], rpaths, runpaths)
+        };
+        let riscv = goblin::elf::header::EM_RISCV;
+
+        let w = resolve_as(riscv, &[], &["/opt/$PLATFORM/lib", "/opt/plain"]);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("`/opt/$PLATFORM/lib`"), "{w:?}");
+        // It names the architecture and the directory that was searched in its place.
+        assert!(
+            w[0].contains("(RISCV)") && w[0].contains("as `/opt//lib`"),
+            "{w:?}"
+        );
+        assert_eq!(resolve_as(riscv, &["/opt/${PLATFORM}"], &[]).len(), 1);
+
+        // The entry is text from an untrusted binary. It must not reach the terminal raw.
+        let w = resolve_as(riscv, &[], &["/opt/$PLATFORM\nwarning: forged\x1b[2J"]);
+        assert!(!w[0].contains('\n') && !w[0].contains('\x1b'), "{w:?}");
+        assert!(w[0].contains("\\nwarning: forged\\u{1b}[2J"), "{w:?}");
+
+        // No bare soname means no search: nothing is needed, or the one entry is a path.
+        let tokened = ["/opt/$PLATFORM/lib"];
+        assert!(resolve_with_needed(riscv, &[], &[], &tokened).is_empty());
+        assert!(resolve_with_needed(riscv, &["/abs/libx.so"], &[], &tokened).is_empty());
+        // RPATH differs: a child inherits it, so one path-style entry is enough to warn.
+        assert_eq!(
+            resolve_with_needed(riscv, &["/abs/libx.so"], &tokened, &[]).len(),
+            1
+        );
+        assert!(resolve_with_needed(riscv, &[], &tokened, &[]).is_empty());
+
+        // A named architecture expands the token, so there is nothing to warn about.
+        let x86 = goblin::elf::header::EM_X86_64;
+        assert!(resolve_as(x86, &[], &["/opt/$PLATFORM/lib"]).is_empty());
+        // glibc ignores RPATH when RUNPATH is set, so the token in it is never searched.
+        assert!(resolve_as(riscv, &["/opt/$PLATFORM"], &["/opt/plain"]).is_empty());
     }
 
     #[test]

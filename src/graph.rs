@@ -14,6 +14,7 @@ use std::path::Path;
 /// node and two objects never collide on one key.
 pub fn build(binary: &Path, includes: &[String]) -> Result<DepGraphReport> {
     let resolution = resolver::resolve_with_includes(binary, &Sysroot::new("/"), includes)?;
+    resolution.warn_about_tolerances();
 
     // The resolver canonicalizes the binary; its edges' `from` uses that path, so match it.
     let root_id = std::fs::canonicalize(binary)

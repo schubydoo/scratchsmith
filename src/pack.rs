@@ -157,6 +157,7 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
 
     // Resolve against the host root for now; a pinned sysroot is future work.
     let resolution = resolver::resolve_with_includes(binary, &Sysroot::new("/"), &opts.includes)?;
+    resolution.warn_about_tolerances();
     if !resolution.missing.is_empty() {
         bail!(
             "cannot pack: unresolved dependencies: {}",
@@ -608,6 +609,7 @@ mod tests {
                 .collect(),
             missing: vec![],
             edges: vec![],
+            warnings: vec![],
         }
     }
 
