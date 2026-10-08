@@ -101,18 +101,40 @@ pub fn write_oci_archive(
         "manifests": [manifest_desc],
     });
 
-    let mut ar = tar::Builder::new(std::fs::File::create(out)?);
-    append_bytes(&mut ar, "oci-layout", br#"{"imageLayoutVersion":"1.0.0"}"#)?;
-    append_bytes(&mut ar, "index.json", &serde_json::to_vec(&index)?)?;
-    append_bytes(
-        &mut ar,
-        &blob_path(&built.config_digest),
-        &built.config_bytes,
-    )?;
-    append_bytes(&mut ar, &blob_path(&built.layer.digest), &built.layer.gzip)?;
-    append_bytes(&mut ar, &blob_path(&manifest_digest), &manifest_bytes)?;
-    ar.finish().context("finishing OCI archive")?;
-    Ok(())
+    let write = |file: std::fs::File| -> Result<()> {
+        let mut ar = tar::Builder::new(file);
+        append_bytes(&mut ar, "oci-layout", br#"{"imageLayoutVersion":"1.0.0"}"#)?;
+        append_bytes(&mut ar, "index.json", &serde_json::to_vec(&index)?)?;
+        append_bytes(
+            &mut ar,
+            &blob_path(&built.config_digest),
+            &built.config_bytes,
+        )?;
+        append_bytes(&mut ar, &blob_path(&built.layer.digest), &built.layer.gzip)?;
+        append_bytes(&mut ar, &blob_path(&manifest_digest), &manifest_bytes)?;
+        ar.finish().context("finishing OCI archive")
+    };
+
+    // A destination that exists and is not a regular file (/dev/stdout, a FIFO) is a stream:
+    // write straight into it, there is nothing to replace.
+    if out.symlink_metadata().is_ok_and(|m| !m.is_file()) {
+        return write(std::fs::File::create(out)?);
+    }
+    // Otherwise write a sibling file and rename it over the destination, so a reader never
+    // sees a half-written archive. `File::create(out)` truncated the old archive first and
+    // then streamed the new one into it; a `skopeo copy` that ran meanwhile read a short tar.
+    // The sibling shares the directory, so the rename stays on one filesystem and is atomic.
+    let mut name = out.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".{}.tmp", std::process::id()));
+    let tmp = out.with_file_name(name);
+    let result = std::fs::File::create(&tmp)
+        .map_err(anyhow::Error::from)
+        .and_then(write)
+        .and_then(|()| std::fs::rename(&tmp, out).map_err(anyhow::Error::from));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result.with_context(|| format!("writing the OCI archive {}", out.display()))
 }
 
 // Crate-visible, for the four `registry` sites that spell the same strings. Only one of them
@@ -624,6 +646,79 @@ mod tests {
         assert_eq!(a.diff_id, b.diff_id, "diff_id must be stable");
         assert_eq!(a.digest, b.digest, "layer digest must be stable");
         assert_eq!(a.gzip, b.gzip, "gzip bytes must be identical");
+    }
+
+    #[test]
+    fn oci_archive_replaces_the_destination_in_one_step() {
+        let tmp = tiny_rootfs();
+        let staged = StagedTree {
+            root: tmp.path().join("root"),
+            entrypoint: "/app".into(),
+        };
+        let dir = tmp.path().join("out");
+        std::fs::create_dir(&dir).unwrap();
+        let out = dir.join("img.tar");
+        let write = |to: &Path| {
+            write_oci_archive(
+                &staged,
+                "scratchsmith/app:packed",
+                &ImageConfig::default(),
+                to,
+            )
+        };
+
+        // A reader that opened the old archive keeps the old bytes, whole. With the old
+        // truncate-then-stream write, the same open file went to zero length under it.
+        std::fs::write(&out, b"the previous archive").unwrap();
+        let mut reader = std::fs::File::open(&out).unwrap();
+        write(&out).unwrap();
+        let mut seen = String::new();
+        std::io::Read::read_to_string(&mut reader, &mut seen).unwrap();
+        assert_eq!(seen, "the previous archive");
+        assert!(tar::Archive::new(std::fs::File::open(&out).unwrap())
+            .entries()
+            .unwrap()
+            .any(|e| e.unwrap().path().unwrap().as_ref() == Path::new("oci-layout")));
+        let names = |d: &Path| -> Vec<_> {
+            let mut v: Vec<_> = std::fs::read_dir(d)
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            names(&dir),
+            ["img.tar"],
+            "the sibling file must not be left behind"
+        );
+
+        // A failed write leaves no sibling either. A directory where the destination should
+        // be makes the final rename fail after the whole archive is written.
+        let blocked = dir.join("blocked.tar");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(blocked.join("keep"), b"").unwrap();
+        assert!(write(&blocked).is_err());
+        assert_eq!(names(&dir), ["blocked.tar", "img.tar"]);
+    }
+
+    #[test]
+    fn oci_archive_streams_into_a_destination_that_is_not_a_regular_file() {
+        // `--oci-archive /dev/stdout` and a FIFO are streams: nothing can be renamed over
+        // them, so the archive is written straight in. /dev/null stands in for both.
+        let tmp = tiny_rootfs();
+        let staged = StagedTree {
+            root: tmp.path().join("root"),
+            entrypoint: "/app".into(),
+        };
+        write_oci_archive(
+            &staged,
+            "scratchsmith/app:packed",
+            &ImageConfig::default(),
+            Path::new("/dev/null"),
+        )
+        .expect("a character device must be written in place");
+        assert!(Path::new("/dev/null").symlink_metadata().is_ok());
     }
 
     #[test]
