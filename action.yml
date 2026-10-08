@@ -198,9 +198,11 @@ runs:
       run: |
         set -euo pipefail
         # Give up on a connection that stalls for 30s, so a dead network fails this step
-        # instead of holding the job until its timeout. A stall limit, not a total cap.
-        # Keep the flags in step with install.sh.
-        fetch=(curl -fsSL --connect-timeout 30 --speed-time 30 --speed-limit 1)
+        # instead of holding the job until its timeout. A stall limit, not a total cap, and
+        # the same one install.sh uses. Unlike install.sh this retries: one blip on a shared
+        # runner must not fail the caller's workflow, and a 404 is not retried, so a version
+        # that does not exist still fails fast.
+        fetch=(curl -fsSL --retry 3 --connect-timeout 30 --speed-time 30 --speed-limit 1)
         # Runner arch → release tarball arch token.
         case "$(uname -m)" in
           x86_64) arch=linux-amd64 ;;
