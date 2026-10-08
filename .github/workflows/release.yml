@@ -98,7 +98,7 @@ jobs:
           docker run --rm scratchsmith:smoke --version
           docker run --rm scratchsmith:smoke doctor >/dev/null
           # docs/usage.md claims the scratch image runs every subcommand that needs no
-          # external tool and no certificate store. These two make that claim a gate
+          # external tool. These two make that claim a gate
           # rather than prose. Both take the image's own binary, so no fixture or mount.
           docker run --rm scratchsmith:smoke lint /scratchsmith >/dev/null
           docker run --rm scratchsmith:smoke graph /scratchsmith >/dev/null

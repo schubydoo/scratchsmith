@@ -43,6 +43,12 @@ tokio = { version = "1.53.1", features = ["rt", "net", "time", "io-util"] }
 # (`reqwest/rustls` = aws-lc-rs + platform-verifier) so Cargo reuses the one compiled reqwest
 # and no second TLS stack is linked — keeps the musl-static build working.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form"] }
+# Mozilla's root set as data, for a host with no CA trust store (a FROM scratch image). base64
+# turns it into PEM and rustix gives an in-memory file to hand it to the platform verifier.
+# All three are already in the tree, so they add no crate and no TLS code.
+webpki-root-certs = "1"
+base64 = "0.22"
+rustix = { version = "1", features = ["fs"] }
 
 [dev-dependencies]
 # Deterministic mock registry for the identity-token exchange test (no live network).

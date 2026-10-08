@@ -661,14 +661,15 @@ fn a_bare_label_warns_on_the_rootfs_sink_too() {
 }
 
 #[test]
-fn a_registry_command_without_a_ca_store_fails_instead_of_panicking() {
-    // oci-client's `Client::new` swallows the builder error and falls back to
-    // `Client::default()`, whose `reqwest::Client::default()` panics on the very failure it
-    // just caught. On a host with no CA trust store — most minimal containers, and every
-    // FROM scratch image — `index` died with no message at all: 101 from a dynamic build,
-    // 139 (SIGSEGV) from the shipped musl-static one.
+fn a_registry_command_without_a_ca_store_uses_the_bundled_roots() {
+    // On a host with no CA trust store (most minimal containers, and every FROM scratch
+    // image) `index` used to die with no message: oci-client's `Client::new` swallows the
+    // builder error and falls back to a default client that panics on the same failure.
+    // It then failed cleanly. Now it builds its clients on the Mozilla roots compiled into
+    // the binary, says so on stderr, and goes on to the registry.
     //
-    // Hermetic: the client is built before any network call, so this needs no registry.
+    // Hermetic: the registry is a closed local port, so "connection refused" is the proof
+    // that the clients were built and the command got as far as the network.
     // An empty bundle is how rustls reports "no roots" without unplugging the host's.
     let tmp = tempfile::tempdir().unwrap();
     let empty_bundle = tmp.path().join("empty.pem");
@@ -677,7 +678,7 @@ fn a_registry_command_without_a_ca_store_fails_instead_of_panicking() {
     std::fs::create_dir(&empty_dir).unwrap();
 
     let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
-        .args(["index", "ghcr.io/x/y:1", "ghcr.io/x/y:1-amd64"])
+        .args(["index", "127.0.0.1:1/x/y:1", "127.0.0.1:1/x/y:1-amd64"])
         .env("SSL_CERT_FILE", &empty_bundle)
         .env("SSL_CERT_DIR", &empty_dir)
         .output()
@@ -688,11 +689,25 @@ fn a_registry_command_without_a_ca_store_fails_instead_of_panicking() {
     let code = out.status.code().unwrap_or_else(|| {
         panic!("killed by a signal rather than exiting; stderr: {stderr}");
     });
-    assert_eq!(code, 1, "expected a plain failure exit: {stderr}");
+    assert_eq!(code, 1, "the closed port is a plain failure: {stderr}");
     assert!(!stderr.contains("panicked"), "must not panic: {stderr}");
     assert!(
-        stderr.contains("building the registry client for ghcr.io")
-            && stderr.contains("no trust store"),
-        "the error must name the cause and the fix: {stderr}"
+        stderr.contains("note: the system CA trust store could not be used")
+            && stderr.contains("Mozilla root certificates bundled with scratchsmith"),
+        "the fallback must be announced: {stderr}"
     );
+    assert!(
+        stderr.contains("pulling the manifest for 127.0.0.1:1/x/y:1-amd64"),
+        "the command must get past client construction to the registry: {stderr}"
+    );
+}
+
+#[test]
+fn a_registry_command_with_a_ca_store_does_not_mention_the_bundled_roots() {
+    // The fallback is for a host with no store. Where the system store works, nothing about
+    // whom scratchsmith trusts may change, and nothing is printed about it.
+    let out = run(&["index", "127.0.0.1:1/x/y:1", "127.0.0.1:1/x/y:1-amd64"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(!stderr.contains("bundled"), "{stderr}");
 }

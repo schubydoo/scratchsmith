@@ -54,8 +54,8 @@ docker pull ghcr.io/schubydoo/scratchsmith:latest
 ```
 
 `:latest` is a minimal `FROM scratch` image. It runs every subcommand that needs no external
-tool and no certificate store. It does **not** run `pack`, because a scratch image carries none
-of the tools `pack` needs, and it does not run `index`. To run `pack` inside a container, pull
+tool, `index` included. It does **not** run `pack`, because a scratch image carries none of the
+tools `pack` needs. To run `pack` inside a container, pull
 the **`:toolbox`** image instead (Wolfi base + the full toolchain). The
 [toolbox section in Usage](usage.md) lists which subcommands run where.
 
