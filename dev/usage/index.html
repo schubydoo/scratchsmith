@@ -547,6 +547,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#pack-again-on-every-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pack again on every change
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#in-ci" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -978,6 +989,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#pack-again-on-every-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pack again on every change
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#in-ci" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1223,6 +1245,34 @@ index by digest.</p>
 command. So <code>--healthcheck /app --healthcheck --health</code> is the one command <code>["/app", "--health"]</code>,
 not two healthchecks. It is the same as <code>healthcheck = ["/app", "--health"]</code> in the
 <a href="../configuration/">configuration file</a>.</p>
+<h2 id="pack-again-on-every-change">Pack again on every change<a class="headerlink" href="#pack-again-on-every-change" title="Permanent link">&para;</a></h2>
+<p>While you develop the program that you pack, <code>--watch</code> packs it again after each build. It
+packs one time, and then packs again each time the binary changes:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--watch<span class="w"> </span>./target/release/app
+</code></pre></div>
+<p>Scratchsmith looks at the binary two times each second. After a change, it waits until the file
+is the same on two looks in a row. That keeps most half-written binaries out. If the linker
+stalls for longer, the pack of the half-written file fails, and the finished file packs next.
+If the binary is gone for five seconds, scratchsmith says so one time and continues to watch.</p>
+<p>Each pack prints its text report. To stop, press Ctrl-C. Scratchsmith does not catch the
+interrupt, so the exit status is the one your shell gives a process that Ctrl-C ended.</p>
+<p>Only the binary is watched. A change to a library or to an <code>--add-file</code> source does not start a
+pack. The next pack that the binary starts picks it up. A change to the configuration file is
+not picked up at all, because scratchsmith reads that file one time. Stop the watch and start it
+again.</p>
+<p>If the first pack fails, the command exits with an error, the same as a pack with no <code>--watch</code>.
+If a later pack fails, scratchsmith prints the error and continues to watch. A build that fails
+halfway does not end the watch.</p>
+<p><code>--watch</code> works with the default load and with <code>--oci-archive</code>. It refuses three things:</p>
+<ul>
+<li><code>--push</code>, and a <code>push</code> key from the configuration file. A registry is not the place for an
+  image from every save.</li>
+<li><code>--no-build</code>. That sink stages into one directory, and a second pack into the same directory
+  collides with the files from the first.</li>
+<li><code>--format json</code>. Each pack prints a text report.</li>
+</ul>
+<p><code>--watch</code> is a command-line flag only. It has no key in the configuration file and no input on
+the GitHub Action.</p>
 <h2 id="in-ci">In CI<a class="headerlink" href="#in-ci" title="Permanent link">&para;</a></h2>
 <p>To pack in a GitHub Actions workflow with the composite action instead of shelling out to the CLI,
 see <strong><a href="../github-action/">GitHub Action</a></strong>.</p>
@@ -1237,17 +1287,17 @@ missing, which is the right answer on an image that carries none.</p>
 that same certificate store.</p>
 <p>The <strong><code>:toolbox</code></strong> image bundles the full <code>pack</code> toolchain (ldconfig, strip, syft, grype, cosign,
 upx, tini, the docker CLI) on a Wolfi base. With it, <code>pack</code> itself runs inside a container:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># Daemonless — no socket needed; write an OCI archive or push straight to a registry.</span>
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">  </span>pack<span class="w"> </span>--oci-archive<span class="w"> </span>app.oci.tar<span class="w"> </span>./app
-<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="w">  </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># Daemonless — no socket needed; write an OCI archive or push straight to a registry.</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="w">  </span>pack<span class="w"> </span>--oci-archive<span class="w"> </span>app.oci.tar<span class="w"> </span>./app
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="w">  </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span>./app
 </code></pre></div>
 <p>Prefer the daemonless sinks (<code>--push</code> / <code>--oci-archive</code>) in CI. The <strong>default <code>docker load</code> sink</strong>
 needs a host engine, so mount its socket. That socket is <strong>root-equivalent on the host</strong>, so use
 it only where you trust the workflow:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/var/run/docker.sock:/var/run/docker.sock<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="w">  </span>pack<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/var/run/docker.sock:/var/run/docker.sock<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">  </span>pack<span class="w"> </span>./app
 </code></pre></div>
 <p>Tags: <code>:toolbox</code> (latest), <code>:X.Y.Z-toolbox</code>, <code>:X.Y-toolbox</code>. Verify its signature exactly like the
 scratch image. See <a href="../verifying/">Verifying releases</a>.</p>
