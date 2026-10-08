@@ -197,6 +197,12 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
+        # Give up on a connection that stalls for 30s, so a dead network fails this step
+        # instead of holding the job until its timeout. A stall limit, not a total cap, and
+        # the same one install.sh uses. Unlike install.sh this retries: one blip on a shared
+        # runner must not fail the caller's workflow, and a 404 is not retried, so a version
+        # that does not exist still fails fast.
+        fetch=(curl -fsSL --retry 3 --connect-timeout 30 --speed-time 30 --speed-limit 1)
         # Runner arch → release tarball arch token.
         case "$(uname -m)" in
           x86_64) arch=linux-amd64 ;;
@@ -217,7 +223,7 @@ runs:
           # shared runner IPs (a token raises it to 1000+/hr).
           auth=()
           [ -n "${GH_TOKEN:-}" ] && auth=(-H "Authorization: Bearer ${GH_TOKEN}")
-          ver="$(curl -fsSL "${auth[@]}" "https://api.github.com/repos/${REPO}/releases/latest" | jq -r .tag_name)"
+          ver="$("${fetch[@]}" "${auth[@]}" "https://api.github.com/repos/${REPO}/releases/latest" | jq -r .tag_name)"
         fi
         [ -n "$ver" ] && [ "$ver" != "null" ] || { echo "::error::could not resolve a scratchsmith release version"; exit 1; }
         ver="${ver#v}" # normalise to the bare X.Y.Z used inside the tarball name
@@ -225,9 +231,9 @@ runs:
         base="https://github.com/${REPO}/releases/download/v${ver}"
         tmp="$(mktemp -d)"
         echo "Downloading ${tarball} (scratchsmith v${ver})"
-        curl -fsSL -o "${tmp}/${tarball}" "${base}/${tarball}"
-        curl -fsSL -o "${tmp}/checksums.txt" "${base}/checksums.txt"
-        curl -fsSL -o "${tmp}/checksums.txt.sigstore.json" "${base}/checksums.txt.sigstore.json"
+        "${fetch[@]}" -o "${tmp}/${tarball}" "${base}/${tarball}"
+        "${fetch[@]}" -o "${tmp}/checksums.txt" "${base}/checksums.txt"
+        "${fetch[@]}" -o "${tmp}/checksums.txt.sigstore.json" "${base}/checksums.txt.sigstore.json"
         # Authenticity FIRST: verify the cosign keyless signature over checksums.txt
         # (bound to the release workflow's identity). THEN integrity: the tarball hash
         # against the now-trusted manifest. A signature alone doesn't tie to this
