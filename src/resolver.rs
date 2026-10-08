@@ -332,20 +332,25 @@ pub fn resolve_with(
         };
         // `$PLATFORM` has no value here, so the entry is searched with the token gone and a
         // same-named file in that other directory can stage in place of the arch-specific
-        // one. A soname with a slash is a path and never uses the search list, so an object
-        // with no bare soname searches nothing and has nothing to warn about.
-        if root_info.platform().is_empty() && obj.needed.iter().any(|n| !n.contains('/')) {
-            for entry in used_rpaths.iter().chain(&obj.runpaths) {
+        // one. Warn only where a search can use the entry. A soname with a slash is a path
+        // and skips the search list, so a RUNPATH entry needs a bare soname on this object.
+        // An RPATH entry is also handed to every child, so any DT_NEEDED at all is enough.
+        if root_info.platform().is_empty() {
+            let bare_soname = obj.needed.iter().any(|n| !n.contains('/'));
+            let rpaths = used_rpaths.iter().filter(|_| !obj.needed.is_empty());
+            let runpaths = obj.runpaths.iter().filter(|_| bare_soname);
+            for entry in rpaths.chain(runpaths) {
                 if entry.contains("$PLATFORM") || entry.contains("${PLATFORM}") {
                     push_unique(
                         &mut resolution.warnings,
                         format!(
-                            "`$PLATFORM` has no value for this architecture (ELF machine {}), so \
-                             the search path `{}` in {} was searched with the token removed \
-                             and a library from the wrong directory can ship.",
-                            root_info.machine,
+                            "`$PLATFORM` has no value for this architecture ({}), so the \
+                             search path `{}` in {} was searched as `{}` and a library from \
+                             the wrong directory can ship.",
+                            goblin::elf::header::machine_to_str(root_info.machine),
                             entry.escape_debug(),
-                            printable(&obj_path)
+                            printable(&obj_path),
+                            expand_tokens(entry, obj_dir, &root_info).escape_debug()
                         ),
                     );
                 }
@@ -805,6 +810,11 @@ mod tests {
         let w = resolve_as(riscv, &[], &["/opt/$PLATFORM/lib", "/opt/plain"]);
         assert_eq!(w.len(), 1, "{w:?}");
         assert!(w[0].contains("`/opt/$PLATFORM/lib`"), "{w:?}");
+        // It names the architecture and the directory that was searched in its place.
+        assert!(
+            w[0].contains("(RISCV)") && w[0].contains("as `/opt//lib`"),
+            "{w:?}"
+        );
         assert_eq!(resolve_as(riscv, &["/opt/${PLATFORM}"], &[]).len(), 1);
 
         // The entry is text from an untrusted binary. It must not reach the terminal raw.
@@ -816,6 +826,12 @@ mod tests {
         let tokened = ["/opt/$PLATFORM/lib"];
         assert!(resolve_with_needed(riscv, &[], &[], &tokened).is_empty());
         assert!(resolve_with_needed(riscv, &["/abs/libx.so"], &[], &tokened).is_empty());
+        // RPATH differs: a child inherits it, so one path-style entry is enough to warn.
+        assert_eq!(
+            resolve_with_needed(riscv, &["/abs/libx.so"], &tokened, &[]).len(),
+            1
+        );
+        assert!(resolve_with_needed(riscv, &[], &tokened, &[]).is_empty());
 
         // A named architecture expands the token, so there is nothing to warn about.
         let x86 = goblin::elf::header::EM_X86_64;
