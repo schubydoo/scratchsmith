@@ -602,6 +602,19 @@ fn registry_clients(endpoint: &str) -> Result<Clients> {
         Err(e) => e,
     };
 
+    // Fail closed when the user chose the store. SSL_CERT_FILE or SSL_CERT_DIR is an explicit
+    // trust decision, often a narrower one (a single corporate CA). Widening it to Mozilla's
+    // whole set because the path is wrong or the file is empty would be the opposite of what
+    // they asked for, so the bundled roots are only for a host that configured nothing.
+    if let Some(var) = explicit_trust_store(|v| std::env::var_os(v).is_some()) {
+        return Err(system).with_context(|| {
+            format!(
+                "building the registry client for {endpoint}; {var} is set, so scratchsmith \
+                 does not fall back to its bundled CA roots. Fix what it points at, or unset it"
+            )
+        });
+    }
+
     // WORKAROUND for oci-client 0.18.0, to drop once upstream is fixed (no issue is filed
     // yet). The direct route is `ClientConfig::tls_certs_only`, and it cannot work: after
     // `TryFrom<ClientConfig>` builds that client, its `..Default::default()` builds a second,
@@ -637,6 +650,14 @@ fn registry_clients(endpoint: &str) -> Result<Clients> {
          Mozilla root certificates bundled with scratchsmith. Set SSL_CERT_FILE to use your own."
     );
     Ok(clients)
+}
+
+// The variable that names the user's own trust store, if one is set. `is_set` is a parameter
+// so the rule is testable without touching the process environment.
+fn explicit_trust_store(is_set: impl Fn(&str) -> bool) -> Option<&'static str> {
+    ["SSL_CERT_FILE", "SSL_CERT_DIR"]
+        .into_iter()
+        .find(|var| is_set(var))
 }
 
 // Mozilla's root set as one PEM bundle, the format `SSL_CERT_FILE` takes.
@@ -959,6 +980,20 @@ mod tests {
             .collect();
         let original: Vec<Vec<u8>> = roots.iter().map(|der| der.to_vec()).collect();
         assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn an_explicit_trust_store_is_either_variable() {
+        assert_eq!(explicit_trust_store(|_| false), None);
+        assert_eq!(
+            explicit_trust_store(|v| v == "SSL_CERT_FILE"),
+            Some("SSL_CERT_FILE")
+        );
+        assert_eq!(
+            explicit_trust_store(|v| v == "SSL_CERT_DIR"),
+            Some("SSL_CERT_DIR")
+        );
+        assert_eq!(explicit_trust_store(|_| true), Some("SSL_CERT_FILE"));
     }
 
     #[test]

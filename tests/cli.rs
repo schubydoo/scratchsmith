@@ -661,16 +661,16 @@ fn a_bare_label_warns_on_the_rootfs_sink_too() {
 }
 
 #[test]
-fn a_registry_command_without_a_ca_store_uses_the_bundled_roots() {
-    // On a host with no CA trust store (most minimal containers, and every FROM scratch
-    // image) `index` used to die with no message: oci-client's `Client::new` swallows the
-    // builder error and falls back to a default client that panics on the same failure.
-    // It then failed cleanly. Now it builds its clients on the Mozilla roots compiled into
-    // the binary, says so on stderr, and goes on to the registry.
+fn a_registry_command_with_a_broken_explicit_ca_store_fails_closed() {
+    // SSL_CERT_FILE is the user's own choice of whom to trust. When it yields no roots, the
+    // command must fail and name the variable. It must NOT widen trust to the bundled
+    // Mozilla set, and it must not panic, which is how this failure first showed up:
+    // oci-client's `Client::new` swallows the builder error and falls back to a default
+    // client that panics on the same failure (101 dynamic, SIGSEGV from the musl build).
     //
-    // Hermetic: the registry is a closed local port, so "connection refused" is the proof
-    // that the clients were built and the command got as far as the network.
-    // An empty bundle is how rustls reports "no roots" without unplugging the host's.
+    // Hermetic: the clients are built before any network call, so this needs no registry.
+    // The fallback itself needs a host with no store and no variable, which a test cannot
+    // fake here; tests/pack.rs runs it for real inside a packed scratch image.
     let tmp = tempfile::tempdir().unwrap();
     let empty_bundle = tmp.path().join("empty.pem");
     std::fs::write(&empty_bundle, "").unwrap();
@@ -678,7 +678,7 @@ fn a_registry_command_without_a_ca_store_uses_the_bundled_roots() {
     std::fs::create_dir(&empty_dir).unwrap();
 
     let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
-        .args(["index", "127.0.0.1:1/x/y:1", "127.0.0.1:1/x/y:1-amd64"])
+        .args(["index", "ghcr.io/x/y:1", "ghcr.io/x/y:1-amd64"])
         .env("SSL_CERT_FILE", &empty_bundle)
         .env("SSL_CERT_DIR", &empty_dir)
         .output()
@@ -689,16 +689,16 @@ fn a_registry_command_without_a_ca_store_uses_the_bundled_roots() {
     let code = out.status.code().unwrap_or_else(|| {
         panic!("killed by a signal rather than exiting; stderr: {stderr}");
     });
-    assert_eq!(code, 1, "the closed port is a plain failure: {stderr}");
+    assert_eq!(code, 1, "expected a plain failure exit: {stderr}");
     assert!(!stderr.contains("panicked"), "must not panic: {stderr}");
     assert!(
-        stderr.contains("note: the system CA trust store could not be used")
-            && stderr.contains("Mozilla root certificates bundled with scratchsmith"),
-        "the fallback must be announced: {stderr}"
+        stderr.contains("building the registry client for ghcr.io")
+            && stderr.contains("SSL_CERT_FILE is set"),
+        "the error must name the cause and the fix: {stderr}"
     );
     assert!(
-        stderr.contains("pulling the manifest for 127.0.0.1:1/x/y:1-amd64"),
-        "the command must get past client construction to the registry: {stderr}"
+        !stderr.contains("note: ") && !stderr.contains("Mozilla"),
+        "an explicit store must never be widened: {stderr}"
     );
 }
 

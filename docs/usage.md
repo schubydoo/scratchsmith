@@ -284,6 +284,10 @@ scratchsmith uses the Mozilla root certificates that are compiled into the binar
 note to standard error to say so. To use your own certificates, mount a PEM file and set
 `SSL_CERT_FILE` to its path. A registry behind a proxy that inspects TLS needs that.
 
+If `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, scratchsmith never uses the compiled-in
+certificates. If the path that you set gives no certificates, the command fails and names the
+variable.
+
 One subcommand does not run there. `pack` needs ldconfig, strip, and the SBOM tools.
 
 The **`:toolbox`** image bundles the full `pack` toolchain (ldconfig, strip, syft, grype, cosign,
