@@ -641,7 +641,8 @@ fn registry_clients(endpoint: &str) -> Result<Clients> {
     .with_context(|| {
         format!(
             "building the registry client for {endpoint} with the bundled CA roots, after the \
-             system trust store failed ({system:#})"
+             system trust store failed ({system:#}). The bundled roots are read through /proc, \
+             so they need it mounted; otherwise install ca-certificates or set SSL_CERT_FILE"
         )
     })?;
     // A supply-chain tool must not change whom it trusts in silence.

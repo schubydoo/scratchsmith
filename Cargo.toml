@@ -45,7 +45,9 @@ tokio = { version = "1.53.1", features = ["rt", "net", "time", "io-util"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form"] }
 # Mozilla's root set as data, for a host with no CA trust store (a FROM scratch image). base64
 # turns it into PEM and rustix gives an in-memory file to hand it to the platform verifier.
-# All three are already in the tree, so they add no crate and no TLS code.
+# All three were already in Cargo.lock. base64 and rustix were already compiled;
+# webpki-root-certs was resolved for wasm only, so it is newly compiled on Linux. It is data
+# plus rustls-pki-types: no TLS code, no second stack.
 webpki-root-certs = "1"
 base64 = "0.22"
 rustix = { version = "1", features = ["fs"] }
