@@ -93,12 +93,16 @@ esac
 # --- prerequisites -----------------------------------------------------------
 have tar || die "need 'tar' to extract the release"
 have sha256sum || die "need 'sha256sum' to verify the download"
+# Give up on a connection that stalls for 30s, so a dead network reaches the `die` below
+# instead of hanging with no output. A stall limit, not a total cap: a slow link still finishes.
+# One attempt with either tool (GNU wget defaults to 20). BusyBox wget takes `-T` and `-t` too,
+# but a build without its timeout feature drops `-T`, so the old hang stays possible there.
 if have curl; then
-  fetch() { curl -fsSL "$1"; }
-  download() { curl -fsSL "$1" -o "$2"; }
+  fetch() { curl -fsSL --connect-timeout 30 --speed-time 30 --speed-limit 1 "$1"; }
+  download() { curl -fsSL --connect-timeout 30 --speed-time 30 --speed-limit 1 "$1" -o "$2"; }
 elif have wget; then
-  fetch() { wget -qO- "$1"; }
-  download() { wget -qO "$2" "$1"; }
+  fetch() { wget -q -T 30 -t 1 -O- "$1"; }
+  download() { wget -q -T 30 -t 1 -O "$2" "$1"; }
 else
   die "need 'curl' or 'wget' to download the release"
 fi
