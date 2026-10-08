@@ -226,3 +226,54 @@ fn pack_warns_about_dlopen_and_include_stages_extra_libs() {
         "--include libz.so.1 should be staged"
     );
 }
+
+#[test]
+fn a_truncated_library_warns_on_stderr_and_still_graphs_and_packs() {
+    // The tolerance scratchsmith 2.0 ends: a resolved library that claims to be an ELF and
+    // will not parse is kept as a leaf. Until then the run must succeed exactly as before,
+    // say so on stderr, and leave stdout as clean JSON.
+    if !cc_available() {
+        skip_required("no C compiler");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let app = build_fixture(tmp.path(), "app", "-Wl,--enable-new-dtags");
+    let lib = tmp.path().join("libfoo.so.1.2.3");
+    std::fs::write(&lib, b"\x7fELF and then the file ends").unwrap();
+
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let rootfs = tmp.path().join("rootfs");
+    let runs: [Vec<&str>; 2] = [
+        vec!["graph", "--format", "json", app.to_str().unwrap()],
+        vec![
+            "pack",
+            "--format",
+            "json",
+            "-n",
+            "-o",
+            rootfs.to_str().unwrap(),
+            app.to_str().unwrap(),
+        ],
+    ];
+    for args in runs {
+        let out = Command::new(bin).args(&args).output().expect("run");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "{args:?} must still succeed: {stderr}"
+        );
+        assert!(
+            stderr.contains("warning: ")
+                && stderr.contains("libfoo.so.1.2.3 starts like an ELF and cannot be parsed")
+                && stderr.contains("scratchsmith 2.0 rejects it")
+                && stderr.contains("/latest/deprecations/"),
+            "{args:?}: tolerance warning missing from stderr: {stderr}"
+        );
+        serde_json::from_slice::<serde_json::Value>(&out.stdout)
+            .unwrap_or_else(|e| panic!("{args:?}: stdout is not clean JSON ({e})"));
+    }
+    assert!(
+        walk_contains(&rootfs, "libfoo.so.1.2.3"),
+        "the leaf still stages"
+    );
+}
