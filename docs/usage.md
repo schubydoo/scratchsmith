@@ -275,9 +275,12 @@ scratchsmith pack --watch ./target/release/app
 ```
 
 Scratchsmith looks at the binary two times each second. After a change, it waits until the file
-stops changing, so it does not pack a binary that the linker still writes. Each pack prints its
-text report. To stop, press Ctrl-C. Scratchsmith does not catch the interrupt, so the exit
-status is the one your shell gives a process that Ctrl-C ended.
+is the same on two looks in a row. That keeps most half-written binaries out. If the linker
+stalls for longer, the pack of the half-written file fails, and the finished file packs next.
+If the binary is gone for five seconds, scratchsmith says so one time and continues to watch.
+
+Each pack prints its text report. To stop, press Ctrl-C. Scratchsmith does not catch the
+interrupt, so the exit status is the one your shell gives a process that Ctrl-C ended.
 
 Only the binary is watched. A change to a library or to an `--add-file` source does not start a
 pack. The next pack that the binary starts picks it up. A change to the configuration file is

@@ -7,6 +7,8 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 const POLL: Duration = Duration::from_millis(500);
+/// Polls with the file absent before saying so: five seconds, well past a normal relink.
+const ABSENT_NOTICE_POLLS: u32 = 10;
 
 /// What identifies one version of the file: its mtime and length. `None` while the file is
 /// absent, which is normal in the middle of a rebuild (a linker unlinks, then writes).
@@ -50,13 +52,25 @@ fn pack_current(binary: &Path, pack: &mut impl FnMut() -> Result<()>) -> (Stamp,
 // Block until the file differs from `packed` and has held still for one poll. The second
 // condition is the debounce: a linker writes for longer than one poll on a large binary, and
 // packing a half-written file only produces an error to scroll past.
+//
+// Absence never triggers a pack, because a linker unlinks before it writes. A file that
+// stays gone gets one stderr line: a watch on a path no build writes any more (a renamed
+// output, a `cargo clean`) must not look the same as a watch that is working.
 fn wait_for_change(path: &Path, packed: Stamp, sleep: &mut dyn FnMut()) -> Stamp {
     let mut last = stamp(path);
+    let mut absent_polls = 0;
     loop {
         sleep();
         let now = stamp(path);
         if now.is_some() && now != packed && now == last {
             return now;
+        }
+        absent_polls = if now.is_none() { absent_polls + 1 } else { 0 };
+        if absent_polls == ABSENT_NOTICE_POLLS {
+            eprintln!(
+                "{} is gone; still watching for it to come back",
+                path.display()
+            );
         }
         last = now;
     }
@@ -124,9 +138,40 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(packed, v1, "stamped before the pack, not after");
 
+        // Budgeted: with the stamp taken after the pack, no state of the file ever differs
+        // from `packed`, and an unbounded wait would hang the suite instead of failing it.
         let mut polls = 0;
-        let seen = wait_for_change(&bin, packed, &mut || polls += 1);
+        let seen = wait_for_change(&bin, packed, &mut || {
+            polls += 1;
+            assert!(
+                polls <= 2,
+                "poll {polls}: the new version was there from the first"
+            );
+        });
         assert_eq!(polls, 1);
+        assert_eq!(seen, stamp(&bin));
+    }
+
+    #[test]
+    fn a_file_that_stays_gone_is_waited_for_and_then_packed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("app");
+        write_at(&bin, b"v1", 1_000);
+        let packed = stamp(&bin);
+        fs::remove_file(&bin).unwrap();
+
+        // Gone for longer than the notice threshold, then rebuilt. Absence alone must
+        // never return, and the wait must survive the notice.
+        let back_at = ABSENT_NOTICE_POLLS + 3;
+        let mut polls = 0;
+        let seen = wait_for_change(&bin, packed, &mut || {
+            polls += 1;
+            if polls == back_at {
+                write_at(&bin, b"v2", 2_000);
+            }
+            assert!(polls <= back_at + 2, "poll {polls}: v2 was stable by then");
+        });
+        assert_eq!(polls, back_at + 1, "one more poll to see it hold still");
         assert_eq!(seen, stamp(&bin));
     }
 }
