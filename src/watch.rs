@@ -22,21 +22,29 @@ fn stamp(path: &Path) -> Stamp {
 /// spinning. A later failure is printed and the watch goes on: a half-written binary or a
 /// broken build is what the next save fixes.
 pub fn run(binary: &Path, mut pack: impl FnMut() -> Result<()>) -> Result<()> {
-    // Stamp BEFORE packing: a change that lands during the pack then differs from `packed`
-    // and triggers the next one, instead of being mistaken for the version just packed.
-    let mut packed = stamp(binary);
-    pack()?;
+    let (mut packed, first) = pack_current(binary, &mut pack);
+    first?;
     loop {
-        // stderr, like every other status line: stdout is the report (`--format json`).
+        // stderr, like every other status line: stdout is the report.
         eprintln!(
             "watching {} for changes; press Ctrl-C to stop",
             binary.display()
         );
-        packed = wait_for_change(binary, packed, &mut || std::thread::sleep(POLL));
-        if let Err(err) = pack() {
+        wait_for_change(binary, packed, &mut || std::thread::sleep(POLL));
+        let (stamped, result) = pack_current(binary, &mut pack);
+        packed = stamped;
+        if let Err(err) = result {
             eprintln!("error: {err:#}");
         }
     }
+}
+
+// Pack the binary as it is now, and say which version that was. The stamp is taken BEFORE
+// the pack: a change that lands while the pack runs then differs from the stamp and
+// triggers the next pack, instead of being mistaken for the version just packed.
+fn pack_current(binary: &Path, pack: &mut impl FnMut() -> Result<()>) -> (Stamp, Result<()>) {
+    let stamped = stamp(binary);
+    (stamped, pack())
 }
 
 // Block until the file differs from `packed` and has held still for one poll. The second
@@ -101,16 +109,23 @@ mod tests {
 
     #[test]
     fn a_change_during_the_pack_is_not_lost() {
-        // `run` stamps before it packs. If the binary is replaced while the pack runs, that
-        // stamp is the OLD version, so the new one still differs and is picked up.
         let tmp = tempfile::tempdir().unwrap();
         let bin = tmp.path().join("app");
         write_at(&bin, b"v1", 1_000);
-        let before_pack = stamp(&bin);
-        write_at(&bin, b"v2", 2_000); // lands "during" the pack
+        let v1 = stamp(&bin);
+
+        // The binary is replaced while the pack runs. The stamp handed back must be the
+        // version the pack started from, so the new one still counts as a change.
+        let mut pack = || {
+            write_at(&bin, b"v2", 2_000);
+            Ok(())
+        };
+        let (packed, result) = pack_current(&bin, &mut pack);
+        assert!(result.is_ok());
+        assert_eq!(packed, v1, "stamped before the pack, not after");
 
         let mut polls = 0;
-        let seen = wait_for_change(&bin, before_pack, &mut || polls += 1);
+        let seen = wait_for_change(&bin, packed, &mut || polls += 1);
         assert_eq!(polls, 1);
         assert_eq!(seen, stamp(&bin));
     }

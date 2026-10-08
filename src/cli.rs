@@ -176,8 +176,9 @@ pub enum Command {
         /// Fail the pack if this library does NOT ship (same scope as --deny); repeatable.
         #[arg(long = "require", value_name = "SONAME")]
         require: Vec<String>,
-        /// Pack again each time the binary changes, until interrupted. Not with --push.
-        #[arg(long, conflicts_with = "push")]
+        /// Pack again each time the binary changes, until interrupted. For the default load
+        /// and --oci-archive only.
+        #[arg(long, conflicts_with_all = ["push", "no_build"])]
         watch: bool,
         /// Report format.
         #[arg(long, value_enum, default_value_t = Format::Text)]
@@ -450,9 +451,14 @@ fn dispatch(cli: Cli) -> Result<()> {
             // A watch packs on every save, and a registry is not the place for each of those.
             if matches!(sink, crate::pack::Sink::Push(_)) {
                 bail!(
-                    "--watch cannot push: it packs again on every change. Pass a local sink \
-                     (the default load, --oci-archive, or --no-build --output), or drop --watch"
+                    "--watch cannot push: it packs again on every change. Pass --oci-archive, \
+                     remove `push` from the config/profile, or drop --watch"
                 );
+            }
+            // One JSON document per pack on stdout is a stream shape nobody has chosen yet.
+            // Refusing it now keeps that choice open; allowing it later is additive.
+            if matches!(format, Format::Json) {
+                bail!("--watch prints a text report for each pack; it cannot be used with --format json");
             }
             crate::watch::run(&binary, pack_once)
         }
