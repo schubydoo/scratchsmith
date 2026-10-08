@@ -10,9 +10,9 @@ This page has two lists, because two different things end in a major version.
 A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.
 
-A tolerance is different. Scratchsmith accepts input today that it cannot use, and says nothing.
-The next major version reports it as an error. A tolerance is not a deprecation, because there
-is no warning to act on yet.
+A tolerance is different. Scratchsmith accepts input today that it cannot use in full, and the
+result can be an image with a part absent. The next major version reports it as an error. Each
+tolerance prints one warning line to standard error, and the exit code stays the same.
 
 ## Deprecated input shapes
 
@@ -80,4 +80,39 @@ Profiles do not inherit from each other, so repeat the keys the inner table reli
 
 ## Tolerances ending in 2.0
 
-This list is empty today.
+| Input | Warns since | Error in | What to do |
+|---|---|---|---|
+| A library that starts like an ELF and cannot be parsed | 1.6.0 | 2.0.0 | Replace the damaged file |
+| `$PLATFORM` in a search path, on an architecture with no value for it | 1.6.0 | 2.0.0 | Write the directory name in the path |
+
+Both warnings come from `pack` and from `graph`, because both resolve the same dependency tree.
+
+### A library that cannot be parsed
+
+Scratchsmith reads each library that the binary needs, and then resolves the libraries that
+library needs in turn. A file that is not an ELF at all has no dependencies, so scratchsmith
+stages it and continues. That stays true in 2.0.
+
+A truncated or corrupt library is a different case. The file starts with the ELF signature, and
+scratchsmith cannot read its list of dependencies. Today scratchsmith stages the damaged file
+and resolves nothing below it. The image can then ship without libraries that the program needs
+at run time, and the pack still exits `0`.
+
+Replace the file with an intact copy. Reinstall the package that owns it, or rebuild it.
+
+### `$PLATFORM` with no value
+
+A library search path is an `RPATH` or a `RUNPATH` entry in the binary, or in a library that the
+binary needs. It can contain the token `$PLATFORM`, and the loader replaces that token with the
+name of the processor type. Scratchsmith knows that name for `x86_64` and `aarch64` only.
+
+On any other architecture, scratchsmith removes the token and searches what is left. A path
+such as `/opt/app/lib/$PLATFORM` becomes `/opt/app/lib/`, which is the parent directory. A
+library with the same name in that directory then ships in place of the correct one.
+
+The warning names the file that holds the search path. When you link that file, write the
+directory name in the search path and do not use the token:
+
+```console
+$ cc -Wl,-rpath,/opt/app/lib/riscv64 -o myapp main.c
+```

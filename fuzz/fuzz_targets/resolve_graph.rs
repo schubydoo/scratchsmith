@@ -86,7 +86,7 @@ struct MapSource {
 impl LinkInfoSource for MapSource {
     // Three outcomes, matching the trait's contract:
     //   Err       -> the file could not be READ (driven by the fuzz input)
-    //   Ok(None)  -> read fine, not an ELF: a leaf
+    //   Ok(None)  -> read fine, does not parse as an ELF: a leaf
     //   Ok(Some)  -> scripted facts
     fn read(&self, path: &Path) -> anyhow::Result<Option<ElfInfo>> {
         let key = canonical(path);
