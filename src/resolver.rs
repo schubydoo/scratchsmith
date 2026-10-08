@@ -337,10 +337,11 @@ pub fn resolve_with(
                         &mut resolution.warnings,
                         format!(
                             "`$PLATFORM` has no value for this architecture (ELF machine {}), so \
-                             the search path `{entry}` in {} was searched with the token removed \
+                             the search path `{}` in {} was searched with the token removed \
                              and a library from the wrong directory can ship.",
                             root_info.machine,
-                            obj_path.display()
+                            entry.escape_debug(),
+                            printable(&obj_path)
                         ),
                     );
                 }
@@ -405,7 +406,7 @@ pub fn resolve_with(
                 None if has_elf_magic(&real) => resolution.warnings.push(format!(
                     "{} starts like an ELF and cannot be parsed (truncated or corrupt), so the \
                      libraries it needs were not resolved and can be absent from the image.",
-                    real.display()
+                    printable(&real)
                 )),
                 None => {}
             }
@@ -473,6 +474,13 @@ fn reroot(root: &Path, path: &Path) -> PathBuf {
         Ok(rel) => root.join(rel),
         Err(_) => path.to_path_buf(),
     }
+}
+
+// A path for a warning line. The search-path text comes out of the packed binary, and a file
+// name can hold anything but `/` and NUL, so escape control characters: a raw newline or
+// terminal escape would let the input forge a line of scratchsmith's own output.
+fn printable(path: &Path) -> String {
+    path.to_string_lossy().escape_debug().to_string()
 }
 
 // True when the file opens and begins with the ELF magic. Any IO failure reads as "no".
@@ -788,6 +796,11 @@ mod tests {
         assert_eq!(w.len(), 1, "{w:?}");
         assert!(w[0].contains("`/opt/$PLATFORM/lib`"), "{w:?}");
         assert_eq!(resolve_as(riscv, &["/opt/${PLATFORM}"], &[]).len(), 1);
+
+        // The entry is text from an untrusted binary. It must not reach the terminal raw.
+        let w = resolve_as(riscv, &[], &["/opt/$PLATFORM\nwarning: forged\x1b[2J"]);
+        assert!(!w[0].contains('\n') && !w[0].contains('\x1b'), "{w:?}");
+        assert!(w[0].contains("\\nwarning: forged\\u{1b}[2J"), "{w:?}");
 
         // A named architecture expands the token, so there is nothing to warn about.
         let x86 = goblin::elf::header::EM_X86_64;
