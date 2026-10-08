@@ -543,6 +543,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Tolerances ending in 2.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-library-that-cannot-be-parsed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A library that cannot be parsed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#platform-with-no-value" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        $PLATFORM with no value
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -789,6 +817,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Tolerances ending in 2.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-library-that-cannot-be-parsed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A library that cannot be parsed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#platform-with-no-value" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        $PLATFORM with no value
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -819,9 +875,9 @@ and what you write instead.</p>
 <p>This page has two lists, because two different things end in a major version.</p>
 <p>A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.</p>
-<p>A tolerance is different. Scratchsmith accepts input today that it cannot use, and says nothing.
-The next major version reports it as an error. A tolerance is not a deprecation, because there
-is no warning to act on yet.</p>
+<p>A tolerance is different. Scratchsmith accepts input today that it cannot use in full, and the
+result can be an image with a part absent. The next major version reports it as an error. Each
+tolerance prints one warning line to standard error, and the exit code stays the same.</p>
 <h2 id="deprecated-input-shapes">Deprecated input shapes<a class="headerlink" href="#deprecated-input-shapes" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -891,7 +947,51 @@ value reaches it, so the keys inside it never apply.</p>
 </code></pre></div>
 <p>Profiles do not inherit from each other, so repeat the keys the inner table relied on.</p>
 <h2 id="tolerances-ending-in-20">Tolerances ending in 2.0<a class="headerlink" href="#tolerances-ending-in-20" title="Permanent link">&para;</a></h2>
-<p>This list is empty today.</p>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Warns since</th>
+<th>Error in</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A library that starts like an ELF and cannot be parsed</td>
+<td>1.6.0</td>
+<td>2.0.0</td>
+<td>Replace the damaged file</td>
+</tr>
+<tr>
+<td><code>$PLATFORM</code> in a search path, on an architecture with no value for it</td>
+<td>1.6.0</td>
+<td>2.0.0</td>
+<td>Write the directory name in the path</td>
+</tr>
+</tbody>
+</table>
+<p>Both warnings come from <code>pack</code> and from <code>graph</code>, because both resolve the same dependency tree.</p>
+<h3 id="a-library-that-cannot-be-parsed">A library that cannot be parsed<a class="headerlink" href="#a-library-that-cannot-be-parsed" title="Permanent link">&para;</a></h3>
+<p>Scratchsmith reads each library that the binary needs, and then resolves the libraries that
+library needs in turn. A file that is not an ELF at all has no dependencies, so scratchsmith
+stages it and continues. That stays true in 2.0.</p>
+<p>A truncated or corrupt library is a different case. The file starts with the ELF signature, and
+scratchsmith cannot read its list of dependencies. Today scratchsmith stages the damaged file
+and resolves nothing below it. The image can then ship without libraries that the program needs
+at run time, and the pack still exits <code>0</code>.</p>
+<p>Replace the file with an intact copy. Reinstall the package that owns it, or rebuild it.</p>
+<h3 id="platform-with-no-value"><code>$PLATFORM</code> with no value<a class="headerlink" href="#platform-with-no-value" title="Permanent link">&para;</a></h3>
+<p>A library search path is an <code>RPATH</code> or a <code>RUNPATH</code> entry in the binary, or in a library that the
+binary needs. It can contain the token <code>$PLATFORM</code>, and the loader replaces that token with the
+name of the processor type. Scratchsmith knows that name for <code>x86_64</code> and <code>aarch64</code> only.</p>
+<p>On any other architecture, scratchsmith removes the token and searches what is left. A path
+such as <code>/opt/app/lib/$PLATFORM</code> becomes <code>/opt/app/lib/</code>, which is the parent directory. A
+library with the same name in that directory then ships in place of the correct one.</p>
+<p>The warning names the file that holds the search path. When you link that file, write the
+directory name in the search path and do not use the token:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-Wl,-rpath,/opt/app/lib/riscv64<span class="w"> </span>-o<span class="w"> </span>myapp<span class="w"> </span>main.c
+</code></pre></div>
 
 
 
