@@ -60,6 +60,7 @@
   --tz  value=false  multiple=false  required=false
   --upx  value=false  multiple=false  required=false
   --user  value=true  multiple=false  required=false
+  --watch  value=false  multiple=false  required=false
   --workdir  value=true  multiple=false  required=false
 
 [unpack]

@@ -696,3 +696,136 @@ fn a_registry_command_without_a_ca_store_fails_instead_of_panicking() {
         "the error must name the cause and the fix: {stderr}"
     );
 }
+
+// Kills and reaps a `--watch` child on every exit path. It never exits by itself, so a
+// panic between spawn and kill would otherwise leave it polling a deleted tempdir forever.
+struct KillOnDrop(std::process::Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn watch_packs_again_when_the_binary_changes() {
+    let Some(fixture) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let app = tmp.path().join("app");
+    std::fs::copy(fixture, &app).unwrap();
+    let archive = tmp.path().join("img.tar");
+    let stdout_path = tmp.path().join("stdout");
+    let stderr_path = tmp.path().join("stderr");
+
+    // Both streams go to files, not pipes: the child never exits by itself, and a file can
+    // be read while it runs without a reader thread.
+    let mut child = KillOnDrop(
+        Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args([
+                "pack",
+                "--oci-archive",
+                archive.to_str().unwrap(),
+                "--watch",
+            ])
+            .arg(&app)
+            .stdout(std::fs::File::create(&stdout_path).unwrap())
+            .stderr(std::fs::File::create(&stderr_path).unwrap())
+            .spawn()
+            .expect("failed to run scratchsmith binary"),
+    );
+    let read = |p: &std::path::Path| std::fs::read_to_string(p).unwrap_or_default();
+
+    // One "watching" line follows each pack attempt, pass or fail, so the count is the
+    // number of attempts finished. Poll for it under a deadline.
+    let wait_for_attempts = |n: usize| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while read(&stderr_path).matches("watching ").count() < n {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for attempt {n}; stderr so far: {}",
+                read(&stderr_path)
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    };
+    // A report is printed only by a pack that succeeded.
+    let reports = || read(&stdout_path).matches("wrote OCI archive").count();
+
+    wait_for_attempts(1);
+    assert_eq!(reports(), 1);
+    // A rebuild: same bytes, new file, new mtime.
+    let rebuilt = tmp.path().join("app.new");
+    std::fs::copy(fixture, &rebuilt).unwrap();
+    std::fs::rename(&rebuilt, &app).unwrap();
+    wait_for_attempts(2);
+    assert_eq!(
+        reports(),
+        2,
+        "the second pack must succeed: {}",
+        read(&stderr_path)
+    );
+    assert!(
+        !read(&stderr_path).contains("error: "),
+        "{}",
+        read(&stderr_path)
+    );
+
+    // A broken build must be reported and must not end the watch.
+    std::fs::write(&app, b"not an ELF").unwrap();
+    wait_for_attempts(3);
+    assert_eq!(reports(), 2, "a failed pack prints no report");
+    assert!(
+        read(&stderr_path).contains("error: "),
+        "the failure is reported"
+    );
+    assert!(
+        child.0.try_wait().unwrap().is_none(),
+        "a failed rebuild must not end the watch"
+    );
+}
+
+#[test]
+fn watch_refuses_the_sinks_and_formats_it_cannot_serve() {
+    // clap owns the flag pairs, so those are usage errors.
+    let out = run(&[
+        "pack",
+        "--watch",
+        "--push",
+        "localhost:5000/x:1",
+        "/bin/true",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    let out = run(&["pack", "--watch", "-n", "-o", "/tmp/x", "/bin/true"]);
+    assert_eq!(out.status.code(), Some(2));
+
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    // `--format` has a default, so clap cannot own this pair; dispatch refuses it before
+    // the first pack.
+    let out = run(&["pack", "--watch", "--format", "json", bin]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("cannot be used with --format json"),
+        "{stderr}"
+    );
+
+    // A `push` that arrives from the config is caught in dispatch too.
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("scratchsmith.toml");
+    std::fs::write(
+        &cfg,
+        format!("binary = \"{bin}\"\npush = \"localhost:5000/x:1\"\n"),
+    )
+    .unwrap();
+    let out = run(&["pack", "--watch", "--config", cfg.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("--watch cannot push"), "{stderr}");
+}
