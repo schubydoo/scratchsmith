@@ -101,7 +101,7 @@ pub fn write_oci_archive(
         "manifests": [manifest_desc],
     });
 
-    let write = |file: std::fs::File| -> Result<()> {
+    let write = |file: &std::fs::File| -> Result<()> {
         let mut ar = tar::Builder::new(file);
         append_bytes(&mut ar, "oci-layout", br#"{"imageLayoutVersion":"1.0.0"}"#)?;
         append_bytes(&mut ar, "index.json", &serde_json::to_vec(&index)?)?;
@@ -115,26 +115,43 @@ pub fn write_oci_archive(
         ar.finish().context("finishing OCI archive")
     };
 
-    // A destination that exists and is not a regular file (/dev/stdout, a FIFO) is a stream:
-    // write straight into it, there is nothing to replace.
-    if out.symlink_metadata().is_ok_and(|m| !m.is_file()) {
-        return write(std::fs::File::create(out)?);
+    // A destination that exists and is not a regular file (/dev/stdout, a FIFO, a symlink) is
+    // written straight into, as before: there is nothing to replace, or the link is the
+    // user's own indirection to keep.
+    let existing = out.symlink_metadata().ok();
+    if existing.as_ref().is_some_and(|m| !m.is_file()) {
+        return write(&std::fs::File::create(out)?);
     }
+
     // Otherwise write a sibling file and rename it over the destination, so a reader never
     // sees a half-written archive. `File::create(out)` truncated the old archive first and
     // then streamed the new one into it; a `skopeo copy` that ran meanwhile read a short tar.
     // The sibling shares the directory, so the rename stays on one filesystem and is atomic.
-    let mut name = out.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".{}.tmp", std::process::id()));
-    let tmp = out.with_file_name(name);
-    let result = std::fs::File::create(&tmp)
-        .map_err(anyhow::Error::from)
-        .and_then(write)
-        .and_then(|()| std::fs::rename(&tmp, out).map_err(anyhow::Error::from));
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    //
+    // `tempfile` gives it a random name and opens it O_EXCL, so a name planted in a shared
+    // directory (a symlink to some other file) is never followed. Mode 0666 at open means the
+    // umask applies, which is the mode `File::create` gave a new archive.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = match out.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let tmp = tempfile::Builder::new()
+        .prefix(".scratchsmith-oci-")
+        .suffix(".tmp")
+        .permissions(std::fs::Permissions::from_mode(0o666))
+        .tempfile_in(dir)
+        .with_context(|| format!("creating a temporary file in {}", dir.display()))?;
+    write(tmp.as_file())?;
+    // Replacing an archive must not loosen it: the in-place write kept the old file's mode,
+    // so carry it over. (Its owner cannot be carried over without privilege.)
+    if let Some(old) = &existing {
+        tmp.as_file().set_permissions(old.permissions())?;
     }
-    result.with_context(|| format!("writing the OCI archive {}", out.display()))
+    // On any error above or here, dropping `tmp` removes the sibling.
+    tmp.persist(out)
+        .with_context(|| format!("moving the OCI archive into place at {}", out.display()))?;
+    Ok(())
 }
 
 // Crate-visible, for the four `registry` sites that spell the same strings. Only one of them
@@ -692,6 +709,23 @@ mod tests {
             ["img.tar"],
             "the sibling file must not be left behind"
         );
+
+        // Replacing a private archive must leave it private: the mode carries over.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write(&out).unwrap();
+        let mode_of = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode_of(&out), 0o600, "got {:o}", mode_of(&out));
+        std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        // A NEW archive gets the umask-default mode a plain create gives, not tempfile's 0600.
+        let fresh = dir.join("fresh.tar");
+        write(&fresh).unwrap();
+        let plain = dir.join("plain");
+        std::fs::File::create(&plain).unwrap();
+        assert_eq!(mode_of(&fresh), mode_of(&plain));
+        std::fs::remove_file(&fresh).unwrap();
+        std::fs::remove_file(&plain).unwrap();
 
         // A failed write leaves no sibling either. A directory where the destination should
         // be makes the final rename fail after the whole archive is written.
