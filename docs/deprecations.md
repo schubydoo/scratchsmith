@@ -102,16 +102,17 @@ Replace the file with an intact copy. Reinstall the package that owns it, or reb
 
 ### `$PLATFORM` with no value
 
-A library search path is an `RPATH` or a `RUNPATH` entry in the binary. It can contain the token
-`$PLATFORM`, and the loader replaces that token with the name of the processor type.
-Scratchsmith knows that name for `x86_64` and `aarch64` only.
+A library search path is an `RPATH` or a `RUNPATH` entry in the binary, or in a library that the
+binary needs. It can contain the token `$PLATFORM`, and the loader replaces that token with the
+name of the processor type. Scratchsmith knows that name for `x86_64` and `aarch64` only.
 
 On any other architecture, scratchsmith removes the token and searches what is left. A path
-such as `/opt/app/$PLATFORM/lib` becomes `/opt/app//lib`, which is the parent directory. A
+such as `/opt/app/lib/$PLATFORM` becomes `/opt/app/lib/`, which is the parent directory. A
 library with the same name in that directory then ships in place of the correct one.
 
-When you link the binary, write the directory name in the search path and do not use the token:
+The warning names the file that holds the search path. When you link that file, write the
+directory name in the search path and do not use the token:
 
 ```console
-$ cc -Wl,-rpath,/opt/app/riscv64/lib -o myapp main.c
+$ cc -Wl,-rpath,/opt/app/lib/riscv64 -o myapp main.c
 ```

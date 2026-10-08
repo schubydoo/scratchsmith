@@ -239,8 +239,10 @@ pub trait LinkInfoSource {
     /// The two failure shapes are deliberately DIFFERENT types, because conflating them
     /// drops a whole subtree from the resolution, with nothing landing in `missing`:
     ///
-    /// - `Ok(None)` — the file was read, and it is not an ELF (a stray data file resolved by
-    ///   name). It has no `DT_NEEDED` of its own, so keeping it as a leaf is correct.
+    /// - `Ok(None)` — the file was read, and it does not parse as an ELF. For a stray data
+    ///   file resolved by name that is correct: it has no `DT_NEEDED` of its own, so it is a
+    ///   leaf. A truncated or corrupt ELF lands here too and is kept as a leaf until 2.0;
+    ///   `resolve_with` tells the two apart by the magic bytes and warns about the second.
     /// - `Err` — the file could not be READ. Nothing is known about its dependencies, so
     ///   treating it as a leaf would drop its whole subtree from the resolution without
     ///   anything landing in `Resolution::missing`.
@@ -329,8 +331,10 @@ pub fn resolve_with(
             &[]
         };
         // `$PLATFORM` has no value here, so the entry is searched with the token gone and a
-        // same-named file one directory up can stage in place of the arch-specific one.
-        if root_info.platform().is_empty() {
+        // same-named file in that other directory can stage in place of the arch-specific
+        // one. A soname with a slash is a path and never uses the search list, so an object
+        // with no bare soname searches nothing and has nothing to warn about.
+        if root_info.platform().is_empty() && obj.needed.iter().any(|n| !n.contains('/')) {
             for entry in used_rpaths.iter().chain(&obj.runpaths) {
                 if entry.contains("$PLATFORM") || entry.contains("${PLATFORM}") {
                     push_unique(
@@ -483,7 +487,8 @@ fn printable(path: &Path) -> String {
     path.to_string_lossy().escape_debug().to_string()
 }
 
-// True when the file opens and begins with the ELF magic. Any IO failure reads as "no".
+// True when the file opens and begins with the ELF magic. Any IO failure reads as "no",
+// which only loses a warning. A 2.0 rejection must not gate on this: it would fail open.
 fn has_elf_magic(path: &Path) -> bool {
     use std::io::Read;
     let mut magic = [0u8; 4];
@@ -782,13 +787,18 @@ mod tests {
         let root = tmp.path();
         let exe = root.join("app/exe");
         touch(&exe);
+        let resolve_with_needed =
+            |machine: u16, needed: &[&str], rpaths: &[&str], runpaths: &[&str]| {
+                // One bare soname, so the object has a search to run. It need not resolve.
+                let mut info = elf(needed, rpaths, runpaths, None);
+                info.machine = machine;
+                let infos = HashMap::from([(canonical(&exe), info)]);
+                resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos })
+                    .unwrap()
+                    .warnings
+            };
         let resolve_as = |machine: u16, rpaths: &[&str], runpaths: &[&str]| {
-            let mut info = elf(&[], rpaths, runpaths, None);
-            info.machine = machine;
-            let infos = HashMap::from([(canonical(&exe), info)]);
-            resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos })
-                .unwrap()
-                .warnings
+            resolve_with_needed(machine, &["libx.so"], rpaths, runpaths)
         };
         let riscv = goblin::elf::header::EM_RISCV;
 
@@ -801,6 +811,11 @@ mod tests {
         let w = resolve_as(riscv, &[], &["/opt/$PLATFORM\nwarning: forged\x1b[2J"]);
         assert!(!w[0].contains('\n') && !w[0].contains('\x1b'), "{w:?}");
         assert!(w[0].contains("\\nwarning: forged\\u{1b}[2J"), "{w:?}");
+
+        // No bare soname means no search: nothing is needed, or the one entry is a path.
+        let tokened = ["/opt/$PLATFORM/lib"];
+        assert!(resolve_with_needed(riscv, &[], &[], &tokened).is_empty());
+        assert!(resolve_with_needed(riscv, &["/abs/libx.so"], &[], &tokened).is_empty());
 
         // A named architecture expands the token, so there is nothing to warn about.
         let x86 = goblin::elf::header::EM_X86_64;
