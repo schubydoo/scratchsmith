@@ -471,10 +471,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#hosts-with-no-dpkg-database" class="md-nav__link">
+  <a href="#hosts-with-no-package-database" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Hosts with no dpkg database
+        Hosts with no package database
       
     </span>
   </a>
@@ -963,10 +963,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#hosts-with-no-dpkg-database" class="md-nav__link">
+  <a href="#hosts-with-no-package-database" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Hosts with no dpkg database
+        Hosts with no package database
       
     </span>
   </a>
@@ -1298,6 +1298,7 @@ The scan did not see them.</p>
 </code></pre></div>
 <ul>
 <li><code>source</code> is the source package, which is the name that security advisories use.</li>
+<li><code>type</code> is <code>deb</code> on a dpkg host and <code>rpm</code> on an rpm host.</li>
 <li><code>files</code> are paths in the image. One host file can be in the image two times, as the loader
   is in this example.</li>
 <li>The lookup covers the binary, the libraries that it needs, the loader, and the NSS modules.
@@ -1331,15 +1332,34 @@ The scan did not see them.</p>
 </tr>
 <tr>
 <td><code>null</code></td>
-<td>Not reported: the <code>report</code> output is off, the host has no dpkg database, or the lookup failed</td>
+<td>Not reported: the <code>report</code> output is off, the host has no dpkg or rpm database, or the lookup failed</td>
 </tr>
 </tbody>
 </table>
 <h3 id="the-sbom-and-the-image">The SBOM and the image<a class="headerlink" href="#the-sbom-and-the-image" title="Permanent link">&para;</a></h3>
-<p>For the <code>sbom</code> and <code>image</code> outputs, scratchsmith writes one record for each package under
-<code>/var/lib/dpkg/status.d/</code>, and copies the host's <code>/etc/os-release</code>. Syft, grype and other
-scanners read both. The scanner needs <code>os-release</code> to know the distribution. Without it, a
-scanner cannot match a package to an advisory.</p>
+<p>For the <code>sbom</code> and <code>image</code> outputs, scratchsmith writes records that scanners already read, and
+copies the host's <code>/etc/os-release</code>. Syft, grype and other scanners read both. The scanner needs
+<code>os-release</code> to know the distribution. Without it, a scanner cannot match a package to an
+advisory.</p>
+<p>The records depend on the package manager of the build host:</p>
+<table>
+<thead>
+<tr>
+<th>Host</th>
+<th>Records</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>dpkg (Debian, Ubuntu and their relatives)</td>
+<td>One text file for each package, under <code>/var/lib/dpkg/status.d/</code></td>
+</tr>
+<tr>
+<td>rpm (Fedora, RHEL and their relatives)</td>
+<td>One rpm database that holds only the owning packages, at the host's database path</td>
+</tr>
+</tbody>
+</table>
 <ul>
 <li>With <code>sbom</code>, those files are in the staged tree only while the SBOM and the scan run. The
   image does not contain them. With <code>--no-build</code>, an <code>/etc/os-release</code> that is already in the
@@ -1348,15 +1368,19 @@ scanner cannot match a package to an advisory.</p>
   <code>/etc/os-release</code> that names the build host's distribution. If you add your own
   <code>/etc/os-release</code> with <code>--add-file</code>, scratchsmith keeps yours. An SBOM of that image names
   the packages too, because the records are in the tree that syft reads.</li>
+<li>On an rpm host, the database is about half a megabyte for a small program. The dpkg records
+  are a few kilobytes.</li>
+<li>If you add a file with <code>--add-file</code> at a path that a record needs, the pack fails.
+  Scratchsmith does not replace a file that you added.</li>
 </ul>
-<h3 id="hosts-with-no-dpkg-database">Hosts with no dpkg database<a class="headerlink" href="#hosts-with-no-dpkg-database" title="Permanent link">&para;</a></h3>
-<p>This works on a host with a dpkg database, which is Debian, Ubuntu and their relatives. What
-happens on another host depends on what you asked for:</p>
+<h3 id="hosts-with-no-package-database">Hosts with no package database<a class="headerlink" href="#hosts-with-no-package-database" title="Permanent link">&para;</a></h3>
+<p><code>--packages</code> works on a host with a dpkg or an rpm database. What happens on another host
+depends on what you asked for:</p>
 <table>
 <thead>
 <tr>
 <th>You set</th>
-<th>Result on a host with no dpkg database</th>
+<th>Result on a host with neither database</th>
 </tr>
 </thead>
 <tbody>
