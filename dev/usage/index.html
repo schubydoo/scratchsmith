@@ -1411,6 +1411,8 @@ depends on what you asked for:</p>
 </table>
 <p>If you asked for <code>sbom</code> or <code>image</code> and scratchsmith cannot write the records, the pack also
 fails.</p>
+<p><code>scratchsmith doctor</code> tells you before you pack. On an rpm host that cannot write the records,
+the <code>rpm</code> row starts with <code>warn</code> and names the outputs that fail.</p>
 <h2 id="trim-the-nss-modules">Trim the NSS modules<a class="headerlink" href="#trim-the-nss-modules" title="Permanent link">&para;</a></h2>
 <p>glibc loads name-service (NSS) modules at runtime to resolve names: hostnames to IP addresses,
 and user or group IDs to names. Scratchsmith stages a default set (local files plus DNS). If your
