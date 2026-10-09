@@ -3,22 +3,26 @@ use libfuzzer_sys::fuzz_target;
 
 // Fuzz the readers of `dpkg-query` output behind `--packages` on a dpkg host. The text comes
 // from a tool on the build host, so it is not hostile in the usual case. But a package name
-// from it becomes a file name under `var/lib/dpkg/status.d` in the image, and a path from it
-// goes into the report, so the two properties below must hold for any text at all.
+// from it becomes a file name under `var/lib/dpkg/status.d` in the image, an argument to the
+// next `dpkg-query` call, and a line of the report. So every name must be one safe path
+// component, for any text at all.
 fuzz_target!(|data: &[u8]| {
-    let Ok(text) = std::str::from_utf8(data) else {
-        return;
-    };
-    let (owners, records) = scratchsmith::packages::parse_dpkg_output(text);
-    for (package, path) in &owners {
+    // The same conversion as the real reader, which never rejects a byte.
+    let text = String::from_utf8_lossy(data);
+    let parsed = scratchsmith::packages::parse_dpkg_output(&text);
+    for (package, _path) in &parsed.owners {
+        // The path is not judged here. What keeps a forged path out of the report is the
+        // filter in `packages::search`, which keeps only a path that was asked for, and a
+        // text-level entry point does not reach it.
         assert!(safe_name(package), "owner name {package:?}");
-        assert!(path.starts_with('/'), "owner path {path:?}");
     }
-    for (i, file) in records.iter().enumerate() {
-        // One path component, and never one with a meaning of its own.
+    for name in &parsed.names {
+        assert!(safe_name(name), "package row name {name:?}");
+    }
+    for (i, file) in parsed.record_files.iter().enumerate() {
         assert!(safe_name(file), "record file name {file:?}");
         assert!(
-            !records[..i].contains(file),
+            !parsed.record_files[..i].contains(file),
             "record file name twice: {file:?}"
         );
     }
