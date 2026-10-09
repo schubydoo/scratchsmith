@@ -5,6 +5,150 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 1.6.0 (2026-10-09)
+
+### Features
+
+#### `index` and `pack --push` work on a host with no certificate store ([#273](https://github.com/schubydoo/scratchsmith/pull/273))
+
+On a host with no CA trust store, such as a `FROM scratch` container, `index` and `pack --push`
+failed before they reached the registry. They now fall back to the Mozilla root certificates
+compiled into the binary, and print one warning to standard error to say so. A host that has a
+store sees no change. If `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, your choice holds and there
+is no fallback.
+
+#### `pack --watch` packs again each time the binary changes ([#272](https://github.com/schubydoo/scratchsmith/pull/272))
+
+`scratchsmith pack --watch ./app` packs one time and then packs again after every change to the
+binary, until you press Ctrl-C. It waits until the file stops changing, and a pack that fails
+does not end the watch. It works with the default load and `--oci-archive`, and it refuses
+`--push`, `--no-build` and `--format json`. Only the binary is watched.
+
+#### `--packages` names the distribution package behind each bundled library ([#276](https://github.com/schubydoo/scratchsmith/pull/276))
+
+A scratch image has no package database. An SBOM of it named almost none of the libraries that
+scratchsmith copied in, and `--scan` did not see them. On a dpkg or rpm host, scratchsmith now
+asks which package owns each bundled file, and the `--format json` report gains a `packages`
+list. A pack with the text report skips that lookup unless you set `--packages` or the
+`packages` configuration key.
+
+Two more outputs are opt-in. `--packages report,sbom` makes `--sbom` and `--scan` see those
+packages. A scan gate can then fail on vulnerabilities that it did not see before.
+`--packages image` keeps the package records and `/etc/os-release` in the image. If you ask for
+`sbom` or `image` on a host with neither database, the pack fails. On an rpm host with a
+Berkeley DB database, such as Rocky Linux 8, an image with the records is not reproducible.
+
+#### A pack into an output directory that is not empty now warns ([#285](https://github.com/schubydoo/scratchsmith/pull/285))
+
+If the output directory already holds files, `pack --no-build --output <dir>` prints one
+warning line to standard error. The pack merges into that directory, so a file from an earlier pack can
+stay in it. The run still succeeds and the exit code does not change.
+
+#### The JSON pack report carries the time of each phase ([#275](https://github.com/schubydoo/scratchsmith/pull/275))
+
+`pack --format json` gains a `timings` object: the milliseconds spent to resolve, stage, generate
+the SBOM, scan, deliver, smoke-run and sign, plus the total. A phase that did not run is `null`.
+Use it to find the slow part of a pack in CI, or to build trace spans from it. The text report
+does not change.
+
+#### The resolver follows the loader's `RUNPATH` rule ([#281](https://github.com/schubydoo/scratchsmith/pull/281))
+
+A library that has its own `RUNPATH` does not search an `RPATH` inherited from the program.
+Scratchsmith searched it anyway. When a second copy of a library was in a system directory, the
+image got a different copy than the program uses on the host. Scratchsmith now stages the copy
+that the loader uses.
+
+If a library is found only through an inherited `RPATH`, the pack still works and prints a
+warning.
+
+#### Two silently tolerated resolver inputs now warn ([#270](https://github.com/schubydoo/scratchsmith/pull/270))
+
+`pack` and `graph` print one warning line to standard error for a library that starts like an ELF
+and cannot be parsed. They do the same for a `$PLATFORM` token in a search path on an
+architecture that has no value for it. The run still succeeds and the exit code does not change.
+A file that is not an ELF at all stays quiet.
+
+### Fixes
+
+#### The GitHub Action no longer hangs on a stalled download ([#269](https://github.com/schubydoo/scratchsmith/pull/269))
+
+The action downloaded the release with no network timeout, so a connection that stalled held the
+step until the job timed out. If no data arrives for 30 seconds, the download now stops, and the
+step fails after three more tries. A slow connection that still moves data is not cut off.
+
+#### `--oci-archive` replaces the archive in one step ([#274](https://github.com/schubydoo/scratchsmith/pull/274))
+
+`pack --oci-archive` emptied the destination file first and then wrote the new archive into it.
+A tool that read the file at that moment got a short archive. Scratchsmith now writes a file
+beside the destination and renames it into place, so a reader gets the old archive or the new
+one. A destination that is not a regular file, such as `/dev/stdout`, is written directly as
+before.
+
+Two things follow from the rename. The pack now needs write permission on the directory that
+holds the archive, not only on the archive. If you interrupt a pack, a file named
+`.scratchsmith-oci-*.tmp` can remain beside the archive, and you can delete it. An archive that
+replaces an existing one keeps that file's permissions.
+
+#### `doctor` and `--help` name things as they are ([#278](https://github.com/schubydoo/scratchsmith/pull/278))
+
+`doctor` described syft and cosign with a "v0.2" label from an early plan. It now names the flags
+that use them, `--sbom` and `--sign`. The `--max-size` help text said "packed payload", and it now
+says what the check measures: the whole staged image. The README and the docs home page link to
+the Deprecations page.
+
+#### `doctor` shows the package tools, and says when an rpm is too old ([#288](https://github.com/schubydoo/scratchsmith/pull/288))
+
+`doctor` has two new rows, `dpkg-query` and `rpm`, for the tools behind `--packages`. CentOS 7
+and Amazon Linux 2 have rpm 4.11, and `--packages sbom` and `--packages image` fail there. On
+such a host the `rpm` row starts with `warn` and names the outputs that fail.
+
+#### A missing library name can no longer forge a line of output ([#283](https://github.com/schubydoo/scratchsmith/pull/283))
+
+When a library that a binary needs is not found, scratchsmith prints its name in the error and in
+the `graph` tree. That name comes from the binary, and it was printed as it was. With a line
+break or a terminal escape in the name, a crafted binary was able to fake a line of
+scratchsmith's output. Scratchsmith now escapes those characters. The JSON output was already
+safe.
+
+#### `install.sh` no longer hangs on a stalled connection ([#268](https://github.com/schubydoo/scratchsmith/pull/268))
+
+The installer set no network timeout, so a connection that stalled left it waiting with no output.
+If no data arrives for 30 seconds, it now gives up and prints the download error. A slow
+connection that still moves data is not cut off.
+
+#### A second pack into the same directory no longer fails on a read-only file ([#285](https://github.com/schubydoo/scratchsmith/pull/285))
+
+If the output directory held a read-only file from an earlier pack, and the user was not root,
+`pack --no-build --output <dir>` failed with `Permission denied`. A binary with mode `0555` and a
+`--ca-certs` bundle with mode `0444` both caused it. Scratchsmith now replaces the staged file.
+
+### Deprecated
+
+#### `--no-build` into a directory that is not empty ([#285](https://github.com/schubydoo/scratchsmith/pull/285))
+
+A second pack into the same `--output` directory merges with the first, and a file that the new
+pack does not stage stays there. Scratchsmith 2.0 refuses a directory that is not empty. Today
+the pack works and prints a warning. Use a new directory, or empty it first.
+The [Deprecations](https://schubydoo.github.io/scratchsmith/latest/deprecations/) page has the
+detail.
+
+#### A library found only through an inherited `RPATH` ([#281](https://github.com/schubydoo/scratchsmith/pull/281))
+
+A library with its own `RUNPATH` does not search the program's `RPATH`. If a file that it needs
+is only in that `RPATH` directory, the loader does not look there. Scratchsmith 2.0 reports that
+file as missing. Today the pack works and prints a warning. Put the directory in the `RUNPATH` of the
+library that needs the file.
+The [Deprecations](https://schubydoo.github.io/scratchsmith/latest/deprecations/) page has the
+detail.
+
+#### A damaged library, or a `$PLATFORM` search path with no value ([#270](https://github.com/schubydoo/scratchsmith/pull/270))
+
+Scratchsmith 2.0 rejects a resolved library that is truncated or corrupt. It also rejects a
+`$PLATFORM` token in an `RPATH` or `RUNPATH` on an architecture other than `x86_64` and `aarch64`.
+Today both pack, and the image can ship without the correct libraries. The
+[Deprecations](https://schubydoo.github.io/scratchsmith/latest/deprecations/) page carries the
+fix for each.
+
 ## 1.5.1 (2026-09-25)
 
 ### Fixes
