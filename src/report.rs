@@ -106,9 +106,9 @@ pub struct PackReport {
     /// Time per phase. Not shown in the text report.
     pub timings: Timings,
     /// The distribution packages that own the bundled files (`--packages report`, on by
-    /// default). `None` is "not reported": the output is off, the host has no dpkg
-    /// database, or the lookup failed. An empty list is an answer: dpkg was asked and owns
-    /// none of them. Not shown in the text report.
+    /// default). `None` is "not reported": the output is off, the host has no dpkg or rpm
+    /// database, or the lookup failed. An empty list is an answer: the package manager was
+    /// asked and owns none of them. Not shown in the text report.
     pub packages: Option<Vec<crate::packages::Package>>,
 }
 

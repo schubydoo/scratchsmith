@@ -193,6 +193,8 @@ The records depend on the package manager of the build host:
   the packages too, because the records are in the tree that syft reads.
 - On an rpm host, the database is about half a megabyte for a small program. The dpkg records
   are a few kilobytes.
+- If you add a file with `--add-file` at a path that a record needs, the pack fails.
+  Scratchsmith does not replace a file that you added.
 
 ### Hosts with no package database
 

@@ -5,7 +5,7 @@
 //! none: a scanner reads the rpm database itself. So the records here are package HEADERS,
 //! the binary blobs rpm keeps per package. `rpmdb --exportdb` prints every header on the
 //! host, this module keeps the ones for the owning packages, and `rpmdb --importdb` builds a
-//! database from them inside the staged tree. rpm writes its own database, in whatever
+//! database from them in a private directory. rpm writes its own database, in whatever
 //! backend the host uses, so nothing here knows the on-disk format.
 
 use crate::packages::Package;
@@ -15,9 +15,18 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// True when this host has an rpm database to ask.
+/// True when this host has an rpm database that can answer.
+///
+/// A database directory is not enough: a Debian host can carry the `rpm` tool with an empty
+/// database, and a broken one must not read as "nothing is owned". So the test is a real
+/// question with a known answer, whether the database knows the `rpm` package itself.
 pub fn available() -> bool {
     db_path().is_some_and(|db| db.is_dir())
+        && Command::new("rpm")
+            .args(["-q", "--qf", "%{NAME}\\n", "--", "rpm"])
+            .env("LC_ALL", "C")
+            .output()
+            .is_ok_and(|out| out.status.success())
 }
 
 /// Where the host's rpm keeps its database (`%{_dbpath}`), which is also where
@@ -45,10 +54,13 @@ struct Nevra {
 
 /// Ask rpm which packages own `files` (`(host path, image path)` pairs), and credit each
 /// `(package, image path)` in `conventions` to that package if it is installed. Returns the
-/// packages for the report and the header list for the records.
+/// packages for the report and, when `want_records` is set, their header list for the
+/// records. The export behind that list reads every package on the host, so a pack that only
+/// fills the report does not pay for it.
 pub fn owners(
     files: &[(PathBuf, PathBuf)],
     conventions: &[(&str, PathBuf)],
+    want_records: bool,
 ) -> Result<(Vec<Package>, Vec<u8>)> {
     const ROW: &str = "%{NAME}\\t%{EPOCHNUM}\\t%{VERSION}\\t%{RELEASE}\\t%{ARCH}\\t%{SOURCERPM}\\n";
     // Keyed by package, with the source rpm beside the image paths it owns.
@@ -62,14 +74,14 @@ pub fn owners(
     for (host, image) in files {
         // `rpm -qf` takes a literal path, and exits 1 for one that no package owns.
         let args = ["-qf", "--qf", ROW, "--"];
-        if let Some(rows) = rpm_query(&args, host.as_os_str())? {
+        if let Some(rows) = rpm_query(&args, host.as_os_str(), "is not owned by any package")? {
             credit(&rows, image);
         }
     }
     for (package, image) in conventions {
         // `rpm -q` exits 1 for a package that is not installed: nobody to credit.
         let args = ["-q", "--qf", ROW, "--"];
-        if let Some(rows) = rpm_query(&args, std::ffi::OsStr::new(package))? {
+        if let Some(rows) = rpm_query(&args, std::ffi::OsStr::new(package), "is not installed")? {
             credit(&rows, image);
         }
     }
@@ -77,20 +89,24 @@ pub fn owners(
         return Ok((Vec::new(), Vec::new()));
     }
 
-    let export = Command::new("rpmdb")
-        .arg("--exportdb")
-        .env("LC_ALL", "C")
-        .output()
-        .context("running rpmdb --exportdb")?;
-    if !export.status.success() {
-        bail!(
-            "rpmdb --exportdb failed ({}): {}",
-            export.status,
-            String::from_utf8_lossy(&export.stderr).trim()
-        );
-    }
-    let wanted: Vec<&Nevra> = found.keys().collect();
-    let records = filter_headers(&export.stdout, &wanted)?;
+    let records = if want_records {
+        let export = Command::new("rpmdb")
+            .arg("--exportdb")
+            .env("LC_ALL", "C")
+            .output()
+            .context("running rpmdb --exportdb")?;
+        if !export.status.success() {
+            bail!(
+                "rpmdb --exportdb failed ({}): {}",
+                export.status,
+                String::from_utf8_lossy(&export.stderr).trim()
+            );
+        }
+        let wanted: Vec<&Nevra> = found.keys().collect();
+        filter_headers(&export.stdout, &wanted)?
+    } else {
+        Vec::new()
+    };
 
     let packages = found
         .into_iter()
@@ -114,25 +130,38 @@ pub fn owners(
     Ok((packages, records))
 }
 
-// Run one rpm query. `None` is exit 1, rpm's answer for "no such file or package"; any other
-// failure is an error with rpm's own words.
-fn rpm_query(args: &[&str], subject: &std::ffi::OsStr) -> Result<Option<String>> {
+// Run one rpm query. `None` is rpm's own "no": exit 1 AND the sentence it prints for that
+// case (`no_answer`, under LC_ALL=C). Exit 1 alone is not enough, because rpm uses it for
+// every failed argument, a database that will not open included, and a broken database must
+// never read as "nothing is owned". Anything else is an error with rpm's own words.
+fn rpm_query(args: &[&str], subject: &std::ffi::OsStr, no_answer: &str) -> Result<Option<String>> {
     let out = Command::new("rpm")
         .args(args)
         .arg(subject)
         .env("LC_ALL", "C")
         .output()
         .context("running rpm")?;
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr);
     match out.status.code() {
-        Some(0) => Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned())),
-        Some(1) => Ok(None),
+        Some(0) => Ok(Some(stdout)),
+        Some(1) if said_no(&stdout, &stderr, no_answer) => Ok(None),
         _ => bail!(
-            "rpm {} failed ({}): {}",
+            "rpm {} failed ({}): {} {}",
             args[0],
             out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
+            stdout.trim(),
+            stderr.trim()
         ),
     }
+}
+
+// rpm's negative answer, on either stream: `-qf` prints it on stdout, and a path that does
+// not exist ("No such file or directory") comes on stderr and is the same "no owner".
+fn said_no(stdout: &str, stderr: &str, no_answer: &str) -> bool {
+    stdout.contains(no_answer)
+        || stderr.contains(no_answer)
+        || stderr.contains("No such file or directory")
 }
 
 // One `ROW` line into the package key and its source package name. A line that is not a
@@ -182,19 +211,34 @@ const TYPE_STRING: u32 = 6;
 /// Keep the headers of `wanted` packages out of an `rpmdb --exportdb` header list, byte for
 /// byte and in their original order.
 ///
+/// Every wanted package must be found. One that is not means the database changed between
+/// the two rpm calls, or that this reader misread a header, and either way the records would
+/// name fewer packages than the report does. That is an error, not a shorter list.
+///
 /// A header is the magic, an entry count, a data length, that many 16-byte index entries,
 /// and the data. Every length is checked against the buffer, so a list that is cut short or
 /// is not a header list is an error and never a read past the end.
 fn filter_headers(list: &[u8], wanted: &[&Nevra]) -> Result<Vec<u8>> {
     let mut kept = Vec::new();
+    let mut matched: Vec<Nevra> = Vec::new();
     let mut rest = list;
     while !rest.is_empty() {
         let size = header_size(rest)?;
         let (header, tail) = rest.split_at(size);
-        if header_nevra(header).is_some_and(|n| wanted.contains(&&n)) {
+        if let Some(nevra) = header_nevra(header).filter(|n| wanted.contains(&n)) {
             kept.extend_from_slice(header);
+            matched.push(nevra);
         }
         rest = tail;
+    }
+    if let Some(lost) = wanted.iter().find(|w| !matched.contains(w)) {
+        bail!(
+            "the rpm database has no header for {}-{}-{}.{}, which rpm named as an owner",
+            lost.name,
+            lost.version,
+            lost.release,
+            lost.arch
+        );
     }
     Ok(kept)
 }
@@ -274,37 +318,28 @@ fn header_nevra(header: &[u8]) -> Option<Nevra> {
     })
 }
 
-/// Build an rpm database from `headers` inside `rootfs`, at the host's own database path,
-/// and return the files it wrote.
+/// Build an rpm database from `headers` and return its files as `(file name, bytes)`.
 ///
-/// The caller has already made sure that no part of the path under `rootfs` is a symlink,
-/// and created the directory. A database from an earlier pack into the same directory is
-/// replaced: `rpmdb --importdb` would add to it, and the result must hold these packages and
-/// no others.
-pub fn import(rootfs: &Path, db_dir: &Path, headers: &[u8]) -> Result<Vec<PathBuf>> {
-    // rpm opens its database by NAME inside this directory and follows whatever is there.
-    // The tree can hold links the user asked for, so a link at one of those names would send
-    // rpm's writes outside the rootfs and onto the host. Nothing but a regular file may be
-    // in the way: a regular file is an earlier database and is replaced, and anything else
-    // stops the pack.
-    for entry in
-        std::fs::read_dir(db_dir).with_context(|| format!("reading {}", db_dir.display()))?
-    {
-        let path = entry?.path();
-        if !path.symlink_metadata()?.is_file() {
-            bail!(
-                "cannot record packages: {} is in the way of the rpm database and is not a \
-                 regular file; writing through it could leave the image",
-                path.display()
-            );
-        }
-        std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
-    }
+/// The database is built in a private temporary root, never in the staged tree. rpm opens
+/// its database by name and follows whatever is at that name, and the staged tree can hold
+/// links and files the user asked for, so rpm is not pointed at it at all. The caller places
+/// the bytes with the same checks as every other record.
+///
+/// rpm leaves working files beside the database: its lock, and for the sqlite backend a
+/// shared-memory index and a write-ahead log that is empty once rpm has finished. None is
+/// part of the data and a reader rebuilds what it needs, so they are left behind here. For
+/// the sqlite backend that leaves one file.
+pub fn build_database(headers: &[u8]) -> Result<Vec<(std::ffi::OsString, Vec<u8>)>> {
+    let db = db_path().context("asking rpm where its database lives")?;
+    let tmp = tempfile::tempdir().context("creating a directory to build the rpm database in")?;
     // rpm ignores a `--root` that is not absolute and would then write to the HOST database
-    // path, so the rootfs is made absolute first. A failure to do so is an error, never a
+    // path, so the root is made absolute first. A failure to do so is an error, never a
     // fallback to the path as given.
-    let root =
-        std::fs::canonicalize(rootfs).with_context(|| format!("resolving {}", rootfs.display()))?;
+    let root = std::fs::canonicalize(tmp.path())
+        .with_context(|| format!("resolving {}", tmp.path().display()))?;
+    if !root.is_absolute() || root == Path::new("/") {
+        bail!("refusing to build the rpm database in {}", root.display());
+    }
     let mut child = Command::new("rpmdb")
         .arg("--importdb")
         .arg("--root")
@@ -315,8 +350,9 @@ pub fn import(rootfs: &Path, db_dir: &Path, headers: &[u8]) -> Result<Vec<PathBu
         .stderr(Stdio::piped())
         .spawn()
         .context("running rpmdb --importdb")?;
-    // Written from here while rpmdb reads: a header list is a few megabytes at most, and
-    // rpmdb drains stdin before it reports, so this cannot block on its stderr.
+    // The stdin handle is dropped at the end of this statement, so rpmdb sees the end of
+    // the list. If rpmdb exits early the write fails with a broken pipe, which is held in
+    // `fed` so that rpm's own words are reported first.
     let fed = child
         .stdin
         .take()
@@ -331,31 +367,25 @@ pub fn import(rootfs: &Path, db_dir: &Path, headers: &[u8]) -> Result<Vec<PathBu
         );
     }
     fed.context("writing the package headers to rpmdb")?;
-    // rpm leaves working files beside the database: its lock, and for the sqlite backend a
-    // shared-memory index and a write-ahead log that is empty once rpm has finished. None
-    // is part of the data, a reader rebuilds what it needs, and a lock file has no place
-    // in an image. Dropping them leaves one file, which is the same bytes on every pack.
-    for file in db_files(db_dir)? {
-        let name = file.file_name().unwrap_or_default().to_string_lossy();
-        let empty = || std::fs::metadata(&file).is_ok_and(|m| m.len() == 0);
-        if name == ".rpm.lock" || name.ends_with("-shm") || (name.ends_with("-wal") && empty()) {
-            std::fs::remove_file(&file).with_context(|| format!("removing {}", file.display()))?;
-        }
-    }
-    db_files(db_dir)
-}
 
-// The regular files directly in the database directory: the database and its sidecars
-// (the lock, and a write-ahead log for the sqlite backend).
-fn db_files(db_dir: &Path) -> Result<Vec<PathBuf>> {
+    let db_dir = root.join(db.strip_prefix("/").unwrap_or(&db));
     let mut files = Vec::new();
     for entry in
-        std::fs::read_dir(db_dir).with_context(|| format!("reading {}", db_dir.display()))?
+        std::fs::read_dir(&db_dir).with_context(|| format!("reading {}", db_dir.display()))?
     {
         let entry = entry?;
-        if entry.file_type()?.is_file() {
-            files.push(entry.path());
+        let name = entry.file_name();
+        let text = name.to_string_lossy();
+        let meta = entry.metadata()?;
+        let working_file = text == ".rpm.lock"
+            || text.ends_with("-shm")
+            || (text.ends_with("-wal") && meta.len() == 0);
+        if meta.is_file() && !working_file {
+            files.push((name.clone(), std::fs::read(entry.path())?));
         }
+    }
+    if files.is_empty() {
+        bail!("rpmdb --importdb wrote no database");
     }
     files.sort();
     Ok(files)
@@ -415,6 +445,29 @@ mod tests {
         assert_eq!(n, nevra("glibc", 0, "2.43", "9.fc44", "x86_64"));
         assert_eq!(source, "glibc");
         assert_eq!(parse_row("file /x is not owned by any package"), None);
+        // Exit 1 counts as "no" only with rpm's own sentence for it, on either stream.
+        let not_owned = "is not owned by any package";
+        assert!(said_no(
+            "file /x is not owned by any package\n",
+            "",
+            not_owned
+        ));
+        assert!(said_no(
+            "",
+            "error: file /x: No such file or directory\n",
+            not_owned
+        ));
+        assert!(said_no(
+            "package nope is not installed\n",
+            "",
+            "is not installed"
+        ));
+        // A database that will not open also exits 1, and must not read as "no owner".
+        assert!(!said_no(
+            "",
+            "error: cannot open Packages database in /x\n",
+            not_owned
+        ));
         assert_eq!(parse_row("a\tnot-a-number\tb\tc\td\te"), None);
     }
 
@@ -447,38 +500,17 @@ mod tests {
         let kept = filter_headers(&list, &[&want_glibc, &want_openssl]).unwrap();
         assert_eq!(kept, [&glibc[..], &epoch].concat());
 
-        // The right name with the wrong epoch is not the package.
+        // The right name with the wrong epoch is not the package. A wanted package with no
+        // header is an error: the records must not name fewer packages than the report.
         let no_epoch = nevra("openssl", 0, "3.5", "2.fc44", "x86_64");
-        assert!(filter_headers(&list, &[&no_epoch]).unwrap().is_empty());
-        assert!(filter_headers(&[], &[&want_glibc]).unwrap().is_empty());
-    }
-
-    #[test]
-    fn import_refuses_a_link_where_the_database_goes() {
-        // The refusal comes before rpmdb is started, so this runs on a host with no rpm.
-        let tmp = tempfile::tempdir().unwrap();
-        let rootfs = tmp.path().join("rootfs");
-        let db_dir = rootfs.join("usr/lib/sysimage/rpm");
-        std::fs::create_dir_all(&db_dir).unwrap();
-        let victim = tmp.path().join("victim");
-        std::fs::write(&victim, b"untouched").unwrap();
-        std::os::unix::fs::symlink(&victim, db_dir.join("rpmdb.sqlite")).unwrap();
-
-        let err = import(&rootfs, &db_dir, b"not reached").unwrap_err();
-        assert!(format!("{err:#}").contains("not a regular file"), "{err:#}");
-        assert_eq!(std::fs::read(&victim).unwrap(), b"untouched");
-        assert!(db_dir
-            .join("rpmdb.sqlite")
-            .symlink_metadata()
-            .unwrap()
-            .is_symlink());
-
-        // A directory in the way is refused the same way, and left alone.
-        let rootfs = tmp.path().join("second");
-        let db_dir = rootfs.join("usr/lib/sysimage/rpm");
-        std::fs::create_dir_all(db_dir.join("subdir")).unwrap();
-        assert!(import(&rootfs, &db_dir, b"not reached").is_err());
-        assert!(db_dir.join("subdir").is_dir());
+        let err = filter_headers(&list, &[&want_glibc, &no_epoch]).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("openssl-3.5-2.fc44.x86_64"),
+            "{err:#}"
+        );
+        assert!(filter_headers(&[], &[&want_glibc]).is_err());
+        // Nothing wanted is nothing kept, from any list.
+        assert!(filter_headers(&list, &[]).unwrap().is_empty());
     }
 
     #[test]
@@ -514,9 +546,11 @@ mod tests {
         huge.extend_from_slice(&u32::MAX.to_be_bytes());
         huge.extend_from_slice(&u32::MAX.to_be_bytes());
         assert!(filter_headers(&huge, &[&want]).is_err());
-        // A string offset that points outside the data: no match, and no panic.
+        // A string offset that points outside the data: the header has no readable key, so
+        // the wanted package is not found, which is an error and never a panic.
         let mut bad = good.clone();
         bad[16 + 8..16 + 12].copy_from_slice(&u32::MAX.to_be_bytes());
-        assert!(filter_headers(&bad, &[&want]).unwrap().is_empty());
+        assert!(filter_headers(&bad, &[&want]).is_err());
+        assert_eq!(header_names(&bad).unwrap(), [None]);
     }
 }

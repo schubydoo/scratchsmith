@@ -629,6 +629,7 @@ fn packages_on_an_rpm_host_fill_the_report_the_sbom_and_the_image() {
     let script = r#"
 set -eu
 cd /tmp
+host_before="$(rpm -qa | sort | sha256sum)"
 scratchsmith pack -n -o report --format json /usr/bin/id > report.json
 echo "REPORT $(tr -d ' \n' < report.json | grep -o '"name":"glibc","version":"[^"]*","arch":"[^"]*","source":"glibc","type":"rpm"' | head -1)"
 scratchsmith pack -n -o sbom --packages report,sbom --sbom --sbom-file /tmp/sbom.json /usr/bin/id > /dev/null
@@ -636,9 +637,14 @@ echo "SBOM $(grep -o 'pkg:rpm/fedora/glibc@[^"?]*' sbom.json | head -1)"
 echo "SBOM_LEFT $(find sbom -name 'rpmdb*' | wc -l) $(test -e sbom/etc/os-release && echo os-release || echo none)"
 scratchsmith pack -n -o image --packages image /usr/bin/id > /dev/null
 scratchsmith pack -n -o image --packages image /usr/bin/id > /dev/null
+scratchsmith pack -n -o again --packages image /usr/bin/id > /dev/null
 echo "IMAGE_FILES $(cd image && find . -path '*rpm*' -type f | sort | tr '\n' ' ')"
-echo "IMAGE_DB $(rpm --root /tmp/image -qa --qf '%{NAME} ' | tr ' ' '\n' | sort | tr '\n' ' ')"
-echo "HOST_DB $(rpm -qa | wc -l)"
+echo "IMAGE_DB $(rpm --root /tmp/image -qa --qf '%{NAME}\n' | sort | tr '\n' ' ')"
+echo "IMAGE_DUPLICATES $(rpm --root /tmp/image -qa --qf '%{NAME}\n' | sort | uniq -d | wc -l)"
+echo "SAME_BYTES $(sha256sum image/usr/lib/sysimage/rpm/rpmdb.sqlite again/usr/lib/sysimage/rpm/rpmdb.sqlite | cut -d' ' -f1 | sort -u | wc -l)"
+echo "HOST_SAME $([ "$host_before" = "$(rpm -qa | sort | sha256sum)" ] && echo yes || echo no)"
+mkdir -p mine && echo mine > mine/db
+if scratchsmith pack -n -o clash --packages image --add-file /tmp/mine/db:/usr/lib/sysimage/rpm/rpmdb.sqlite /usr/bin/id > /dev/null 2> clash.err; then echo "CLASH packed"; else echo "CLASH refused $(grep -c -- '--add-file' clash.err)"; fi
 "#;
     let out = Command::new("docker")
         .args(["run", "--rm"])
@@ -676,16 +682,23 @@ echo "HOST_DB $(rpm -qa | wc -l)"
         1,
         "one file only: {files}"
     );
-    // That database holds the owners and nothing else, even after a second pack into the
-    // same directory, which must replace the first database and not add to it.
+    // That database holds the owners and nothing else: far fewer packages than the host's.
     let db = line("IMAGE_DB ");
     assert!(db.contains("glibc") && db.contains("coreutils"), "{db}");
     assert!(
         db.split_whitespace().count() < 12,
         "only the owning packages: {db}"
     );
-    // The host's own database is read and never written.
-    assert!(line("HOST_DB ").parse::<u32>().unwrap() > 50, "{stdout}");
+    // A second pack into the same directory replaces the first database. If it added to it,
+    // every package would be there twice.
+    assert_eq!(line("IMAGE_DUPLICATES "), "0", "{stdout}");
+    // Two packs give the same database, byte for byte: one distinct checksum.
+    assert_eq!(line("SAME_BYTES "), "1", "{stdout}");
+    // The host's own database is read and never written: its package list is unchanged.
+    assert_eq!(line("HOST_SAME "), "yes", "{stdout}");
+    // A file the user added where the database goes is theirs. The pack must refuse, and
+    // name the flag, and not replace it.
+    assert_eq!(line("CLASH "), "refused 1", "{stdout}");
 }
 
 #[test]

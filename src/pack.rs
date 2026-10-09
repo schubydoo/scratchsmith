@@ -306,7 +306,7 @@ fn lookup_owners(
         }
         return Ok(None);
     };
-    match packages::owners(manager, files, conventions) {
+    match packages::owners(manager, files, conventions, selection.needs_records()) {
         Ok(owners) => {
             // Not asked is not the same as not owned, and the two look alike in the list.
             if !owners.unasked.is_empty() {
@@ -580,10 +580,12 @@ fn finish_staging(
         packages::manager,
         warnings,
     )?;
+    // A record must never land on a file the user added in this pack.
+    let added: Vec<PathBuf> = opts.add_files.iter().map(|f| f.dst.clone()).collect();
     // `--packages image`: the records are image content, so they land before the size gate.
     let owners = found.as_ref().filter(|o| !o.packages.is_empty());
     if let (true, Some(owners)) = (opts.packages.image, owners) {
-        packages::stage_records(dest, owners)?.keep();
+        packages::stage_records(dest, owners, &added)?.keep();
     }
     enforce_max_size(dest, opts.max_size)?;
     timings.stage_ms += millis(staging);
@@ -593,7 +595,7 @@ fn finish_staging(
     let reads_tree = opts.sbom.is_some() || opts.scan.is_some();
     let _records = match owners {
         Some(owners) if opts.packages.sbom && !opts.packages.image && reads_tree => {
-            Some(packages::stage_records(dest, owners)?)
+            Some(packages::stage_records(dest, owners, &added)?)
         }
         _ => None,
     };
