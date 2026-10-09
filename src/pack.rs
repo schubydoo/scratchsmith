@@ -518,7 +518,8 @@ struct Finished {
 }
 
 // Everything BOTH sinks do after `build_rootfs`, in an order that matters: runtime extras,
-// added files, locales, the locale warning, the max-size gate, then the SBOM and the scan --
+// added files, locales, the locale warning, the package lookup, the `--packages image`
+// records, the max-size gate, then the SBOM and the scan --
 // those two last because they read the staged tree, which is temporary for an image sink.
 //
 // Extracted because keeping two copies in step is a PROVEN hazard rather than a theoretical
@@ -889,14 +890,15 @@ mod tests {
     fn a_host_that_cannot_name_packages_fails_only_what_asked_for_records() {
         use crate::packages::PackagesOutput::{Image, None as Off, Report, Sbom};
         let select = |outputs: &[_]| PackagesSelection::from_outputs(outputs).unwrap();
-        // No dpkg on this "host", whatever the real one has.
+        // No dpkg and no rpm on this "host", whatever the real one has.
         let lookup = |selection: &PackagesSelection| {
             let mut warnings = Vec::new();
             let result = lookup_owners(&[], &[], selection, || None, &mut warnings);
             (result, warnings)
         };
 
-        // The default is on for every pack: it must not fail one, or say anything.
+        // The default is on for every pack with a JSON report: it must not fail one, or say
+        // anything.
         let (result, warnings) = lookup(&PackagesSelection::default());
         assert!(
             matches!(result, Ok(None)) && warnings.is_empty(),

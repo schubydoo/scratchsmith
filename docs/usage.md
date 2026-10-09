@@ -33,10 +33,14 @@ no Docker daemon):
 scratchsmith pack --oci-archive ./app.oci.tar ./app
 ```
 
-Scratchsmith writes the archive to a temporary file beside the target, and then renames it.
-A failed pack never leaves half an archive under the name that you gave. The directory of the
-archive must be writable. A pack that is interrupted can leave one `.scratchsmith-oci-*.tmp`
-file there, which is safe to delete.
+For a regular file, scratchsmith writes the archive to a temporary file beside the target, and
+then renames it. A failed pack never leaves half an archive under the name that you gave. The
+directory of the archive must be writable. A pack that is interrupted can leave one
+`.scratchsmith-oci-*.tmp` file there, which is safe to delete.
+
+A destination that already exists and is not a regular file is different. Examples are
+`/dev/stdout`, a FIFO and a symbolic link. Scratchsmith writes straight into it, with no
+temporary file and no rename.
 
 Or **push straight to a registry**, with no Docker daemon. Credentials come from your Docker
 configuration, so `docker login` once (for GitHub's `ghcr.io`, a token with `write:packages`):
