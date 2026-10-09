@@ -277,3 +277,88 @@ fn a_truncated_library_warns_on_stderr_and_still_graphs_and_packs() {
         "the leaf still stages"
     );
 }
+
+#[test]
+fn a_library_with_runpath_resolves_like_the_loader_not_through_an_inherited_rpath() {
+    // Built with a real linker, because the two dynamic tags are the whole point: the exe
+    // carries DT_RPATH, and libmid carries DT_RUNPATH. glibc then ignores the exe's RPATH when
+    // it looks for what libmid needs.
+    if !cc_available() {
+        skip_required("no C compiler");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let libs = dir.join("libs");
+    std::fs::create_dir(&libs).unwrap();
+    let write = |name: &str, body: &str| std::fs::write(dir.join(name), body).unwrap();
+    write("leaf.c", "int leaf(void){return 7;}");
+    write(
+        "mid.c",
+        "extern int leaf(void); int mid(void){return leaf();}",
+    );
+    write(
+        "main.c",
+        "extern int mid(void); int main(void){return mid()==7?0:1;}",
+    );
+    let p = |name: &str| dir.join(name).to_str().unwrap().to_string();
+    let lib = |name: &str| libs.join(name).to_str().unwrap().to_string();
+    let l = format!("-L{}", libs.display());
+
+    cc(&[
+        "-shared",
+        "-fPIC",
+        "-Wl,-soname,libleaf.so",
+        "-o",
+        &lib("libleaf.so"),
+        &p("leaf.c"),
+    ]);
+    cc(&[
+        "-shared",
+        "-fPIC",
+        "-Wl,-soname,libmid.so",
+        "-Wl,--enable-new-dtags",
+        "-Wl,-rpath,/nonexistent-runpath",
+        "-o",
+        &lib("libmid.so"),
+        &p("mid.c"),
+        &l,
+        "-lleaf",
+    ]);
+    cc(&[
+        "-Wl,--disable-new-dtags",
+        &format!("-Wl,-rpath,{}", libs.display()),
+        &format!("-Wl,-rpath-link,{}", libs.display()),
+        "-o",
+        &p("app"),
+        &p("main.c"),
+        &l,
+        "-lmid",
+    ]);
+    let app = dir.join("app");
+
+    // The ground truth: the real loader cannot start this program.
+    let ran = Command::new(&app).output().expect("run the fixture");
+    assert!(
+        !ran.status.success(),
+        "the fixture is wrong: the loader must NOT find libleaf through the inherited RPATH"
+    );
+
+    // scratchsmith keeps resolving it until 2.0, through the fallback, and says so on stderr.
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["graph", "--format", "json"])
+        .arg(&app)
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("warning: ")
+            && stderr.contains("`libleaf.so`")
+            && stderr.contains("inherited")
+            && stderr.contains("scratchsmith 2.0 rejects it"),
+        "the tolerance warning is missing: {stderr}"
+    );
+    let graph: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(graph["missing"].as_array().unwrap().len(), 0, "{graph}");
+}
