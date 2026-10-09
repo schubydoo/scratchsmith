@@ -381,8 +381,9 @@ pub fn resolve_with(
         // Children inherit the RPATH view this object searched (own + ancestors'), never its
         // RUNPATH — that is the "RUNPATH is not inherited" rule. An object with RUNPATH
         // still passes its ANCESTORS' RPATH on. Its OWN RPATH, if it carries both tags, is
-        // not passed on here. glibc may pass that one on (its ancestor walk tests for
-        // DT_RPATH only); that is unconfirmed and left as it was.
+        // not passed on, and glibc agrees. `elf_get_dynamic_info` (elf/get-dynamic-info.h):
+        // "If both RUNPATH and RPATH are given, the latter is ignored", and it clears the
+        // DT_RPATH entry there, so no later ancestor walk sees it. Measured on glibc 2.41.
         let mut child_rpaths = own_rpaths;
         child_rpaths.extend(inherited_rpaths.iter().cloned());
 
@@ -953,6 +954,47 @@ mod tests {
             res.missing.contains(&"libleaf.so".to_string()),
             "runpath must not be inherited by children"
         );
+    }
+
+    #[test]
+    fn an_rpath_beside_a_runpath_is_ignored_and_not_inherited() {
+        // Graph: exe -> libmid (RUNPATH run, RPATH rp) -> libown, and -> libleaf -> libdeep.
+        // glibc ignores the RPATH of an object that also has RUNPATH, for that object and
+        // for everything below it. libown and libdeep are only in the RPATH directory: libmid
+        // itself does not find the first, and libleaf does not inherit a path to the second.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        let mid = root.join("usr/lib/libmid.so");
+        let leaf = root.join("usr/lib/run/libleaf.so");
+        let deep = root.join("usr/lib/rp/libdeep.so");
+        let own = root.join("usr/lib/rp/libown.so");
+        for p in [&exe, &mid, &leaf, &deep, &own] {
+            touch(p);
+        }
+        let infos = HashMap::from([
+            (canonical(&exe), elf(&["libmid.so"], &[], &[], None)),
+            (
+                canonical(&mid),
+                elf(
+                    &["libleaf.so", "libown.so"],
+                    &["$ORIGIN/rp"],
+                    &["$ORIGIN/run"],
+                    None,
+                ),
+            ),
+            (canonical(&leaf), elf(&["libdeep.so"], &[], &[], None)),
+            (canonical(&deep), elf(&[], &[], &[], None)),
+            (canonical(&own), elf(&[], &[], &[], None)),
+        ]);
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+
+        let sonames: Vec<&str> = res.libs.iter().map(|l| l.soname.as_str()).collect();
+        assert_eq!(sonames, ["libmid.so", "libleaf.so"]);
+        let mut missing = res.missing.clone();
+        missing.sort();
+        assert_eq!(missing, ["libdeep.so", "libown.so"]);
+        assert!(res.warnings.is_empty(), "{:?}", res.warnings);
     }
 
     #[test]
