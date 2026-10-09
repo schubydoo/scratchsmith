@@ -418,13 +418,18 @@ fn dispatch(cli: Cli) -> Result<()> {
                     .map(|s| crate::report::parse_size(&s))
                     .transpose()?,
                 runtime: runtime.or(file.runtime).unwrap_or_default(),
-                packages: crate::packages::PackagesSelection::from_outputs(
-                    if packages.is_empty() {
-                        &file.packages
-                    } else {
-                        &packages
-                    },
-                )?,
+                packages: {
+                    let selection =
+                        crate::packages::PackagesSelection::from_outputs(if packages.is_empty() {
+                            &file.packages
+                        } else {
+                            &packages
+                        })?;
+                    match format {
+                        Format::Text => selection.for_text_report(),
+                        Format::Json => selection,
+                    }
+                },
             };
 
             // Deprecation warnings go here, not in a sink path: the effective config is complete,
