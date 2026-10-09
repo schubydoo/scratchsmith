@@ -1096,4 +1096,19 @@ fn the_sbom_names_the_owning_packages_and_the_image_does_not_keep_the_records() 
         !rootfs.join("etc/os-release").exists(),
         "os-release must not stay"
     );
+
+    // The same promise when an earlier `image` pack left its records in this directory:
+    // an `sbom` pack replaces them for the scan and must then take them away.
+    let (_, rootfs) = deb_packages("reused", &["--packages", "image"]);
+    let records = rootfs.join("var/lib/dpkg/status.d");
+    assert!(
+        std::fs::read_dir(&records).unwrap().count() > 0,
+        "image keeps them"
+    );
+    deb_packages("reused", &["--packages", "report,sbom"]);
+    assert_eq!(
+        std::fs::read_dir(&records).map_or(0, |d| d.count()),
+        0,
+        "an sbom pack must not leave an earlier pack's records in the image"
+    );
 }

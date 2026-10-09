@@ -218,7 +218,7 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
     let owners = lookup_owners(
         &bundled_files(binary, &tree, &resolution, &default_includes.staged),
         &opts.packages,
-        packages::dpkg_available(),
+        packages::dpkg_available,
         &mut warnings,
     )?;
     clock.timings.stage_ms = millis(staging);
@@ -276,11 +276,12 @@ fn bundled_files(
 // - an explicit `sbom` or `image` FAILS. The user asked for an SBOM or an image that
 //   carries the package data, and shipping one without it would look the same from outside.
 //
-// `dpkg` is a parameter so each of those is testable on any host.
+// `dpkg` is a parameter so each of those is testable on any host. It is a function, so
+// `--packages none` probes nothing: "looks nothing up" includes the probe.
 fn lookup_owners(
     files: &[(PathBuf, PathBuf)],
     selection: &PackagesSelection,
-    dpkg: bool,
+    dpkg: impl FnOnce() -> bool,
     warnings: &mut Vec<String>,
 ) -> Result<Option<Owners>> {
     if !selection.any() {
@@ -293,7 +294,7 @@ fn lookup_owners(
     } else {
         "sbom"
     };
-    if !dpkg {
+    if !dpkg() {
         if selection.needs_records() {
             bail!(
                 "--packages {asked} needs a dpkg database to name the packages, and this \
@@ -311,7 +312,17 @@ fn lookup_owners(
         return Ok(None);
     }
     match packages::owners(files) {
-        Ok(owners) => Ok(Some(owners)),
+        Ok(owners) => {
+            // Not asked is not the same as not owned, and the two look alike in the list.
+            if !owners.unasked.is_empty() {
+                warnings.push(format!(
+                    "--packages: dpkg reads `*`, `?`, `[` and `\\` in a path as a pattern, so \
+                     these files were not looked up and name no package: {}",
+                    owners.unasked.join(", ")
+                ));
+            }
+            Ok(Some(owners))
+        }
         Err(err) if selection.needs_records() => {
             Err(err.context(format!("--packages {asked}: the package lookup failed")))
         }
@@ -808,7 +819,7 @@ mod tests {
         // No dpkg on this "host", whatever the real one has.
         let lookup = |selection: &PackagesSelection| {
             let mut warnings = Vec::new();
-            let result = lookup_owners(&[], selection, false, &mut warnings);
+            let result = lookup_owners(&[], selection, || false, &mut warnings);
             (result, warnings)
         };
 
@@ -818,8 +829,10 @@ mod tests {
             matches!(result, Ok(None)) && warnings.is_empty(),
             "{warnings:?}"
         );
-        // Off is off.
-        let (result, warnings) = lookup(&select(&[Off]));
+        // Off is off, down to the probe: `none` must not even ask whether dpkg is there.
+        let mut warnings = Vec::new();
+        let probe = || -> bool { panic!("--packages none probed the host") };
+        let result = lookup_owners(&[], &select(&[Off]), probe, &mut warnings);
         assert!(matches!(result, Ok(None)) && warnings.is_empty());
         // An explicit report cannot be filled, and says so, and the pack goes on.
         let (result, warnings) = lookup(&select(&[Report]));

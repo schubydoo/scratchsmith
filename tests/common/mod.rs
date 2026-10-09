@@ -110,14 +110,14 @@ fn tool_runs(bin: &str, args: &[&str]) -> bool {
 ///
 /// nextest records an early `return` as a **pass**, so a runner that loses Docker or `cc`
 /// reports a green suite having run nothing. Measured against CI run 35544425984, the workflow
-/// guarantees six:
+/// guarantees seven:
 ///
 /// - `cc`, `strip` and `/usr/bin/id` ship on `ubuntu-latest`.
 /// - `getent` ships in `libc-bin`, which is `Essential: yes` — the same package as `ldconfig`,
 ///   which `CONTRIBUTING.md` already names as the suite's one hard prerequisite.
 /// - `docker info` answers on the runner.
 /// - `ci.yml` installs `upx-ucl` and `syft` for the test and coverage jobs, which are the
-///   only two jobs that run the suite. (Seven with syft, added for the `--packages` test.)
+///   only two jobs that run the suite.
 ///
 /// A miss is therefore a broken runner rather than a host to tolerate.
 ///

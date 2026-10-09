@@ -116,6 +116,9 @@ pub struct Package {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Owners {
     pub packages: Vec<Package>,
+    /// Bundled files dpkg was NOT asked about, because their host path holds a character it
+    /// would read as a pattern. They look unowned in `packages`, so the caller says so.
+    pub unasked: Vec<String>,
     /// `(record file name, dpkg status stanza)`, one per package.
     records: Vec<(String, String)>,
 }
@@ -135,6 +138,13 @@ pub fn dpkg_available() -> bool {
 /// binary, a library under /opt) is simply absent from the result.
 pub fn owners(files: &[(PathBuf, PathBuf)]) -> Result<Owners> {
     let host_paths: Vec<PathBuf> = files.iter().map(|(host, _)| host.clone()).collect();
+    let mut unasked: Vec<String> = host_paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|p| is_pattern(p))
+        .collect();
+    unasked.sort();
+    unasked.dedup();
     // One host file can be in the image twice: the loader is staged where PT_INTERP names
     // it, and again at its real path when libc lists it as a library. Both are named.
     let mut by_package: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -146,7 +156,10 @@ pub fn owners(files: &[(PathBuf, PathBuf)]) -> Result<Owners> {
         by_package.entry(package).or_default().extend(image_paths);
     }
     if by_package.is_empty() {
-        return Ok(Owners::default());
+        return Ok(Owners {
+            unasked,
+            ..Owners::default()
+        });
     }
     let names: Vec<String> = by_package.keys().cloned().collect();
     let qualified = as_strs(&names);
@@ -170,7 +183,11 @@ pub fn owners(files: &[(PathBuf, PathBuf)]) -> Result<Owners> {
         let name = file.split(':').next().unwrap_or(file);
         packages.iter().any(|p| p.name == name)
     });
-    Ok(Owners { packages, records })
+    Ok(Owners {
+        packages,
+        unasked,
+        records,
+    })
 }
 
 // `dpkg-query -S` for every path, returning `(qualified package, path as asked)`.
@@ -399,8 +416,11 @@ fn is_package_name(s: &str) -> bool {
 /// the `sbom` output shows the packages to syft and grype without changing the image; call
 /// `keep` for the `image` output.
 ///
-/// It removes only what it created. A record that was already there (a second pack into
-/// the same `--output` directory) is replaced and then left alone.
+/// A record that was already there (a second pack into the same `--output` directory) is
+/// replaced, and it is removed like the rest: it can only be one an earlier pack kept, and
+/// the `sbom` promise is that the image does not carry the records. Directories are removed
+/// only when this call created them, and an os-release that was already there is not
+/// touched, because that one can be the user's.
 #[derive(Debug, Default)]
 pub struct StagedRecords {
     files: Vec<PathBuf>,
@@ -441,9 +461,8 @@ pub fn stage_records(rootfs: &Path, owners: &Owners) -> Result<StagedRecords> {
     create_dirs(rootfs, &status_d, &mut staged.dirs)?;
     for (file, stanza) in &owners.records {
         let path = status_d.join(file);
-        if write_record(&path, stanza.as_bytes())? {
-            staged.files.push(path);
-        }
+        write_record(&path, stanza.as_bytes())?;
+        staged.files.push(path);
     }
 
     let os_release = rootfs.join("etc/os-release");
@@ -460,25 +479,22 @@ pub fn stage_records(rootfs: &Path, owners: &Owners) -> Result<StagedRecords> {
     Ok(staged)
 }
 
-// Write one record, and say whether the file is new (`true`) or replaced one that was there.
+// Write one record, replacing a regular file that is already there.
 //
 // Never through a link. A new file is opened O_EXCL, which does not follow a link at the
 // final component. An existing REGULAR file is replaced by a rename, which swaps the name
 // and does not follow one either. Anything else at that name (a link, a directory) is not
 // ours to touch.
-fn write_record(path: &Path, bytes: &[u8]) -> Result<bool> {
+fn write_record(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let context = || format!("writing {}", path.display());
     match path.symlink_metadata() {
-        Err(_) => {
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)
-                .and_then(|mut f| f.write_all(bytes))
-                .with_context(context)?;
-            Ok(true)
-        }
+        Err(_) => std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .and_then(|mut f| f.write_all(bytes))
+            .with_context(context),
         Ok(meta) if meta.is_file() => {
             use std::os::unix::fs::PermissionsExt;
             let dir = path.parent().context("a record path has a parent")?;
@@ -488,7 +504,7 @@ fn write_record(path: &Path, bytes: &[u8]) -> Result<bool> {
                 .with_context(context)?;
             tmp.write_all(bytes).with_context(context)?;
             tmp.persist(path).with_context(context)?;
-            Ok(false)
+            Ok(())
         }
         Ok(_) => bail!(
             "cannot record packages: {} exists and is not a regular file",
@@ -664,8 +680,8 @@ mod tests {
     #[test]
     fn staged_records_are_removed_on_drop_and_kept_on_keep() {
         let owners = Owners {
-            packages: vec![],
             records: vec![("libc6".into(), "Package: libc6\n".into())],
+            ..Owners::default()
         };
         let tmp = tempfile::tempdir().unwrap();
         let rootfs = tmp.path();
@@ -706,25 +722,29 @@ mod tests {
         stage_records(rootfs, &owners).unwrap().keep();
         assert!(rootfs.join("var/lib/dpkg/status.d/libc6").is_file());
 
-        // A second pack into the same directory finds the kept record. It is replaced, not
-        // refused, and because this call did not create it, the guard leaves it in place.
+        // A second `image` pack into the same directory finds the kept record. It is
+        // replaced, not refused.
         let newer = Owners {
-            packages: vec![],
             records: vec![("libc6".into(), "Package: libc6\nVersion: 2\n".into())],
+            ..Owners::default()
         };
-        drop(stage_records(rootfs, &newer).unwrap());
+        stage_records(rootfs, &newer).unwrap().keep();
         assert_eq!(
             std::fs::read_to_string(rootfs.join("var/lib/dpkg/status.d/libc6")).unwrap(),
             "Package: libc6\nVersion: 2\n"
         );
+        // An `sbom`-only pack into that directory must not leave the record behind: the
+        // guard removes it although an earlier pack, not this call, created it.
+        drop(stage_records(rootfs, &newer).unwrap());
+        assert!(!rootfs.join("var/lib/dpkg/status.d/libc6").exists());
     }
 
     #[test]
     fn a_failed_staging_leaves_no_directories_behind() {
         // A directory where a record must go makes the write fail after status.d exists.
         let owners = Owners {
-            packages: vec![],
             records: vec![("libc6".into(), "Package: libc6\n".into())],
+            ..Owners::default()
         };
         let tmp = tempfile::tempdir().unwrap();
         let rootfs = tmp.path();
@@ -752,8 +772,8 @@ mod tests {
     #[test]
     fn records_never_follow_a_symlink_out_of_the_rootfs() {
         let owners = Owners {
-            packages: vec![],
             records: vec![("libc6".into(), "Package: libc6\n".into())],
+            ..Owners::default()
         };
         let tmp = tempfile::tempdir().unwrap();
         let outside = tmp.path().join("outside");

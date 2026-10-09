@@ -170,7 +170,8 @@ scanners read both. The scanner needs `os-release` to know the distribution. Wit
 scanner cannot match a package to an advisory.
 
 - With `sbom`, those files are in the staged tree only while the SBOM and the scan run. The
-  image does not contain them.
+  image does not contain them. With `--no-build`, an `/etc/os-release` that is already in the
+  output directory stays there.
 - With `image`, they stay, and they count toward `--max-size`. Your image then has an
   `/etc/os-release` that names the build host's distribution. If you add your own
   `/etc/os-release` with `--add-file`, scratchsmith keeps yours. An SBOM of that image names

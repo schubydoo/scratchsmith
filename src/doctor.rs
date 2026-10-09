@@ -111,9 +111,9 @@ pub fn probe() -> Vec<ToolStatus> {
 pub fn run() -> Result<()> {
     for status in probe() {
         match &status.version {
-            Some(v) => println!("  ok    {:9} {}  ({})", status.name, v, status.purpose),
+            Some(v) => println!("  ok    {:10} {}  ({})", status.name, v, status.purpose),
             None => println!(
-                "  MISS  {:9} not found — {}; {}",
+                "  MISS  {:10} not found — {}; {}",
                 status.name, status.purpose, status.hint
             ),
         }
