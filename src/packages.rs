@@ -139,7 +139,8 @@ pub fn dpkg_available() -> bool {
 ///
 /// `conventions` are `(package, image path)` pairs for files that no package owns but one
 /// package is the source of: the CA bundle is generated on the host from `ca-certificates`.
-/// Such a package is named only if it is installed.
+/// Such a package is named only if it is installed. The package name must be a literal:
+/// `dpkg-query -W` reads its argument as a name pattern, as `-S` reads a path pattern.
 pub fn owners(files: &[(PathBuf, PathBuf)], conventions: &[(&str, PathBuf)]) -> Result<Owners> {
     let host_paths: Vec<PathBuf> = files.iter().map(|(host, _)| host.clone()).collect();
     let mut unasked: Vec<String> = host_paths

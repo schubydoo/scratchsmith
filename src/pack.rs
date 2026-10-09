@@ -567,7 +567,7 @@ fn finish_staging(
     // The CA bundle is generated on the host by `update-ca-certificates`, so no package owns
     // its path. It is built from the `ca-certificates` package, and that is the name a
     // reader of the SBOM needs, so it is credited by convention and the docs say so.
-    let ca_bundle = PathBuf::from("/etc/ssl/certs/ca-certificates.crt");
+    let ca_bundle = PathBuf::from(stager::CA_BUNDLE);
     let conventions: Vec<(&str, PathBuf)> =
         if opts.extras.ca_certs && staged_at(&ca_bundle).is_file() {
             vec![("ca-certificates", ca_bundle)]

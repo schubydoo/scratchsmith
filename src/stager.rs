@@ -42,7 +42,8 @@ pub struct RuntimeResult {
     pub copied: Vec<(PathBuf, PathBuf)>,
 }
 
-const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
+/// Where the host's CA bundle is read from, and where `--ca-certs` stages it.
+pub const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
 
 /// Inject the requested runtime extras into the staged rootfs.
 pub fn stage_runtime_extras(dest: &Path, extras: &RuntimeExtras) -> Result<RuntimeResult> {
