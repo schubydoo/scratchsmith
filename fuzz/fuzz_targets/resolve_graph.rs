@@ -173,5 +173,18 @@ fuzz_target!(|scn: Scenario| {
 
     let sysroot = Sysroot::new(root);
     let includes: Vec<String> = scn.includes.into_iter().take(8).collect();
-    let _ = resolve_with(&exe, &sysroot, &includes, &MapSource { infos, unreadable });
+    let Ok(resolution) = resolve_with(&exe, &sysroot, &includes, &MapSource { infos, unreadable })
+    else {
+        return;
+    };
+    // A warning quotes strings that came out of the packed binary (a search-path entry, a
+    // file name) and is printed to the user's terminal as it is. None may carry a control
+    // character: a raw newline or escape would let the input forge a line of scratchsmith's
+    // own output. The unit test checks one input; this checks every one the engine finds.
+    for warning in &resolution.warnings {
+        assert!(
+            !warning.chars().any(char::is_control),
+            "a warning carries a control character: {warning:?}"
+        );
+    }
 });
