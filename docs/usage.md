@@ -129,6 +129,10 @@ see them. The host knows which package owns each of those paths. `--packages` re
 
 The default is `report`. The default changes no SBOM, no scan and no image.
 
+`sbom` needs a reader. If neither `--sbom` nor `--scan` is on, nothing reads the records.
+Scratchsmith then turns that output off, skips its lookup, and prints a warning. The pack does
+not fail.
+
 The text report does not show the list. So a pack with the text report, and with no `--packages`
 value and no `packages` key, skips the lookup. To run the lookup with the text report, name the
 outputs on the command line or in the configuration file.

@@ -883,6 +883,30 @@ fn a_default_text_pack_runs_no_package_lookup() {
     std::fs::remove_file(&log).unwrap();
     pack("named", &["--packages", "report"]);
     assert!(log.exists(), "an explicit --packages report must still ask");
+    std::fs::remove_file(&log).unwrap();
+
+    // `sbom` with neither --sbom nor --scan has no reader, so it asks nothing and says so.
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["pack", "--no-build", "--packages", "sbom", "-o"])
+        .arg(tmp.path().join("unread"))
+        .arg(bin)
+        .env("PATH", &tools)
+        .env("ASKED", &log)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout) + String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "an unread sbom output is not an error: {text}"
+    );
+    assert!(
+        text.contains("neither --sbom nor --scan is on"),
+        "an unread sbom output must warn: {text}"
+    );
+    assert!(
+        !log.exists(),
+        "an unread sbom output must not ask a package tool"
+    );
 }
 
 #[test]
