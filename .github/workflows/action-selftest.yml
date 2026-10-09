@@ -441,6 +441,8 @@ jobs:
           set -euo pipefail
           # `.size.upx` is true only when upx ran on the binary.
           echo "$REPORT" | jq -e '.size.upx == true' >/dev/null || { echo "::error::report.size.upx is not true — is --upx wired in action.yml?"; exit 1; }
+          # `.size.upx` says the flag arrived. The sizes say that upx did its work.
+          echo "$REPORT" | jq -e '.size.entries[] | select(.path == "/usr/bin/id") | .after < .before' >/dev/null || { echo "::error::upx ran but /usr/bin/id did not shrink"; exit 1; }
           echo "upx input wired"
       - name: Pack with init → image
         id: init
@@ -502,7 +504,8 @@ jobs:
       # push tags the built image and runs `docker push`. A throwaway local registry takes it,
       # so no login and no real registry are involved.
       - name: Start a local registry (for the push input)
-        run: docker run -d --rm -p 127.0.0.1:5000:5000 --name ss-selftest-registry registry:2
+        # Pinned by digest, like every action here: `registry:2` is a tag that moves.
+        run: docker run -d --rm -p 127.0.0.1:5000:5000 --name ss-selftest-registry registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
       - name: Pack and push → local registry
         id: push
         uses: $/
@@ -512,7 +515,9 @@ jobs:
       - name: Assert the registry holds the pushed tag
         run: |
           set -euo pipefail
-          tags="$(curl -fsS --retry 5 --retry-connrefused http://127.0.0.1:5000/v2/selftest/id/tags/list)"
+          # A registry with no such repository answers 404, and that is the regression this
+          # step exists for, so the curl failure gets the same hint as a missing tag.
+          tags="$(curl -fsS --retry 5 --retry-connrefused http://127.0.0.1:5000/v2/selftest/id/tags/list)" || { echo "::error::the local registry has no selftest/id repository — is the push input still wired in action.yml?"; exit 1; }
           echo "$tags" | jq -e '.tags | index("pushed")' >/dev/null || { echo "::error::the registry does not hold selftest/id:pushed (got: $tags) — is the push input still wired in action.yml?"; exit 1; }
           docker stop ss-selftest-registry >/dev/null
           echo "push input wired"
