@@ -1276,6 +1276,9 @@ see them. The host knows which package owns each of those paths. <code>--package
 </tbody>
 </table>
 <p>The default is <code>report</code>. The default changes no SBOM, no scan and no image.</p>
+<p>The text report does not show the list. So a pack with the text report, and with no <code>--packages</code>
+value and no <code>packages</code> key, skips the lookup. To run the lookup with the text report, name the
+outputs on the command line or in the configuration file.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--format<span class="w"> </span>json<span class="w"> </span>./app<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.packages<span class="w">       </span><span class="c1"># default: the report</span>
 <a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--packages<span class="w"> </span>report,sbom<span class="w"> </span>--sbom<span class="w"> </span>--scan<span class="w"> </span>./app
 <a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--packages<span class="w"> </span>report,sbom,image<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span>./app
