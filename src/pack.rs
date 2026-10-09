@@ -125,8 +125,8 @@ struct StagedRootfs {
     warnings: Vec<String>,
     /// The loader's image path (`PT_INTERP`), or `None` for a static binary.
     interpreter: Option<String>,
-    /// The packages that own the bundled files, when a lookup ran and the host could answer.
-    owners: Option<Owners>,
+    /// The files staged so far that a package can own, as `(host path, image path)`.
+    bundled: Vec<(PathBuf, PathBuf)>,
     clock: Clock,
 }
 
@@ -215,19 +215,14 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
     )?;
     let sizes = stager::strip_and_measure(dest, &tree, &resolution, opts.strip, opts.upx)?;
     let interpreter = resolution.interpreter_path();
-    let owners = lookup_owners(
-        &bundled_files(binary, &tree, &resolution, &default_includes.staged),
-        &opts.packages,
-        packages::dpkg_available,
-        &mut warnings,
-    )?;
+    let bundled = bundled_files(binary, &tree, &resolution, &default_includes.staged);
     clock.timings.stage_ms = millis(staging);
     Ok(StagedRootfs {
         tree,
         size: sizes,
         warnings,
         interpreter,
-        owners,
+        bundled,
         clock,
     })
 }
@@ -280,6 +275,7 @@ fn bundled_files(
 // `--packages none` probes nothing: "looks nothing up" includes the probe.
 fn lookup_owners(
     files: &[(PathBuf, PathBuf)],
+    conventions: &[(&str, PathBuf)],
     selection: &PackagesSelection,
     dpkg: impl FnOnce() -> bool,
     warnings: &mut Vec<String>,
@@ -311,7 +307,7 @@ fn lookup_owners(
         }
         return Ok(None);
     }
-    match packages::owners(files) {
+    match packages::owners(files, conventions) {
         Ok(owners) => {
             // Not asked is not the same as not owned, and the two look alike in the list.
             if !owners.unasked.is_empty() {
@@ -516,6 +512,8 @@ pub fn pack(binary: &Path, opts: &PackOptions, sink: Sink) -> Result<PackReport>
 /// `stage_only` ignores it.
 struct Finished {
     extras: stager::RuntimeResult,
+    /// The packages that own the bundled files, when a lookup ran and the host could answer.
+    owners: Option<Owners>,
     sbom: Option<String>,
     scan: Option<ScanSummary>,
 }
@@ -532,7 +530,7 @@ fn finish_staging(
     opts: &PackOptions,
     warnings: &mut Vec<String>,
     timings: &mut Timings,
-    owners: Option<&Owners>,
+    mut bundled: Vec<(PathBuf, PathBuf)>,
 ) -> Result<Finished> {
     let staging = Instant::now();
     let extras = stager::stage_runtime_extras(dest, &opts.extras)?;
@@ -543,8 +541,48 @@ fn finish_staging(
     )?);
     stager::stage_locales(dest, &opts.locales)?;
     warnings.extend(locale_env_warning(&opts.locales, &opts.image.env));
+    // Everything a package can own is in the tree now, so this is where the owners are
+    // asked for: the files the flags above copied in, on top of the binary and its libraries.
+    let staged_at = |image: &Path| dest.join(image.strip_prefix("/").unwrap_or(image));
+    bundled.extend(extras.copied.iter().cloned());
+    // An `--add-file` entry is credited only when its BYTES are in the image: a regular file
+    // at the destination. A symlink mode can skip the entry, or stage a link in its place,
+    // and a link carries none of the package's content, so naming the package for it would
+    // put something in the SBOM that the image does not hold.
+    bundled.extend(
+        opts.add_files
+            .iter()
+            .filter(|f| {
+                staged_at(&f.dst)
+                    .symlink_metadata()
+                    .is_ok_and(|m| m.is_file())
+            })
+            .map(|f| {
+                let host = std::fs::canonicalize(&f.src).unwrap_or_else(|_| f.src.clone());
+                (host, f.dst.clone())
+            }),
+    );
+    // Nothing is named that is not in the tree.
+    bundled.retain(|(_, image)| staged_at(image).symlink_metadata().is_ok());
+    // The CA bundle is generated on the host by `update-ca-certificates`, so no package owns
+    // its path. It is built from the `ca-certificates` package, and that is the name a
+    // reader of the SBOM needs, so it is credited by convention and the docs say so.
+    let ca_bundle = PathBuf::from(stager::CA_BUNDLE);
+    let conventions: Vec<(&str, PathBuf)> =
+        if opts.extras.ca_certs && staged_at(&ca_bundle).is_file() {
+            vec![("ca-certificates", ca_bundle)]
+        } else {
+            Vec::new()
+        };
+    let found = lookup_owners(
+        &bundled,
+        &conventions,
+        &opts.packages,
+        packages::dpkg_available,
+        warnings,
+    )?;
     // `--packages image`: the records are image content, so they land before the size gate.
-    let owners = owners.filter(|o| !o.packages.is_empty());
+    let owners = found.as_ref().filter(|o| !o.packages.is_empty());
     if let (true, Some(owners)) = (opts.packages.image, owners) {
         packages::stage_records(dest, owners)?.keep();
     }
@@ -564,7 +602,12 @@ fn finish_staging(
     timings.sbom_ms = opts.sbom.is_some().then_some(ms);
     let (scan, ms) = timed(|| maybe_scan(dest, sbom.as_deref(), opts.scan.as_ref()))?;
     timings.scan_ms = opts.scan.is_some().then_some(ms);
-    Ok(Finished { extras, sbom, scan })
+    Ok(Finished {
+        extras,
+        owners: found,
+        sbom,
+        scan,
+    })
 }
 
 /// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
@@ -579,17 +622,13 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
         size,
         mut warnings,
         interpreter,
-        owners,
+        bundled,
         mut clock,
     } = build_rootfs(binary, out_dir, opts)?;
     // `extras` is unused here: no image is built, so there is no config to wrap with tini.
-    let Finished { sbom, scan, .. } = finish_staging(
-        out_dir,
-        opts,
-        &mut warnings,
-        &mut clock.timings,
-        owners.as_ref(),
-    )?;
+    let Finished {
+        owners, sbom, scan, ..
+    } = finish_staging(out_dir, opts, &mut warnings, &mut clock.timings, bundled)?;
     Ok(PackReport {
         tag: None,
         archive: None,
@@ -635,18 +674,17 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         size,
         mut warnings,
         interpreter,
-        owners,
+        bundled,
         mut clock,
     } = build_rootfs(binary, &dest, opts)?;
     // finish_staging generates the SBOM and scan while the staged rootfs still exists (dest is
     // temporary), which is why this call sits here rather than after the image config.
-    let Finished { extras, sbom, scan } = finish_staging(
-        &dest,
-        opts,
-        &mut warnings,
-        &mut clock.timings,
-        owners.as_ref(),
-    )?;
+    let Finished {
+        extras,
+        owners,
+        sbom,
+        scan,
+    } = finish_staging(&dest, opts, &mut warnings, &mut clock.timings, bundled)?;
 
     // Effective image config: if --init staged tini, wrap the entrypoint so tini is
     // pid 1 and reaps/forwards for the real binary.
@@ -828,7 +866,7 @@ mod tests {
         // No dpkg on this "host", whatever the real one has.
         let lookup = |selection: &PackagesSelection| {
             let mut warnings = Vec::new();
-            let result = lookup_owners(&[], selection, || false, &mut warnings);
+            let result = lookup_owners(&[], &[], selection, || false, &mut warnings);
             (result, warnings)
         };
 
@@ -841,7 +879,7 @@ mod tests {
         // Off is off, down to the probe: `none` must not even ask whether dpkg is there.
         let mut warnings = Vec::new();
         let probe = || -> bool { panic!("--packages none probed the host") };
-        let result = lookup_owners(&[], &select(&[Off]), probe, &mut warnings);
+        let result = lookup_owners(&[], &[], &select(&[Off]), probe, &mut warnings);
         assert!(matches!(result, Ok(None)) && warnings.is_empty());
         // An explicit report cannot be filled, and says so, and the pack goes on.
         let (result, warnings) = lookup(&select(&[Report]));

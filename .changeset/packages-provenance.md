@@ -6,7 +6,9 @@ default: minor
 
 A scratch image has no package database. An SBOM of it named almost none of the libraries that
 scratchsmith copied in, and `--scan` did not see them. On a dpkg host, scratchsmith now asks
-which package owns each bundled file, and the JSON report gains a `packages` list.
+which package owns each bundled file, and the JSON report gains a `packages` list. The lookup
+covers the binary, its libraries, the loader, the NSS modules, and the files from `--tz`,
+`--init` and `--add-file`.
 
 Two more outputs are opt-in. `--packages report,sbom` makes `--sbom` and `--scan` see those
 packages. A scan gate can then fail on vulnerabilities that it did not see before.

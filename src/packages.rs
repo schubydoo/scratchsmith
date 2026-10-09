@@ -136,7 +136,12 @@ pub fn dpkg_available() -> bool {
 /// host path is what dpkg is asked about, and the image path is what the report names, so
 /// the list joins with the rest of the report. A path no package owns (the user's own
 /// binary, a library under /opt) is simply absent from the result.
-pub fn owners(files: &[(PathBuf, PathBuf)]) -> Result<Owners> {
+///
+/// `conventions` are `(package, image path)` pairs for files that no package owns but one
+/// package is the source of: the CA bundle is generated on the host from `ca-certificates`.
+/// Such a package is named only if it is installed. The package name must be a literal:
+/// `dpkg-query -W` reads its argument as a name pattern, as `-S` reads a path pattern.
+pub fn owners(files: &[(PathBuf, PathBuf)], conventions: &[(&str, PathBuf)]) -> Result<Owners> {
     let host_paths: Vec<PathBuf> = files.iter().map(|(host, _)| host.clone()).collect();
     let mut unasked: Vec<String> = host_paths
         .iter()
@@ -154,6 +159,24 @@ pub fn owners(files: &[(PathBuf, PathBuf)]) -> Result<Owners> {
             .filter(|(h, _)| h.to_string_lossy() == host)
             .map(|(_, image)| image.to_string_lossy().into_owned());
         by_package.entry(package).or_default().extend(image_paths);
+    }
+    for (package, image) in conventions {
+        // Exit 1 is "no such package", which just means there is nobody to credit.
+        //
+        // `-W` also lists a package that is known and NOT installed (removed with its
+        // configuration left behind, or never installed), so the status is checked. Only an
+        // installed package can be what the bundle on this host was built from.
+        let known = dpkg_query(
+            &["-W", "-f", "${binary:Package}\\t${db:Status-Status}\\n"],
+            &[package],
+            &[0, 1],
+        )?;
+        for qualified in installed_packages(&known) {
+            by_package
+                .entry(qualified.to_string())
+                .or_default()
+                .push(image.to_string_lossy().into_owned());
+        }
     }
     if by_package.is_empty() {
         return Ok(Owners {
@@ -229,6 +252,15 @@ fn search(host_paths: &[PathBuf]) -> Result<Vec<(String, String)>> {
         }
     }
     Ok(found)
+}
+
+// The qualified names in `-W` rows (`binary:Package`, `db:Status-Status`) whose status is
+// exactly `installed`.
+fn installed_packages(rows: &str) -> impl Iterator<Item = &str> {
+    rows.lines().filter_map(|row| {
+        let (name, status) = row.split_once('\t')?;
+        (status == "installed" && is_package_name(name)).then_some(name)
+    })
 }
 
 // True when dpkg would read `path` as a pattern and not as one literal path.
@@ -818,6 +850,21 @@ mod tests {
             );
             assert!(!literal.is_empty(), "dpkg owns /usr/bin/id on this host");
         }
+    }
+
+    #[test]
+    fn only_an_installed_package_is_credited_by_convention() {
+        // `dpkg-query -W` lists every package the database knows. A removed package whose
+        // configuration files remain reads `config-files`, and one that was never installed
+        // reads `not-installed`. Neither built the file on this host.
+        let rows = "ca-certificates\tinstalled\n\
+                    ca-certificates-java\tconfig-files\n\
+                    never-here\tnot-installed\n\
+                    libfoo:amd64\tinstalled\n\
+                    ../evil\tinstalled\n\
+                    no-tab-in-this-row\n";
+        let named: Vec<&str> = installed_packages(rows).collect();
+        assert_eq!(named, ["ca-certificates", "libfoo:amd64"]);
     }
 
     #[test]
