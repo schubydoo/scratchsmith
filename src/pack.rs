@@ -342,6 +342,9 @@ fn lookup_owners(
 // something and getting nothing must not be quiet. With `sbom` alone that also skips the
 // lookup, whose answer would go nowhere. Not an error: a configuration file can set the
 // output once, for packs that pass `--sbom` only some of the time.
+//
+// Only `sbom` is ever cleared here. The report reads `report` alone, so `report_packages`
+// gives the same answer for this selection and for `opts.packages`.
 fn drop_unread_sbom(
     mut selection: PackagesSelection,
     reads_tree: bool,
