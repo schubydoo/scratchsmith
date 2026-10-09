@@ -80,6 +80,17 @@ impl PackagesSelection {
         })
     }
 
+    /// Drop the default `report` output where nothing reads it. The text report prints no
+    /// package list, so a pack that did not name `--packages` would run the lookup (most of
+    /// the time of a small pack) for a list that no one sees. An explicit selection is kept
+    /// as given: its warnings were asked for.
+    pub fn for_text_report(mut self) -> Self {
+        if !self.explicit {
+            self.report = false;
+        }
+        self
+    }
+
     /// True when any output is on, so the lookup is worth running.
     pub fn any(&self) -> bool {
         self.report || self.sbom || self.image
@@ -751,6 +762,12 @@ mod tests {
 
         let none = PackagesSelection::from_outputs(&[PackagesOutput::None]).unwrap();
         assert!(!none.any() && none.explicit);
+
+        // A text report shows no list, so only a selection that the user named survives it.
+        assert!(!default.for_text_report().any());
+        assert_eq!(all.for_text_report(), all);
+        let report = PackagesSelection::from_outputs(&[PackagesOutput::Report]).unwrap();
+        assert_eq!(report.for_text_report(), report);
         assert!(
             PackagesSelection::from_outputs(&[PackagesOutput::None, PackagesOutput::Sbom]).is_err()
         );
