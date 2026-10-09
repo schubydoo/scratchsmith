@@ -520,6 +520,15 @@ pub struct StagedRecords {
 
 impl StagedRecords {
     /// Leave the records in the rootfs.
+    /// True when the records are a Berkeley DB rpm database (the backend before rpm 4.16).
+    /// rpm gives those files a new identifier on every build, so two packs of the same
+    /// input never give the same bytes. `Packages` is that backend's main file.
+    pub fn berkeley_db(&self) -> bool {
+        self.files
+            .iter()
+            .any(|file| file.file_name().is_some_and(|name| name == "Packages"))
+    }
+
     pub fn keep(mut self) {
         self.files.clear();
         self.dirs.clear();

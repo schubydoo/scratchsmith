@@ -661,6 +661,95 @@ fn a_bare_label_warns_on_the_rootfs_sink_too() {
 }
 
 #[test]
+fn an_older_rpm_host_is_found_and_its_berkeley_database_warns() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    // Two scripts stand in for the rpm of an older host, and PATH holds nothing else, so no
+    // dpkg-query answers first. The real hosts (Rocky 8, openSUSE Leap 15) cannot run this
+    // test binary: their glibc is older than the one it links.
+    let tmp = tempfile::tempdir().unwrap();
+    let tools = tmp.path().join("tools");
+    let db = tmp.path().join("db");
+    std::fs::create_dir_all(&tools).unwrap();
+    std::fs::create_dir_all(&db).unwrap();
+    let script = |name: &str, body: &str| {
+        let path = tools.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    // Like openSUSE Leap 15, where the package is `rpm-ndb`: `rpm -q rpm` finds nothing, and
+    // only the question by capability has an answer.
+    script(
+        "rpm",
+        r#"case "$*" in
+  "--eval %{_dbpath}") echo "$FAKE_DB" ;;
+  *"--whatprovides rpm") echo rpm-ndb ;;
+  "-qf "*) printf 'a\t0\t1\t1\tx\ta-1-1.src.rpm\n' ;;
+  *) echo "package rpm is not installed"; exit 1 ;;
+esac
+"#,
+    );
+    // Like a Berkeley DB host: the import leaves the data file beside a lock file and a
+    // region file, and neither of those two belongs in an image.
+    script(
+        "rpmdb",
+        r#"case "$1" in
+  --exportdb) /bin/cat "$FAKE_HEADERS" ;;
+  --importdb) /bin/cat > /dev/null; d="$3$FAKE_DB"; /bin/mkdir -p "$d"
+    : > "$d/.dbenv.lock"; echo region > "$d/__db.001"; echo data > "$d/Packages" ;;
+esac
+"#,
+    );
+    // One header: the magic, 4 index entries, 8 data bytes, then NAME 1000, VERSION 1001,
+    // RELEASE 1002 and ARCH 1022 as STRING (type 6) entries over the data "a", "1", "1", "x".
+    let mut header = vec![0x8e, 0xad, 0xe8, 0x01, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 8];
+    for (tag, offset) in [(1000u32, 0u32), (1001, 2), (1002, 4), (1022, 6)] {
+        for field in [tag, 6, offset, 1] {
+            header.extend(field.to_be_bytes());
+        }
+    }
+    header.extend(b"a\x001\x001\x00x\x00");
+    let headers = tmp.path().join("headers");
+    std::fs::write(&headers, header).unwrap();
+
+    let rootfs = tmp.path().join("rootfs");
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["pack", "--no-build", "--format", "json"])
+        .args(["--packages", "report,image", "-o"])
+        .arg(&rootfs)
+        .arg(bin)
+        .env("PATH", &tools)
+        .env("FAKE_DB", &db)
+        .env("FAKE_HEADERS", &headers)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "the pack: {stderr}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(report["packages"][0]["name"], "a", "report: {stdout}");
+    assert_eq!(report["packages"][0]["type"], "rpm", "report: {stdout}");
+    assert!(
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("not reproducible")),
+        "a Berkeley DB must warn: {stdout}"
+    );
+    let staged = rootfs.join(db.strip_prefix("/").unwrap());
+    let mut names: Vec<_> = std::fs::read_dir(&staged)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["Packages"], "only the data file is image content");
+}
+
+#[test]
 fn a_registry_command_with_a_broken_explicit_ca_store_fails_closed() {
     // SSL_CERT_FILE is the user's own choice of whom to trust. When it yields no roots, the
     // command must fail and name the variable. It must NOT widen trust to the bundled
