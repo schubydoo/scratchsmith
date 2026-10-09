@@ -620,6 +620,22 @@ fn finish_staging(
     })
 }
 
+/// Warn on stderr when the `--no-build` output directory already holds something. The pack
+/// merges into whatever is there, so a file it does not stage stays in the tree. stderr,
+/// like every tolerance: stdout carries the `--format json` report.
+pub fn warn_about_a_used_output_dir(out_dir: &Path) {
+    if out_dir
+        .read_dir()
+        .is_ok_and(|mut entries| entries.next().is_some())
+    {
+        eprintln!(
+            "warning: the output directory {} is not empty. This pack merges into it, and a file from an earlier pack that this pack does not stage stays in the tree. scratchsmith 2.0 rejects it. See {}",
+            out_dir.display(),
+            crate::image::DEPRECATIONS_URL
+        );
+    }
+}
+
 /// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
 pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<PackReport> {
     // No image is built here, so there is nothing to smoke-run. The CLI blocks --smoke --no-build,
