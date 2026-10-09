@@ -803,9 +803,9 @@ action-specific. <code>version</code> picks which release to download. <code>out
 <code>args</code> is a verbatim escape hatch for any flag without a dedicated input, for example <code>--sign</code> or
 <code>--oci-archive</code>. Note that <code>push</code> publishes with <code>docker tag</code>/<code>docker push</code>, <strong>not</strong> pack's
 daemonless, cosign-signable <code>--push</code>.</p>
-<p>The action reads the JSON report, so every pack through it runs the <code>--packages</code> lookup. The
-<code>report</code> output holds a <code>packages</code> list and a <code>timings</code> object. <code>--packages</code> has no input of
-its own. Set it through <code>args</code>, for example <code>args: --packages none</code> to turn the lookup off.</p>
+<p>The action reads the JSON report, so every pack through it runs the <code>--packages</code> lookup by default. The
+<code>report</code> output holds a <code>packages</code> list and a <code>timings</code> object. To turn the lookup off, set
+the <code>packages</code> input to <code>none</code>.</p>
 <table>
 <thead>
 <tr>
@@ -944,6 +944,11 @@ its own. Set it through <code>args</code>, for example <code>args: --packages no
 <td><code>nss</code></td>
 <td><code>files,dns</code></td>
 <td>NSS modules to stage for glibc lookups, comma-separated (<code>files,dns</code>, or <code>none</code>). Fewer modules trim CVE surface.</td>
+</tr>
+<tr>
+<td><code>packages</code></td>
+<td><code>report</code></td>
+<td>Where to record the distribution packages that own the bundled files, comma-separated: <code>report</code>, <code>sbom</code>, <code>image</code>, or <code>none</code>. <code>sbom</code> shows them to <code>sbom</code> and <code>scan</code>. <code>image</code> keeps the package records in the image. <code>sbom</code> does nothing unless the <code>sbom</code> or the <code>scan</code> input is on. See <a href="../usage/#name-the-packages-behind-the-bundled-files">Usage</a>.</td>
 </tr>
 <tr>
 <td><code>max-size</code></td>
