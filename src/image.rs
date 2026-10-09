@@ -149,12 +149,15 @@ pub fn write_oci_archive(
         .permissions(std::fs::Permissions::from_mode(0o666))
         .tempfile_in(dir)
         .with_context(|| format!("creating a temporary file in {}", dir.display()))?;
-    write(tmp.as_file())?;
     // Replacing an archive must not loosen it: the in-place write kept the old file's mode,
-    // so carry it over. (Its owner cannot be carried over without privilege.)
+    // so carry it over BEFORE any bytes land in the sibling. Set afterwards, a private 0600
+    // archive would sit in a world-readable sibling for as long as the write takes. (Its
+    // owner cannot be carried over without privilege.) Access is checked at open, so the
+    // descriptor already held still writes to a 0400 file.
     if let Some(old) = existing.as_ref().filter(|m| m.is_file()) {
         tmp.as_file().set_permissions(old.permissions())?;
     }
+    write(tmp.as_file())?;
     // On any error above or here, dropping `tmp` removes the sibling. A signal does not: an
     // interrupted pack can leave one `.scratchsmith-oci-*.tmp` beside the archive.
     tmp.persist(out)
