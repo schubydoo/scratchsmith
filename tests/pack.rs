@@ -599,10 +599,20 @@ fn index_in_a_container_with_no_ca_store_uses_the_bundled_roots() {
     );
 }
 
-// A Fedora image, pinned by digest, for the rpm half of `--packages`. quay.io and not Docker
-// Hub, so an anonymous pull from a shared runner address is not rate limited.
+// A Fedora image, pinned by digest, for the rpm half of `--packages`. Docker Hub and not
+// quay.io: quay.io removed the manifest behind its moving tag within two days of the tag
+// moving on, and the pin to it then failed with "manifest unknown". Docker Hub is expected
+// to keep an old digest of an official image.
+//
+// Docker pulls by the digest and ignores the tag. The tag is there for a reader, and for a
+// Renovate custom rule if one is written for this file: no bot moves this pin today.
+//
+// This is Fedora 44 with rpm 6.0.2, and the script below depends on more than the pull: the
+// sqlite database at usr/lib/sysimage/rpm/rpmdb.sqlite, the `pkg:rpm/fedora/` purl prefix,
+// and a `ca-certificates` package in the base image. A move to a release that changes one
+// of those fails in an assertion, not in the pull.
 const FEDORA: &str =
-    "quay.io/fedora/fedora@sha256:ba35579e107f26a4c2c000390fb3ff549f3858a9584a6b5a35f7fa51f54de309";
+    "docker.io/library/fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80";
 
 #[test]
 fn packages_on_an_rpm_host_fill_the_report_the_sbom_and_the_image() {
