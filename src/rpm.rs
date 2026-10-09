@@ -332,8 +332,9 @@ fn header_nevra(header: &[u8]) -> Option<Nevra> {
 /// links and files the user asked for, so rpm is not pointed at it at all. The caller places
 /// the bytes with the same checks as every other record.
 ///
-/// rpm leaves working files beside the database: its lock, and for the sqlite backend a
-/// shared-memory index and a write-ahead log that is empty once rpm has finished. None is
+/// rpm leaves working files beside the database: its lock, for the sqlite backend a
+/// shared-memory index and a write-ahead log that is empty once rpm has finished, and for the
+/// Berkeley DB backend an environment lock and region files. None is
 /// part of the data and a reader rebuilds what it needs, so they are left behind here. For
 /// the sqlite backend that leaves one file.
 pub fn build_database(headers: &[u8]) -> Result<Vec<(std::ffi::OsString, Vec<u8>)>> {
@@ -385,7 +386,8 @@ pub fn build_database(headers: &[u8]) -> Result<Vec<(std::ffi::OsString, Vec<u8>
         let text = name.to_string_lossy();
         let meta = entry.metadata()?;
         // `__db.NNN` are the Berkeley DB backend's region files: per-machine state, not
-        // data, and rebuilt by a reader like the others.
+        // data, and rebuilt by a reader like the others. `.dbenv.lock` is that backend's
+        // environment lock, the counterpart of `.rpm.lock`, and never holds data.
         let working_file = text == ".rpm.lock"
             || text == ".dbenv.lock"
             || text.starts_with("__db.")

@@ -589,7 +589,8 @@ fn finish_staging(
         if records.berkeley_db() {
             warnings.push(
                 "--packages image: this host's rpm database is a Berkeley DB, and rpm writes \
-                 different bytes each time it builds one, so this image is not reproducible"
+                 different bytes each time it builds one, so this image is not reproducible. \
+                 Remove image from --packages to keep a stable digest"
                     .to_string(),
             );
         }
