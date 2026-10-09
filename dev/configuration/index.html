@@ -894,7 +894,7 @@ file</strong>.</p>
 <tr>
 <td><code>max-size</code></td>
 <td><code>--max-size</code></td>
-<td>If the packed image exceeds this size, the pack fails. The packed image is the fully-staged rootfs: payload + NSS includes + runtime extras. Write the size as <code>12MB</code>, <code>512KiB</code>, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024).</td>
+<td>If the packed image exceeds this size, the pack fails. The packed image is the fully-staged rootfs: payload + NSS includes + runtime extras + added files + locales + the <code>--packages image</code> records. Write the size as <code>12MB</code>, <code>512KiB</code>, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024).</td>
 </tr>
 <tr>
 <td><code>runtime</code></td>

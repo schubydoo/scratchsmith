@@ -803,6 +803,9 @@ action-specific. <code>version</code> picks which release to download. <code>out
 <code>args</code> is a verbatim escape hatch for any flag without a dedicated input, for example <code>--sign</code> or
 <code>--oci-archive</code>. Note that <code>push</code> publishes with <code>docker tag</code>/<code>docker push</code>, <strong>not</strong> pack's
 daemonless, cosign-signable <code>--push</code>.</p>
+<p>The action reads the JSON report, so every pack through it runs the <code>--packages</code> lookup. The
+<code>report</code> output holds a <code>packages</code> list and a <code>timings</code> object. <code>--packages</code> has no input of
+its own. Set it through <code>args</code>, for example <code>args: --packages none</code> to turn the lookup off.</p>
 <table>
 <thead>
 <tr>

@@ -875,7 +875,9 @@ installs it to <code>~/.local/bin</code> (or <code>/usr/local/bin</code> as root
 </code></pre></div>
 <p>Piping to <code>bash</code> runs <a href="https://github.com/schubydoo/scratchsmith/blob/main/install.sh"><code>install.sh</code></a>.
 You can read it first. <code>VERSION</code> and <code>BIN_DIR</code> env vars override the tag and install
-directory. Uninstall with <code>--uninstall</code>:</p>
+directory. If a download stalls for 30 seconds, the script stops with an error. It does not
+retry. That limit needs curl, or a wget that takes <code>-T</code>. A BusyBox wget that was built with no
+timeout feature can still hang. Uninstall with <code>--uninstall</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install.sh<span class="w"> </span><span class="p">|</span><span class="w"> </span>bash<span class="w"> </span>-s<span class="w"> </span>--<span class="w"> </span>--uninstall
 </code></pre></div>
 <h2 id="homebrew">Homebrew<a class="headerlink" href="#homebrew" title="Permanent link">&para;</a></h2>
