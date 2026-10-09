@@ -119,8 +119,41 @@ pub struct Owners {
     /// Bundled files dpkg was NOT asked about, because their host path holds a character it
     /// would read as a pattern. They look unowned in `packages`, so the caller says so.
     pub unasked: Vec<String>,
-    /// `(record file name, dpkg status stanza)`, one per package.
-    records: Vec<(String, String)>,
+    records: Records,
+}
+
+/// What a scanner reads to learn the packages, in the form the host's package manager uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Records {
+    /// `(record file name, dpkg status stanza)`, one per package, for `status.d`.
+    Dpkg(Vec<(String, String)>),
+    /// The owning packages' rpm headers, as one header list for `rpmdb --importdb`.
+    Rpm(Vec<u8>),
+}
+
+impl Default for Records {
+    fn default() -> Self {
+        Records::Dpkg(Vec::new())
+    }
+}
+
+/// The package manager whose database names the owners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Manager {
+    Dpkg,
+    Rpm,
+}
+
+/// The package manager this host has a database for. dpkg is asked first: a Debian host can
+/// carry the `rpm` tool with an empty database, and its files are dpkg's.
+pub fn manager() -> Option<Manager> {
+    if dpkg_available() {
+        Some(Manager::Dpkg)
+    } else if crate::rpm::available() {
+        Some(Manager::Rpm)
+    } else {
+        None
+    }
 }
 
 /// True when this host has a dpkg database to ask.
@@ -141,7 +174,26 @@ pub fn dpkg_available() -> bool {
 /// package is the source of: the CA bundle is generated on the host from `ca-certificates`.
 /// Such a package is named only if it is installed. The package name must be a literal:
 /// `dpkg-query -W` reads its argument as a name pattern, as `-S` reads a path pattern.
-pub fn owners(files: &[(PathBuf, PathBuf)], conventions: &[(&str, PathBuf)]) -> Result<Owners> {
+pub fn owners(
+    manager: Manager,
+    files: &[(PathBuf, PathBuf)],
+    conventions: &[(&str, PathBuf)],
+) -> Result<Owners> {
+    match manager {
+        Manager::Dpkg => dpkg_owners(files, conventions),
+        Manager::Rpm => {
+            // rpm takes a literal path, so no path is left unasked.
+            let (packages, headers) = crate::rpm::owners(files, conventions)?;
+            Ok(Owners {
+                packages,
+                unasked: Vec::new(),
+                records: Records::Rpm(headers),
+            })
+        }
+    }
+}
+
+fn dpkg_owners(files: &[(PathBuf, PathBuf)], conventions: &[(&str, PathBuf)]) -> Result<Owners> {
     let host_paths: Vec<PathBuf> = files.iter().map(|(host, _)| host.clone()).collect();
     let mut unasked: Vec<String> = host_paths
         .iter()
@@ -209,7 +261,7 @@ pub fn owners(files: &[(PathBuf, PathBuf)], conventions: &[(&str, PathBuf)]) -> 
     Ok(Owners {
         packages,
         unasked,
-        records,
+        records: Records::Dpkg(records),
     })
 }
 
@@ -489,12 +541,28 @@ impl Drop for StagedRecords {
 pub fn stage_records(rootfs: &Path, owners: &Owners) -> Result<StagedRecords> {
     let mut staged = StagedRecords::default();
 
-    let status_d = rootfs.join("var/lib/dpkg/status.d");
-    create_dirs(rootfs, &status_d, &mut staged.dirs)?;
-    for (file, stanza) in &owners.records {
-        let path = status_d.join(file);
-        write_record(&path, stanza.as_bytes())?;
-        staged.files.push(path);
+    match &owners.records {
+        Records::Dpkg(records) => {
+            let status_d = rootfs.join("var/lib/dpkg/status.d");
+            create_dirs(rootfs, &status_d, &mut staged.dirs)?;
+            for (file, stanza) in records {
+                let path = status_d.join(file);
+                write_record(&path, stanza.as_bytes())?;
+                staged.files.push(path);
+            }
+        }
+        Records::Rpm(headers) if headers.is_empty() => {}
+        Records::Rpm(headers) => {
+            // rpm writes the database itself, at the host's own path under the rootfs. The
+            // directory is made here first, so the symlink refusal in `create_dirs` covers
+            // every part of the path before rpm follows it.
+            let db = crate::rpm::db_path().context("asking rpm where its database lives")?;
+            let db_dir = rootfs.join(db.strip_prefix("/").unwrap_or(&db));
+            create_dirs(rootfs, &db_dir, &mut staged.dirs)?;
+            staged
+                .files
+                .extend(crate::rpm::import(rootfs, &db_dir, headers)?);
+        }
     }
 
     let os_release = rootfs.join("etc/os-release");
@@ -712,7 +780,7 @@ mod tests {
     #[test]
     fn staged_records_are_removed_on_drop_and_kept_on_keep() {
         let owners = Owners {
-            records: vec![("libc6".into(), "Package: libc6\n".into())],
+            records: Records::Dpkg(vec![("libc6".into(), "Package: libc6\n".into())]),
             ..Owners::default()
         };
         let tmp = tempfile::tempdir().unwrap();
@@ -757,7 +825,10 @@ mod tests {
         // A second `image` pack into the same directory finds the kept record. It is
         // replaced, not refused.
         let newer = Owners {
-            records: vec![("libc6".into(), "Package: libc6\nVersion: 2\n".into())],
+            records: Records::Dpkg(vec![(
+                "libc6".into(),
+                "Package: libc6\nVersion: 2\n".into(),
+            )]),
             ..Owners::default()
         };
         stage_records(rootfs, &newer).unwrap().keep();
@@ -775,7 +846,7 @@ mod tests {
     fn a_failed_staging_leaves_no_directories_behind() {
         // A directory where a record must go makes the write fail after status.d exists.
         let owners = Owners {
-            records: vec![("libc6".into(), "Package: libc6\n".into())],
+            records: Records::Dpkg(vec![("libc6".into(), "Package: libc6\n".into())]),
             ..Owners::default()
         };
         let tmp = tempfile::tempdir().unwrap();
@@ -804,7 +875,7 @@ mod tests {
     #[test]
     fn records_never_follow_a_symlink_out_of_the_rootfs() {
         let owners = Owners {
-            records: vec![("libc6".into(), "Package: libc6\n".into())],
+            records: Records::Dpkg(vec![("libc6".into(), "Package: libc6\n".into())]),
             ..Owners::default()
         };
         let tmp = tempfile::tempdir().unwrap();

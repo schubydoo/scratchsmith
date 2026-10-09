@@ -94,12 +94,27 @@ printf '{"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"dig
 printf '{"architecture":"amd64","os":"linux","variant":"v8"}' > "$json_seed/config.json"
 printf '{"token":"t","access_token":"a"}' > "$json_seed/token.json"
 
+# An rpm header seed for rpm_headers: the 8-byte magic, an entry count of 4, a data length of
+# 8, four STRING index entries (NAME 1000, VERSION 1001, RELEASE 1002, ARCH 1022, each
+# tag/type/offset/count as big-endian 32-bit), then the data "a", "1", "1", "x". Without it
+# every input bounces off the magic check.
+rpm_seed="$(mktemp -d)"
+{
+  printf '\216\255\350\001\000\000\000\000\000\000\000\004\000\000\000\010'
+  printf '\000\000\003\350\000\000\000\006\000\000\000\000\000\000\000\001'
+  printf '\000\000\003\351\000\000\000\006\000\000\000\002\000\000\000\001'
+  printf '\000\000\003\352\000\000\000\006\000\000\000\004\000\000\000\001'
+  printf '\000\000\003\376\000\000\000\006\000\000\000\006\000\000\000\001'
+  printf 'a\0001\0001\000x\000'
+} > "$rpm_seed/header.bin"
+
 # Map each target to its seed set (empty = no seed), zip, and stage in $OUT.
 seed_dir_for() {
   case "$1" in
   parse_elf_info | analyze_hardening) printf '%s' "$elf_seed" ;;
   unpack) printf '%s' "$oci_seed" ;;
   registry_parse) printf '%s' "$json_seed" ;;
+  rpm_headers) printf '%s' "$rpm_seed" ;;
   *) printf '' ;;
   esac
 }

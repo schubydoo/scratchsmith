@@ -599,6 +599,95 @@ fn index_in_a_container_with_no_ca_store_uses_the_bundled_roots() {
     );
 }
 
+// A Fedora image, pinned by digest, for the rpm half of `--packages`. quay.io and not Docker
+// Hub, so an anonymous pull from a shared runner address is not rate limited.
+const FEDORA: &str =
+    "quay.io/fedora/fedora@sha256:ba35579e107f26a4c2c000390fb3ff549f3858a9584a6b5a35f7fa51f54de309";
+
+#[test]
+fn packages_on_an_rpm_host_fill_the_report_the_sbom_and_the_image() {
+    // The build host of this suite is Debian-based, so the rpm path runs where rpm is real:
+    // the test binary is mounted into a Fedora container and packs Fedora's own /usr/bin/id.
+    if !docker_available() {
+        skip_required("no Docker daemon");
+        return;
+    }
+    let _g = docker_lock();
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    // syft is one static file, so the host's copy runs in the container as it is.
+    let syft = Command::new("sh")
+        .args(["-c", "readlink -f \"$(command -v syft)\""])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|p| !p.is_empty());
+    let Some(syft) = syft else {
+        skip_required("no syft to generate the SBOM");
+        return;
+    };
+    // Each step prints one marked line; the assertions below read them.
+    let script = r#"
+set -eu
+cd /tmp
+scratchsmith pack -n -o report --format json /usr/bin/id > report.json
+echo "REPORT $(tr -d ' \n' < report.json | grep -o '"name":"glibc","version":"[^"]*","arch":"[^"]*","source":"glibc","type":"rpm"' | head -1)"
+scratchsmith pack -n -o sbom --packages report,sbom --sbom --sbom-file /tmp/sbom.json /usr/bin/id > /dev/null
+echo "SBOM $(grep -o 'pkg:rpm/fedora/glibc@[^"?]*' sbom.json | head -1)"
+echo "SBOM_LEFT $(find sbom -name 'rpmdb*' | wc -l) $(test -e sbom/etc/os-release && echo os-release || echo none)"
+scratchsmith pack -n -o image --packages image /usr/bin/id > /dev/null
+scratchsmith pack -n -o image --packages image /usr/bin/id > /dev/null
+echo "IMAGE_FILES $(cd image && find . -path '*rpm*' -type f | sort | tr '\n' ' ')"
+echo "IMAGE_DB $(rpm --root /tmp/image -qa --qf '%{NAME} ' | tr ' ' '\n' | sort | tr '\n' ' ')"
+echo "HOST_DB $(rpm -qa | wc -l)"
+"#;
+    let out = Command::new("docker")
+        .args(["run", "--rm"])
+        .args(["-v", &format!("{bin}:/usr/local/bin/scratchsmith:ro")])
+        .args(["-v", &format!("{syft}:/usr/local/bin/syft:ro")])
+        .args([FEDORA, "bash", "-c", script])
+        .output()
+        .expect("run the Fedora container");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stdout}\n{stderr}");
+    let line = |tag: &str| {
+        stdout
+            .lines()
+            .find_map(|l| l.strip_prefix(tag))
+            .unwrap_or_else(|| panic!("no {tag} line in:\n{stdout}"))
+            .trim()
+            .to_string()
+    };
+
+    // The report names the rpm package, with its source package and the `rpm` type.
+    assert!(line("REPORT ").contains(r#""type":"rpm""#), "{stdout}");
+    // The SBOM names it with a distribution, so a scanner can match it...
+    assert!(
+        line("SBOM ").starts_with("pkg:rpm/fedora/glibc@"),
+        "{stdout}"
+    );
+    // ...and `sbom` alone leaves no database and no os-release in the image.
+    assert_eq!(line("SBOM_LEFT "), "0 none", "{stdout}");
+    // `image` keeps one file: the database, with no lock and no sqlite working files.
+    let files = line("IMAGE_FILES ");
+    assert!(files.ends_with("rpmdb.sqlite"), "{files}");
+    assert_eq!(
+        files.split_whitespace().count(),
+        1,
+        "one file only: {files}"
+    );
+    // That database holds the owners and nothing else, even after a second pack into the
+    // same directory, which must replace the first database and not add to it.
+    let db = line("IMAGE_DB ");
+    assert!(db.contains("glibc") && db.contains("coreutils"), "{db}");
+    assert!(
+        db.split_whitespace().count() < 12,
+        "only the owning packages: {db}"
+    );
+    // The host's own database is read and never written.
+    assert!(line("HOST_DB ").parse::<u32>().unwrap() > 50, "{stdout}");
+}
+
 #[test]
 fn upx_packed_image_smoke_runs() {
     if !docker_available() {

@@ -88,7 +88,14 @@ const TOOLS: &[Tool] = &[
         name: "dpkg-query",
         version_args: &["--version"],
         purpose: "--packages (name the package that owns each bundled library)",
-        hint: "present on Debian and Ubuntu; other hosts get no package data",
+        hint: "present on Debian and Ubuntu; an rpm host uses rpm, below",
+    },
+    // The rpm half of --packages. `rpmdb` ships in the same package as `rpm`.
+    Tool {
+        name: "rpm",
+        version_args: &["--version"],
+        purpose: "--packages on an rpm host (Fedora, RHEL and their relatives)",
+        hint: "present on rpm-based hosts; a host with neither gets no package data",
     },
 ];
 

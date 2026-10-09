@@ -17,6 +17,7 @@ pub mod packages;
 pub mod registry;
 pub mod report;
 pub mod resolver;
+pub mod rpm;
 pub mod stager;
 pub mod supplychain;
 pub mod unpack;

@@ -262,22 +262,22 @@ fn bundled_files(
 }
 
 // Ask the host which package owns each bundled file. `None` means "not known": the lookup
-// is off, the host has no dpkg, or the lookup failed.
+// is off, the host has no package database, or the lookup failed.
 //
 // How a host that cannot answer is treated depends on what was asked:
 // - the default selection stays quiet. It is on for every pack, so it must not turn a pack
-//   that worked into one that fails, or nag on a host with no dpkg;
+//   that worked into one that fails, or nag on a host with neither dpkg nor rpm;
 // - an explicit `report` gets a warning, and the report says `null`;
 // - an explicit `sbom` or `image` FAILS. The user asked for an SBOM or an image that
 //   carries the package data, and shipping one without it would look the same from outside.
 //
-// `dpkg` is a parameter so each of those is testable on any host. It is a function, so
+// `manager` is a parameter so each of those is testable on any host. It is a function, so
 // `--packages none` probes nothing: "looks nothing up" includes the probe.
 fn lookup_owners(
     files: &[(PathBuf, PathBuf)],
     conventions: &[(&str, PathBuf)],
     selection: &PackagesSelection,
-    dpkg: impl FnOnce() -> bool,
+    manager: impl FnOnce() -> Option<packages::Manager>,
     warnings: &mut Vec<String>,
 ) -> Result<Option<Owners>> {
     if !selection.any() {
@@ -290,24 +290,23 @@ fn lookup_owners(
     } else {
         "sbom"
     };
-    if !dpkg() {
+    let Some(manager) = manager() else {
         if selection.needs_records() {
             bail!(
-                "--packages {asked} needs a dpkg database to name the packages, and this \
-                 host has none; only Debian-based hosts are supported. Remove {asked} from \
-                 --packages to pack without it"
+                "--packages {asked} needs a dpkg or rpm database to name the packages, and \
+                 this host has neither. Remove {asked} from --packages to pack without it"
             );
         }
         if selection.explicit {
             warnings.push(
-                "--packages: this host has no dpkg database, so the report names no \
-                 packages; only Debian-based hosts are supported"
+                "--packages: this host has no dpkg or rpm database, so the report names no \
+                 packages"
                     .to_string(),
             );
         }
         return Ok(None);
-    }
-    match packages::owners(files, conventions) {
+    };
+    match packages::owners(manager, files, conventions) {
         Ok(owners) => {
             // Not asked is not the same as not owned, and the two look alike in the list.
             if !owners.unasked.is_empty() {
@@ -330,7 +329,7 @@ fn lookup_owners(
             Err(err.context(format!("--packages {asked}: the package lookup failed")))
         }
         Err(err) => {
-            // dpkg's own words can quote a path back, so they are escaped too.
+            // The package manager's own words can quote a path back, so they are escaped.
             let cause = format!("{err:#}");
             warnings.push(format!("package lookup failed: {}", cause.escape_debug()));
             Ok(None)
@@ -578,7 +577,7 @@ fn finish_staging(
         &bundled,
         &conventions,
         &opts.packages,
-        packages::dpkg_available,
+        packages::manager,
         warnings,
     )?;
     // `--packages image`: the records are image content, so they land before the size gate.
@@ -866,7 +865,7 @@ mod tests {
         // No dpkg on this "host", whatever the real one has.
         let lookup = |selection: &PackagesSelection| {
             let mut warnings = Vec::new();
-            let result = lookup_owners(&[], &[], selection, || false, &mut warnings);
+            let result = lookup_owners(&[], &[], selection, || None, &mut warnings);
             (result, warnings)
         };
 
@@ -878,7 +877,7 @@ mod tests {
         );
         // Off is off, down to the probe: `none` must not even ask whether dpkg is there.
         let mut warnings = Vec::new();
-        let probe = || -> bool { panic!("--packages none probed the host") };
+        let probe = || -> Option<packages::Manager> { panic!("--packages none probed the host") };
         let result = lookup_owners(&[], &[], &select(&[Off]), probe, &mut warnings);
         assert!(matches!(result, Ok(None)) && warnings.is_empty());
         // An explicit report cannot be filled, and says so, and the pack goes on.
@@ -893,7 +892,7 @@ mod tests {
         ] {
             let (result, _) = lookup(&select(outputs));
             let err = format!("{:#}", result.expect_err("records were asked for"));
-            assert!(err.contains(named) && err.contains("dpkg"), "{err}");
+            assert!(err.contains(named) && err.contains("dpkg or rpm"), "{err}");
         }
 
         // "Not known" and "known to be none" must stay apart in the report.
