@@ -59,9 +59,9 @@ action-specific. `version` picks which release to download. `output` maps to `--
 `--oci-archive`. Note that `push` publishes with `docker tag`/`docker push`, **not** pack's
 daemonless, cosign-signable `--push`.
 
-The action reads the JSON report, so every pack through it runs the `--packages` lookup. The
-`report` output holds a `packages` list and a `timings` object. `--packages` has no input of
-its own. Set it through `args`, for example `args: --packages none` to turn the lookup off.
+The action reads the JSON report, so every pack through it runs the `--packages` lookup by default. The
+`report` output holds a `packages` list and a `timings` object. To turn the lookup off, set
+the `packages` input to `none`.
 
 | Input | Default | Description |
 |---|---|---|
@@ -91,6 +91,7 @@ its own. Set it through `args`, for example `args: --packages none` to turn the 
 | `symlinks` | `copy-all` | What a symlink you name becomes in the image: `copy-all`, `preserve`, `copy-unsafe`, or `skip-unsafe`. Covers the packed binary's own path and each `add-file` source, never the resolved libraries. |
 | `include` | | Extra libraries to force-stage, for example `dlopen`'d plugins, one soname/path per line. |
 | `nss` | `files,dns` | NSS modules to stage for glibc lookups, comma-separated (`files,dns`, or `none`). Fewer modules trim CVE surface. |
+| `packages` | `report` | Where to record the distribution packages that own the bundled files, comma-separated: `report`, `sbom`, `image`, or `none`. `sbom` shows them to `sbom` and `scan`. `image` keeps the package records in the image. `sbom` does nothing unless the `sbom` or the `scan` input is on. See [Usage](usage.md#name-the-packages-behind-the-bundled-files). |
 | `max-size` | | If the fully-staged image exceeds this size, the job fails. Write the size as `25MB`, `512KiB`, or a byte count. |
 | `deny` | | If a listed library ships, fail the pack (soname or staged file name), one per line. |
 | `require` | | If a listed library does not ship, fail the pack (same scope as `deny`), one per line. |

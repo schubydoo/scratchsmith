@@ -98,6 +98,14 @@ inputs:
       modules trim CVE surface. Empty keeps the default (`files,dns`).
     required: false
     default: ""
+  packages:
+    description: >-
+      Where to record the distribution packages that own the bundled files, comma-separated
+      (`report`, `sbom`, `image`, or `none`). `sbom` shows them to `sbom` and `scan`. `image`
+      keeps the package records in the image. `sbom` does nothing unless the `sbom` or the
+      `scan` input is on. Empty keeps the default (`report`).
+    required: false
+    default: ""
   entrypoint:
     description: Image ENTRYPOINT. Empty defaults to the packed binary's path.
     required: false
@@ -280,6 +288,7 @@ runs:
         IN_SCAN_FAIL_ON: ${{ inputs.scan-fail-on }}
         IN_MAX_SIZE: ${{ inputs.max-size }}
         IN_NSS: ${{ inputs.nss }}
+        IN_PACKAGES: ${{ inputs.packages }}
         IN_DENY: ${{ inputs.deny }}
         IN_REQUIRE: ${{ inputs.require }}
       run: |
@@ -327,6 +336,8 @@ runs:
         [ -n "$IN_MAX_SIZE" ] && args+=("--max-size" "$IN_MAX_SIZE")
         # --nss takes a comma-separated value; pass it through as one token.
         [ -n "$IN_NSS" ] && args+=("--nss" "$IN_NSS")
+        # --packages takes a comma-separated value too, and clap rejects a bad one.
+        [ -n "$IN_PACKAGES" ] && args+=("--packages" "$IN_PACKAGES")
         # --symlinks takes one enum value. Pass it verbatim so clap, not this script, is what
         # rejects a bad mode — a check here would drift from the enum on the next mode added.
         [ -n "$IN_SYMLINKS" ] && args+=("--symlinks" "$IN_SYMLINKS")
