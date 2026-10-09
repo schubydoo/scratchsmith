@@ -1154,6 +1154,9 @@
 <p>Inspect the rootfs without building an image (<strong>no Docker daemon needed</strong>):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>./rootfs<span class="w"> </span>./app
 </code></pre></div>
+<p>Give <code>--output</code> a new directory or an empty one. Scratchsmith does not empty the directory, so
+a pack into a directory that holds an earlier pack merges with it and prints a warning. The
+<a href="../deprecations/#an-output-directory-that-is-not-empty">Deprecations</a> page has the detail.</p>
 <p>Or write a <strong>daemonless OCI archive</strong> (loadable by skopeo/buildah, and pushable to a registry with
 no Docker daemon):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--oci-archive<span class="w"> </span>./app.oci.tar<span class="w"> </span>./app

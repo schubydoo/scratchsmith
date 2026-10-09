@@ -579,6 +579,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#an-output-directory-that-is-not-empty" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An output directory that is not empty
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -864,6 +875,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#an-output-directory-that-is-not-empty" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An output directory that is not empty
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -997,9 +1019,16 @@ value reaches it, so the keys inside it never apply.</p>
 <td>2.0.0</td>
 <td>Give that object the directory in its own <code>RUNPATH</code></td>
 </tr>
+<tr>
+<td><code>--no-build</code> into an output directory that is not empty</td>
+<td>1.6.0</td>
+<td>2.0.0</td>
+<td>Use a new directory, or empty it first</td>
+</tr>
 </tbody>
 </table>
-<p>The warnings come from <code>pack</code> and from <code>graph</code>, because both resolve the same dependency tree.</p>
+<p>The first three warnings come from <code>pack</code> and from <code>graph</code>, because both resolve the same
+dependency tree. The last one comes from <code>pack</code> only.</p>
 <h3 id="a-library-that-cannot-be-parsed">A library that cannot be parsed<a class="headerlink" href="#a-library-that-cannot-be-parsed" title="Permanent link">&para;</a></h3>
 <p>Scratchsmith reads each library that the binary needs, and then resolves the libraries that
 library needs in turn. A file that is not an ELF at all has no dependencies, so scratchsmith
@@ -1036,6 +1065,25 @@ still run, because the loader cache in the image knows where the file is. Scratc
 reports the library as missing.</p>
 <p>To fix it, link the library that needs the file with a <code>RUNPATH</code> that holds the directory:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-shared<span class="w"> </span>-fPIC<span class="w"> </span>-Wl,--enable-new-dtags<span class="w"> </span>-Wl,-rpath,/opt/app/lib<span class="w"> </span>-o<span class="w"> </span>libmid.so<span class="w"> </span>mid.c<span class="w"> </span>-lleaf
+</code></pre></div>
+<h3 id="an-output-directory-that-is-not-empty">An output directory that is not empty<a class="headerlink" href="#an-output-directory-that-is-not-empty" title="Permanent link">&para;</a></h3>
+<p><code>pack --no-build --output &lt;dir&gt;</code> stages the files of the image into a directory and builds no
+image. Scratchsmith does not empty that directory first. A second pack into the same directory
+merges with the files from the first.</p>
+<p>A file that the second pack stages replaces the old copy. A file that the second pack does not
+stage stays in the directory. For example, pack once with <code>--ca-certs</code> and once without it, and
+the certificate file is still there. The directory then holds more than the flags describe, and
+an SBOM or a scan of it includes the old file.</p>
+<p>One case goes the other way. Pack once with <code>--packages image</code>, and the package records are in
+the directory. Pack again with <code>--packages sbom --sbom</code>, and scratchsmith removes those records
+after the SBOM run, because that output never leaves them in the tree. <code>--packages sbom</code> on its
+own stages no records and removes none, because nothing reads the tree.</p>
+<p>Two flags stop a second pack. <code>--add-file</code> and <code>--locale</code> do not replace a file that is already
+in the directory, so the pack ends with an error.</p>
+<p>Scratchsmith 2.0 refuses a directory that is not empty. Give each pack a new directory, or
+remove the old one first:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="gp">$ </span>rm<span class="w"> </span>-rf<span class="w"> </span>./rootfs
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>./rootfs<span class="w"> </span>./app
 </code></pre></div>
 
 
