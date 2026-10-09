@@ -636,9 +636,7 @@ scratchsmith pack -n -o sbom --packages report,sbom --sbom --sbom-file /tmp/sbom
 echo "SBOM $(grep -o 'pkg:rpm/fedora/glibc@[^"?]*' sbom.json | head -1)"
 echo "SBOM_LEFT $(find sbom -name 'rpmdb*' | wc -l) $(test -e sbom/etc/os-release && echo os-release || echo none)"
 scratchsmith pack -n -o image --packages image --ca-certs /usr/bin/id > /dev/null
-# The CA bundle is staged read-only, like its source. A second pack into the same directory
-# then cannot replace it unless the user is root, which this container is not under coverage.
-chmod -R u+w image
+# The CA bundle is staged read-only, like its source, and the second pack replaces it.
 scratchsmith pack -n -o image --packages image --ca-certs /usr/bin/id > /dev/null
 scratchsmith pack -n -o again --packages image --ca-certs /usr/bin/id > /dev/null
 echo "IMAGE_FILES $(cd image && find . -path '*rpm*' -type f | sort | tr '\n' ' ')"

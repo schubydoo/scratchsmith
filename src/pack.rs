@@ -618,6 +618,18 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
     if opts.smoke {
         bail!("--smoke needs a built image, so it isn't supported with --no-build; drop --smoke, or set `smoke = false` in the profile");
     }
+    // This pack merges into whatever is there, so a file it does not stage stays in the tree.
+    // stderr, like every tolerance: stdout carries the `--format json` report.
+    if out_dir
+        .read_dir()
+        .is_ok_and(|mut entries| entries.next().is_some())
+    {
+        eprintln!(
+            "warning: the output directory {} is not empty. This pack merges into it, and a file from an earlier pack that this pack does not stage stays in the tree. scratchsmith 2.0 rejects it. See {}",
+            out_dir.display(),
+            crate::image::DEPRECATIONS_URL
+        );
+    }
     let StagedRootfs {
         tree,
         size,
