@@ -96,8 +96,11 @@ pub fn owners(
             .output()
             .context("running rpmdb --exportdb")?;
         if !export.status.success() {
+            // `--exportdb` arrived in rpm 4.15, and an older rpm (RHEL 8 has 4.14) answers
+            // every `rpm -qf` and then fails here with an "unknown option" message.
             bail!(
-                "rpmdb --exportdb failed ({}): {}",
+                "rpmdb --exportdb failed ({}): {}. The package records need rpm 4.15 or \
+                 newer; --packages report works without them",
                 export.status,
                 String::from_utf8_lossy(&export.stderr).trim()
             );
@@ -145,7 +148,7 @@ fn rpm_query(args: &[&str], subject: &std::ffi::OsStr, no_answer: &str) -> Resul
     let stderr = String::from_utf8_lossy(&out.stderr);
     match out.status.code() {
         Some(0) => Ok(Some(stdout)),
-        Some(1) if said_no(&stdout, &stderr, no_answer) => Ok(None),
+        Some(1) if said_no(&stdout, &stderr, no_answer, &subject.to_string_lossy()) => Ok(None),
         _ => bail!(
             "rpm {} failed ({}): {} {}",
             args[0],
@@ -156,12 +159,14 @@ fn rpm_query(args: &[&str], subject: &std::ffi::OsStr, no_answer: &str) -> Resul
     }
 }
 
-// rpm's negative answer, on either stream: `-qf` prints it on stdout, and a path that does
-// not exist ("No such file or directory") comes on stderr and is the same "no owner".
-fn said_no(stdout: &str, stderr: &str, no_answer: &str) -> bool {
+// rpm's negative answer, on either stream: `-qf` prints it on stdout, and for a path that
+// does not exist it prints `file <path>: No such file or directory` on stderr, which is the
+// same "no owner". That second form must name the SUBJECT: rpm puts the same errno text in
+// the message for a database it cannot open, and that one is not a "no".
+fn said_no(stdout: &str, stderr: &str, no_answer: &str, subject: &str) -> bool {
     stdout.contains(no_answer)
         || stderr.contains(no_answer)
-        || stderr.contains("No such file or directory")
+        || stderr.contains(&format!("{subject}: No such file or directory"))
 }
 
 // One `ROW` line into the package key and its source package name. A line that is not a
@@ -377,7 +382,10 @@ pub fn build_database(headers: &[u8]) -> Result<Vec<(std::ffi::OsString, Vec<u8>
         let name = entry.file_name();
         let text = name.to_string_lossy();
         let meta = entry.metadata()?;
+        // `__db.NNN` are the Berkeley DB backend's region files: per-machine state, not
+        // data, and rebuilt by a reader like the others.
         let working_file = text == ".rpm.lock"
+            || text.starts_with("__db.")
             || text.ends_with("-shm")
             || (text.ends_with("-wal") && meta.len() == 0);
         if meta.is_file() && !working_file {
@@ -447,27 +455,18 @@ mod tests {
         assert_eq!(parse_row("file /x is not owned by any package"), None);
         // Exit 1 counts as "no" only with rpm's own sentence for it, on either stream.
         let not_owned = "is not owned by any package";
-        assert!(said_no(
-            "file /x is not owned by any package\n",
-            "",
-            not_owned
-        ));
-        assert!(said_no(
-            "",
-            "error: file /x: No such file or directory\n",
-            not_owned
-        ));
-        assert!(said_no(
-            "package nope is not installed\n",
-            "",
-            "is not installed"
-        ));
-        // A database that will not open also exits 1, and must not read as "no owner".
-        assert!(!said_no(
-            "",
-            "error: cannot open Packages database in /x\n",
-            not_owned
-        ));
+        let owned_by_none = "file /x is not owned by any package\n";
+        assert!(said_no(owned_by_none, "", not_owned, "/x"));
+        let gone = "error: file /x: No such file or directory\n";
+        assert!(said_no("", gone, not_owned, "/x"));
+        let absent = "package nope is not installed\n";
+        assert!(said_no(absent, "", "is not installed", "nope"));
+        // A database that will not open also exits 1, and must not read as "no owner". Its
+        // message can carry the same errno text, so that text counts only with the subject.
+        let broken = "error: cannot open Packages database in /var/lib/rpm\n";
+        assert!(!said_no("", broken, not_owned, "/x"));
+        let old = "error: cannot open Packages index using db5 - No such file or directory (2)\n";
+        assert!(!said_no("", old, not_owned, "/x"));
         assert_eq!(parse_row("a\tnot-a-number\tb\tc\td\te"), None);
     }
 

@@ -635,9 +635,9 @@ echo "REPORT $(tr -d ' \n' < report.json | grep -o '"name":"glibc","version":"[^
 scratchsmith pack -n -o sbom --packages report,sbom --sbom --sbom-file /tmp/sbom.json /usr/bin/id > /dev/null
 echo "SBOM $(grep -o 'pkg:rpm/fedora/glibc@[^"?]*' sbom.json | head -1)"
 echo "SBOM_LEFT $(find sbom -name 'rpmdb*' | wc -l) $(test -e sbom/etc/os-release && echo os-release || echo none)"
-scratchsmith pack -n -o image --packages image /usr/bin/id > /dev/null
-scratchsmith pack -n -o image --packages image /usr/bin/id > /dev/null
-scratchsmith pack -n -o again --packages image /usr/bin/id > /dev/null
+scratchsmith pack -n -o image --packages image --ca-certs /usr/bin/id > /dev/null
+scratchsmith pack -n -o image --packages image --ca-certs /usr/bin/id > /dev/null
+scratchsmith pack -n -o again --packages image --ca-certs /usr/bin/id > /dev/null
 echo "IMAGE_FILES $(cd image && find . -path '*rpm*' -type f | sort | tr '\n' ' ')"
 echo "IMAGE_DB $(rpm --root /tmp/image -qa --qf '%{NAME}\n' | sort | tr '\n' ' ')"
 echo "IMAGE_DUPLICATES $(rpm --root /tmp/image -qa --qf '%{NAME}\n' | sort | uniq -d | wc -l)"
@@ -685,6 +685,9 @@ if scratchsmith pack -n -o clash --packages image --add-file /tmp/mine/db:/usr/l
     // That database holds the owners and nothing else: far fewer packages than the host's.
     let db = line("IMAGE_DB ");
     assert!(db.contains("glibc") && db.contains("coreutils"), "{db}");
+    // `--ca-certs` credits the bundle to `ca-certificates` by convention, through `rpm -q`.
+    // That package is `noarch`, so this is also the proof that such a header is found.
+    assert!(db.contains("ca-certificates"), "{db}");
     assert!(
         db.split_whitespace().count() < 12,
         "only the owning packages: {db}"

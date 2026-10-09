@@ -577,7 +577,12 @@ pub fn stage_records(
                 staged.files.push(path);
             }
         }
-        Records::Rpm(headers) if headers.is_empty() => {}
+        // Staging is only asked for when there are owners, and every owner has a header, so
+        // an empty list means the export and the report disagreed. An image or an SBOM that
+        // was asked to carry the packages must not go out with none.
+        Records::Rpm(headers) if headers.is_empty() => {
+            bail!("cannot record packages: rpm named owners and exported no header for them")
+        }
         Records::Rpm(headers) => {
             // rpm builds the database in a directory of its own, and only its bytes come
             // here. They are placed like any other record, at the host's database path: no
