@@ -1339,13 +1339,22 @@ the GitHub Action.</p>
 see <strong><a href="../github-action/">GitHub Action</a></strong>.</p>
 <h2 id="run-pack-in-a-container-the-toolbox-image">Run <code>pack</code> in a container — the <code>:toolbox</code> image<a class="headerlink" href="#run-pack-in-a-container-the-toolbox-image" title="Permanent link">&para;</a></h2>
 <p>The <code>FROM scratch</code> release image carries the binary and nothing else: no shell, no tools, and no
-certificate store. It runs every subcommand that needs none of those. That is <code>lint</code>, <code>doctor</code>,
-<code>graph</code>, <code>diff</code>, and <code>unpack</code>, plus the <code>--version</code> and <code>--completions</code> flags. <code>doctor</code> is the
-one that looks like an exception: it probes for each external tool and reports every one as
-missing, which is the right answer on an image that carries none.</p>
-<p>Two subcommands do not run there. <code>pack</code> needs ldconfig, strip, and the SBOM tools, and under
-<code>--push</code> it also needs the certificate store. <code>index</code> reaches a registry over HTTPS, which needs
-that same certificate store.</p>
+certificate store. It runs every subcommand that needs no external tool. That is <code>lint</code>,
+<code>doctor</code>, <code>graph</code>, <code>diff</code>, <code>unpack</code>, and <code>index</code>, plus the <code>--version</code> and <code>--completions</code> flags.
+<code>doctor</code> is the one that looks like an exception: it probes for each external tool and reports
+every one as missing, which is the right answer on an image that carries none.</p>
+<p><code>index</code> reaches a registry over HTTPS, which needs a list of trusted certificate authorities.
+On a host with a certificate store, scratchsmith uses that store. This image has none, so
+scratchsmith uses the Mozilla root certificates that are compiled into the binary. It prints one
+warning to standard error to say so. To use your own certificates, mount a PEM file and set
+<code>SSL_CERT_FILE</code> to its path. A registry behind a proxy that inspects TLS needs that.</p>
+<p>The compiled-in certificates are as new as the scratchsmith release that carries them. A
+certificate store on the host gets updates from the operating system. The compiled-in set
+changes only with a newer scratchsmith release.</p>
+<p>If <code>SSL_CERT_FILE</code> or <code>SSL_CERT_DIR</code> is set, scratchsmith never uses the compiled-in
+certificates. If the path that you set gives no certificates, the command fails and names the
+variable.</p>
+<p>One subcommand does not run there. <code>pack</code> needs ldconfig, strip, and the SBOM tools.</p>
 <p>The <strong><code>:toolbox</code></strong> image bundles the full <code>pack</code> toolchain (ldconfig, strip, syft, grype, cosign,
 upx, tini, the docker CLI) on a Wolfi base. With it, <code>pack</code> itself runs inside a container:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1"># Daemonless — no socket needed; write an OCI archive or push straight to a registry.</span>
