@@ -556,6 +556,50 @@ fn packs_a_binary_that_runs_in_docker() {
 }
 
 #[test]
+fn index_in_a_container_with_no_ca_store_uses_the_bundled_roots() {
+    // The real thing, not a simulation: scratchsmith packs itself, and the packed image has
+    // no CA trust store and no SSL_CERT_FILE, like the published FROM scratch image. `index`
+    // there used to fail before it reached the registry. It must now build its clients on
+    // the roots compiled into the binary, say so, and go on to the network.
+    //
+    // `--network none` keeps it hermetic: the registry is a closed local port, so getting
+    // as far as "pulling the manifest" is the proof that the clients were built.
+    if !docker_available() {
+        skip_required("no Docker daemon");
+        return;
+    }
+    let _g = docker_lock();
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let tag = scratchsmith::pack::run(bin, &PackOptions::default())
+        .expect("pack should succeed")
+        .tag
+        .unwrap();
+
+    let run = Command::new("docker")
+        .args(["run", "--rm", "--network", "none", "--read-only", &tag])
+        .args(["index", "127.0.0.1:1/x/y:1", "127.0.0.1:1/x/y:1-amd64"])
+        .output()
+        .unwrap();
+    rmi(&tag);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert_eq!(
+        run.status.code(),
+        Some(1),
+        "the closed port is a plain failure: {stderr}"
+    );
+    assert!(!stderr.contains("panicked"), "must not panic: {stderr}");
+    assert!(
+        stderr.contains("warning: the system CA trust store could not be used")
+            && stderr.contains("Mozilla root certificates bundled with scratchsmith"),
+        "the fallback must be announced: {stderr}"
+    );
+    assert!(
+        stderr.contains("pulling the manifest for 127.0.0.1:1/x/y:1-amd64"),
+        "the command must get past client construction to the registry: {stderr}"
+    );
+}
+
+#[test]
 fn upx_packed_image_smoke_runs() {
     if !docker_available() {
         skip_required("no Docker daemon");

@@ -661,15 +661,16 @@ fn a_bare_label_warns_on_the_rootfs_sink_too() {
 }
 
 #[test]
-fn a_registry_command_without_a_ca_store_fails_instead_of_panicking() {
-    // oci-client's `Client::new` swallows the builder error and falls back to
-    // `Client::default()`, whose `reqwest::Client::default()` panics on the very failure it
-    // just caught. On a host with no CA trust store — most minimal containers, and every
-    // FROM scratch image — `index` died with no message at all: 101 from a dynamic build,
-    // 139 (SIGSEGV) from the shipped musl-static one.
+fn a_registry_command_with_a_broken_explicit_ca_store_fails_closed() {
+    // SSL_CERT_FILE is the user's own choice of whom to trust. When it yields no roots, the
+    // command must fail and name the variable. It must NOT widen trust to the bundled
+    // Mozilla set, and it must not panic, which is how this failure first showed up:
+    // oci-client's `Client::new` swallows the builder error and falls back to a default
+    // client that panics on the same failure (101 dynamic, SIGSEGV from the musl build).
     //
-    // Hermetic: the client is built before any network call, so this needs no registry.
-    // An empty bundle is how rustls reports "no roots" without unplugging the host's.
+    // Hermetic: the clients are built before any network call, so this needs no registry.
+    // The fallback itself needs a host with no store and no variable, which a test cannot
+    // fake here; tests/pack.rs runs it for real inside a packed scratch image.
     let tmp = tempfile::tempdir().unwrap();
     let empty_bundle = tmp.path().join("empty.pem");
     std::fs::write(&empty_bundle, "").unwrap();
@@ -692,9 +693,37 @@ fn a_registry_command_without_a_ca_store_fails_instead_of_panicking() {
     assert!(!stderr.contains("panicked"), "must not panic: {stderr}");
     assert!(
         stderr.contains("building the registry client for ghcr.io")
-            && stderr.contains("no trust store"),
+            && stderr.contains("SSL_CERT_FILE is set"),
         "the error must name the cause and the fix: {stderr}"
     );
+    assert!(
+        !stderr.contains("warning: ") && !stderr.contains("Mozilla"),
+        "an explicit store must never be widened: {stderr}"
+    );
+}
+
+#[test]
+fn a_registry_command_with_a_ca_store_does_not_mention_the_bundled_roots() {
+    // The fallback is for a host with no store. Where the system store works, nothing about
+    // whom scratchsmith trusts may change, and nothing is printed about it.
+    //
+    // The store is named explicitly, so the test does not depend on what the host has: a
+    // host with no store, or with a broken SSL_CERT_FILE of its own, would print "bundled"
+    // for reasons that have nothing to do with the code.
+    let bundle = std::path::Path::new("/etc/ssl/certs/ca-certificates.crt");
+    if !bundle.exists() {
+        common::skip_optional("no CA bundle at /etc/ssl/certs/ca-certificates.crt");
+        return;
+    }
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["index", "127.0.0.1:1/x/y:1", "127.0.0.1:1/x/y:1-amd64"])
+        .env("SSL_CERT_FILE", bundle)
+        .env_remove("SSL_CERT_DIR")
+        .output()
+        .expect("failed to run scratchsmith binary");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(!stderr.contains("bundled"), "{stderr}");
 }
 
 // Kills and reaps a `--watch` child on every exit path. It never exits by itself, so a

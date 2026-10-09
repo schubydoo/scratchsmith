@@ -39,7 +39,10 @@ pub fn push_to_registry(
     )?);
     let endpoint = reference.resolve_registry().to_string();
     let repository = reference.repository().to_string();
-    let client = registry_client(&endpoint)?;
+    let Clients {
+        registry: client,
+        http,
+    } = registry_clients(&endpoint)?;
 
     let built = image::build_image(staged, cfg)?;
     let layers = vec![ImageLayer::oci_v1_gzip(built.layer.gzip, None)];
@@ -52,7 +55,7 @@ pub fn push_to_registry(
         .build()
         .context("tokio runtime for registry push")?;
     let digest_ref = rt.block_on(async {
-        let auth = resolve_auth(plan, &endpoint, &repository).await?;
+        let auth = resolve_auth(plan, &endpoint, &repository, &http).await?;
         // The pack report is the single user-facing line (like the other sinks); don't
         // print here too.
         let pushed = client
@@ -141,14 +144,17 @@ pub fn push_index(target: &str, sources: &[String]) -> Result<IndexOutcome> {
     )?);
     let endpoint = target_ref.resolve_registry().to_string();
     let repository = target_ref.repository().to_string();
-    let client = registry_client(&endpoint)?;
+    let Clients {
+        registry: client,
+        http,
+    } = registry_clients(&endpoint)?;
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("tokio runtime for the index push")?;
     rt.block_on(async {
-        let auth = resolve_auth(plan, &endpoint, &repository).await?;
+        let auth = resolve_auth(plan, &endpoint, &repository, &http).await?;
         let mut children = Vec::with_capacity(source_refs.len());
         for (source, r) in &source_refs {
             children.push(fetch_child(&client, r, &auth, source).await?);
@@ -438,14 +444,12 @@ async fn resolve_auth(
     plan: CredentialPlan,
     endpoint: &str,
     repository: &str,
+    http: &reqwest::Client,
 ) -> Result<RegistryAuth> {
     match plan {
         CredentialPlan::Ready(auth) => Ok(auth),
         CredentialPlan::IdentityToken(token) => {
-            let http = reqwest::Client::builder()
-                .build()
-                .context("building the HTTP client for the identity-token exchange")?;
-            let access = exchange_identity_token(&http, endpoint, repository, &token).await?;
+            let access = exchange_identity_token(http, endpoint, repository, &token).await?;
             Ok(RegistryAuth::Bearer(access))
         }
     }
@@ -561,7 +565,14 @@ fn registry_scheme(registry: &str) -> &'static str {
     }
 }
 
-/// Build the oci-client for `endpoint`, reporting a failure instead of dying on it.
+/// The two HTTP clients a registry command uses: oci-client for the registry protocol, and a
+/// plain one for the identity-token exchange that oci-client cannot do.
+struct Clients {
+    registry: Client,
+    http: reqwest::Client,
+}
+
+/// Build both clients for `endpoint`, reporting a failure instead of dying on it.
 ///
 /// NOT `Client::new`. That swallows the builder error, logs it through `log` (which this CLI
 /// installs no subscriber for, so it goes nowhere), and falls back to `Client::default()` —
@@ -569,18 +580,126 @@ fn registry_scheme(registry: &str) -> &'static str {
 /// no CA certificate store, which is most minimal containers and every `FROM scratch` image,
 /// `scratchsmith index` died with SIGSEGV and no message. `try_from` is the same construction
 /// with the error handed back.
-fn registry_client(endpoint: &str) -> Result<Client> {
-    Client::try_from(ClientConfig {
-        protocol: registry_protocol(endpoint),
-        ..Default::default()
-    })
+///
+/// The system trust store comes first, so a corporate CA and `SSL_CERT_FILE` keep working and
+/// a host that has a store sees no change. Only when that store cannot be used do the clients
+/// fall back to the Mozilla roots compiled into the binary.
+///
+/// Call this BEFORE the tokio runtime starts: the fallback changes the process environment,
+/// which is only sound while this is the one thread.
+fn registry_clients(endpoint: &str) -> Result<Clients> {
+    let build = || -> Result<Clients> {
+        Ok(Clients {
+            registry: Client::try_from(ClientConfig {
+                protocol: registry_protocol(endpoint),
+                ..Default::default()
+            })?,
+            http: reqwest::Client::builder().build()?,
+        })
+    };
+    let system = match build() {
+        Ok(clients) => return Ok(clients),
+        Err(e) => e,
+    };
+
+    // Fail closed when the user chose the store. SSL_CERT_FILE or SSL_CERT_DIR is an explicit
+    // trust decision, often a narrower one (a single corporate CA). Widening it to Mozilla's
+    // whole set because the path is wrong or the file is empty would be the opposite of what
+    // they asked for, so the bundled roots are only for a host that configured nothing.
+    if let Some(var) = explicit_trust_store(|v| std::env::var_os(v).is_some()) {
+        return Err(system).with_context(|| {
+            format!(
+                "building the registry client for {endpoint}; {var} is set, so scratchsmith \
+                 does not fall back to its bundled CA roots. Fix what it points at, or unset it"
+            )
+        });
+    }
+
+    // WORKAROUND for oci-client 0.18.0, to drop once upstream is fixed (no issue is filed
+    // yet). The direct route is `ClientConfig::tls_certs_only`, and it cannot work: after
+    // `TryFrom<ClientConfig>` builds that client, its `..Default::default()` builds a second,
+    // throwaway `reqwest::Client::default()`, which panics on an empty system store. The one
+    // input that default client obeys is `SSL_CERT_FILE`, so the bundled roots go to a PEM
+    // file and the variable points at it while both clients are built. The roots are read
+    // at build time, so the variable is restored and the file closed right after.
+    //
+    // The file is a memfd, reached through /proc: the host this path exists for is a FROM
+    // scratch container, which has no /tmp and may be read-only.
+    let memfd = rustix::fs::memfd_create("scratchsmith-ca-roots", rustix::fs::MemfdFlags::CLOEXEC)
+        .context("creating an in-memory file for the bundled CA roots")?;
+    let mut pem = std::fs::File::from(memfd);
+    std::io::Write::write_all(&mut pem, bundled_roots_pem().as_bytes())
+        .context("writing the bundled CA roots")?;
+    let pem_path = std::path::PathBuf::from(format!(
+        "/proc/self/fd/{}",
+        std::os::fd::AsRawFd::as_raw_fd(&pem)
+    ));
+    let clients = {
+        let _restore = EnvOverride::set("SSL_CERT_FILE", &pem_path);
+        build()
+    }
     .with_context(|| {
         format!(
-            "building the registry client for {endpoint}; if this names CA certificates, the \
-             environment has no trust store (a FROM scratch or distroless image), so install \
-             ca-certificates or set SSL_CERT_FILE"
+            "building the registry client for {endpoint} with the bundled CA roots, after the \
+             system trust store failed ({system:#}). The bundled roots are read through /proc, \
+             so they need it mounted; otherwise install ca-certificates or set SSL_CERT_FILE"
         )
-    })
+    })?;
+    // A supply-chain tool must not change whom it trusts in silence.
+    eprintln!(
+        "warning: the system CA trust store could not be used ({system:#}), so TLS uses the \
+         Mozilla root certificates bundled with scratchsmith. Set SSL_CERT_FILE to use your own."
+    );
+    Ok(clients)
+}
+
+// The variable that names the user's own trust store, if one is set. `is_set` is a parameter
+// so the rule is testable without touching the process environment.
+fn explicit_trust_store(is_set: impl Fn(&str) -> bool) -> Option<&'static str> {
+    ["SSL_CERT_FILE", "SSL_CERT_DIR"]
+        .into_iter()
+        .find(|var| is_set(var))
+}
+
+// Mozilla's root set as one PEM bundle, the format `SSL_CERT_FILE` takes.
+fn bundled_roots_pem() -> String {
+    use base64::Engine;
+    let mut pem = String::new();
+    for der in webpki_root_certs::TLS_SERVER_ROOT_CERTS {
+        pem.push_str("-----BEGIN CERTIFICATE-----\n");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(der);
+        for line in b64.as_bytes().chunks(64) {
+            // Base64 output is ASCII, so each 64-byte chunk is valid UTF-8.
+            pem.push_str(std::str::from_utf8(line).expect("base64 is ASCII"));
+            pem.push('\n');
+        }
+        pem.push_str("-----END CERTIFICATE-----\n");
+    }
+    pem
+}
+
+// Sets one environment variable and puts the old state back on drop, whether that was a
+// value or no variable at all.
+struct EnvOverride {
+    key: &'static str,
+    old: Option<std::ffi::OsString>,
+}
+
+impl EnvOverride {
+    fn set(key: &'static str, value: &std::path::Path) -> Self {
+        let old = std::env::var_os(key);
+        std::env::set_var(key, value);
+        EnvOverride { key, old }
+    }
+}
+
+impl Drop for EnvOverride {
+    fn drop(&mut self) {
+        match &self.old {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
 }
 
 // Plain-HTTP for a localhost registry (matching Docker's insecure-localhost default),
@@ -823,9 +942,82 @@ mod tests {
                 CredentialPlan::IdentityToken("refresh-xyz".into()),
                 &endpoint,
                 repository,
+                &reqwest::Client::new(),
             )
             .await
         })
+    }
+
+    #[test]
+    fn the_bundled_roots_round_trip_through_pem() {
+        // The PEM is what the platform verifier reads back through SSL_CERT_FILE, so every
+        // root must survive the encoding, byte for byte.
+        let pem = bundled_roots_pem();
+        let roots = webpki_root_certs::TLS_SERVER_ROOT_CERTS;
+        assert!(
+            roots.len() > 50,
+            "a real root set, not a stub: {}",
+            roots.len()
+        );
+        assert_eq!(
+            pem.matches("-----BEGIN CERTIFICATE-----").count(),
+            roots.len()
+        );
+
+        use base64::Engine;
+        let decoded: Vec<Vec<u8>> = pem
+            .split("-----END CERTIFICATE-----\n")
+            .filter(|block| !block.is_empty())
+            .map(|block| {
+                let body: String = block.lines().filter(|l| !l.starts_with("-----")).collect();
+                assert!(
+                    block.lines().all(|l| l.len() <= 64),
+                    "PEM lines are 64 wide"
+                );
+                base64::engine::general_purpose::STANDARD
+                    .decode(body)
+                    .unwrap()
+            })
+            .collect();
+        let original: Vec<Vec<u8>> = roots.iter().map(|der| der.to_vec()).collect();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn an_explicit_trust_store_is_either_variable() {
+        assert_eq!(explicit_trust_store(|_| false), None);
+        assert_eq!(
+            explicit_trust_store(|v| v == "SSL_CERT_FILE"),
+            Some("SSL_CERT_FILE")
+        );
+        assert_eq!(
+            explicit_trust_store(|v| v == "SSL_CERT_DIR"),
+            Some("SSL_CERT_DIR")
+        );
+        assert_eq!(explicit_trust_store(|_| true), Some("SSL_CERT_FILE"));
+    }
+
+    #[test]
+    fn env_override_puts_back_a_value_and_an_absence() {
+        // Names no other test or library reads, so parallel tests cannot collide.
+        let set = "SCRATCHSMITH_TEST_ENV_OVERRIDE_SET";
+        std::env::set_var(set, "before");
+        {
+            let _o = EnvOverride::set(set, std::path::Path::new("/during"));
+            assert_eq!(std::env::var_os(set).unwrap(), "/during");
+        }
+        assert_eq!(std::env::var_os(set).unwrap(), "before");
+        std::env::remove_var(set);
+
+        let unset = "SCRATCHSMITH_TEST_ENV_OVERRIDE_UNSET";
+        {
+            let _o = EnvOverride::set(unset, std::path::Path::new("/during"));
+            assert!(std::env::var_os(unset).is_some());
+        }
+        assert!(
+            std::env::var_os(unset).is_none(),
+            "an absent variable stays absent"
+        );
     }
 
     #[test]
@@ -834,6 +1026,7 @@ mod tests {
             CredentialPlan::Ready(RegistryAuth::Anonymous),
             "ghcr.io",
             "owner/img",
+            &reqwest::Client::new(),
         ))
         .expect("a ready credential needs no network");
         assert!(matches!(auth, RegistryAuth::Anonymous));
@@ -939,6 +1132,7 @@ mod tests {
             CredentialPlan::IdentityToken("refresh-xyz".into()),
             "127.0.0.1:1",
             "owner/img",
+            &reqwest::Client::new(),
         ))
         .expect_err("an unreachable registry must error");
         assert!(format!("{err:#}").contains("probing"));
