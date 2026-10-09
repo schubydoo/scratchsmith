@@ -867,6 +867,11 @@ file</strong>.</p>
 <td>Name-service (NSS) modules to stage for glibc name lookups: <code>files</code>, <code>dns</code>, or <code>none</code> (list). Fewer modules trim CVE surface. A mode without <code>files</code> also drops <code>/etc/passwd</code> and <code>/etc/group</code>, which glibc reads through the <code>files</code> module. Default: <code>files</code> and <code>dns</code>.</td>
 </tr>
 <tr>
+<td><code>packages</code></td>
+<td><code>--packages</code></td>
+<td>Where to record the distribution packages that own the bundled files: <code>report</code>, <code>sbom</code>, <code>image</code>, or <code>none</code> (list). Default: <code>report</code>. <code>sbom</code> shows the packages to <code>--sbom</code> and <code>--scan</code>. <code>image</code> adds package records and <code>/etc/os-release</code> to the image. Needs a dpkg host: with <code>sbom</code> or <code>image</code> on another host, the pack fails.</td>
+</tr>
+<tr>
 <td><code>deny</code></td>
 <td><code>--deny</code></td>
 <td>If this library ships, the pack fails (list). Resolved libraries, the loader, and NSS modules are all in scope, matched by soname or staged file name. This is a CI policy gate. Read sonames from <code>scratchsmith graph</code>.</td>
@@ -924,18 +929,19 @@ file</strong>.</p>
 <a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="n">symlinks</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"copy-all"</span>
 <a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="n">include</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libnss_myhostname.so.2"</span><span class="p">]</span>
 <a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="n">nss</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"files"</span><span class="p">,</span><span class="w"> </span><span class="s2">"dns"</span><span class="p">]</span>
-<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="n">deny</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libssl.so.3"</span><span class="p">]</span>
-<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="n">require</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libseccomp.so.2"</span><span class="p">]</span>
-<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
-<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="n">max-size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50MB"</span>
-<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"docker"</span>
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="n">packages</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"report"</span><span class="p">,</span><span class="w"> </span><span class="s2">"sbom"</span><span class="p">]</span>
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="n">deny</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libssl.so.3"</span><span class="p">]</span>
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="n">require</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libseccomp.so.2"</span><span class="p">]</span>
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
+<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="n">max-size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50MB"</span>
+<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"docker"</span>
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w">                 </span><span class="c1"># binary + all keys come from the file</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:dev<span class="w"> </span>./other<span class="w">   </span><span class="c1"># CLI overrides binary + push</span>
 </code></pre></div>
-<p>The delivery sinks <code>--oci-archive &lt;file&gt;</code> and <code>--no-build</code> / <code>--output &lt;dir&gt;</code>, and the display-only
-<code>--format</code>, stay command-line-only. They are not config keys.</p>
+<p>The delivery sinks <code>--oci-archive &lt;file&gt;</code> and <code>--no-build</code> / <code>--output &lt;dir&gt;</code>, the display-only
+<code>--format</code>, and <code>--watch</code> stay command-line-only. They are not config keys.</p>
 <h2 id="profiles">Profiles<a class="headerlink" href="#profiles" title="Permanent link">&para;</a></h2>
 <p>Group keys under <code>[profile.&lt;name&gt;]</code> and pick one with <code>--profile &lt;name&gt;</code> (which requires
 <code>--config</code>). A profile <strong>layers over the base config</strong>, so shared keys live at the top level and
