@@ -1283,6 +1283,9 @@ see them. The host knows which package owns each of those paths. <code>--package
 </tbody>
 </table>
 <p>The default is <code>report</code>. The default changes no SBOM, no scan and no image.</p>
+<p><code>sbom</code> needs a reader. If neither <code>--sbom</code> nor <code>--scan</code> is on, nothing reads the records.
+Scratchsmith then turns that output off, skips its lookup, and prints a warning. The pack does
+not fail.</p>
 <p>The text report does not show the list. So a pack with the text report, and with no <code>--packages</code>
 value and no <code>packages</code> key, skips the lookup. To run the lookup with the text report, name the
 outputs on the command line or in the configuration file.</p>
@@ -1394,8 +1397,8 @@ advisory.</p>
   give two digests. The pack prints a warning. The <code>report</code> and <code>sbom</code> outputs are not
   affected.</li>
 <li>The records need an rpm that has <code>rpmdb --exportdb</code>. rpm 4.11, on CentOS 7 and Amazon
-  Linux 2, does not have it. On those hosts the <code>sbom</code> and <code>image</code> outputs fail, and <code>report</code>
-  works.</li>
+  Linux 2, does not have it. On those hosts <code>report</code> works and the <code>image</code> output fails. If
+  <code>--sbom</code> or <code>--scan</code> is on, the <code>sbom</code> output fails too.</li>
 <li>If you add a file with <code>--add-file</code> at a path that a record needs, the pack fails.
   Scratchsmith does not replace a file that you added.</li>
 </ul>
@@ -1419,13 +1422,21 @@ depends on what you asked for:</p>
 <td><code>packages</code> is <code>null</code>, with a warning</td>
 </tr>
 <tr>
-<td><code>--packages</code> with <code>sbom</code> or <code>image</code></td>
-<td>The pack fails. Scratchsmith does not ship an SBOM or an image without the data that you asked for</td>
+<td><code>--packages</code> with <code>image</code></td>
+<td>The pack fails. Scratchsmith does not ship an image without the data that you asked for</td>
+</tr>
+<tr>
+<td><code>--packages</code> with <code>sbom</code>, and <code>--sbom</code> or <code>--scan</code></td>
+<td>The pack fails. Scratchsmith does not ship an SBOM without the data that you asked for</td>
+</tr>
+<tr>
+<td><code>--packages</code> with <code>sbom</code>, and neither <code>--sbom</code> nor <code>--scan</code></td>
+<td>The pack works and warns. Nothing reads the records, so scratchsmith does not ask for them</td>
 </tr>
 </tbody>
 </table>
-<p>If you asked for <code>sbom</code> or <code>image</code> and scratchsmith cannot write the records, the pack also
-fails.</p>
+<p>If scratchsmith needs the records for one of those outputs and cannot write them, the pack
+also fails.</p>
 <p><code>scratchsmith doctor</code> tells you before you pack. On an rpm host that cannot write the records,
 the <code>rpm</code> row starts with <code>warn</code> and names the outputs that fail.</p>
 <h2 id="trim-the-nss-modules">Trim the NSS modules<a class="headerlink" href="#trim-the-nss-modules" title="Permanent link">&para;</a></h2>
