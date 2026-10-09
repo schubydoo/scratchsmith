@@ -33,6 +33,11 @@ no Docker daemon):
 scratchsmith pack --oci-archive ./app.oci.tar ./app
 ```
 
+Scratchsmith writes the archive to a temporary file beside the target, and then renames it.
+A failed pack never leaves half an archive under the name that you gave. The directory of the
+archive must be writable. A pack that is interrupted can leave one `.scratchsmith-oci-*.tmp`
+file there, which is safe to delete.
+
 Or **push straight to a registry**, with no Docker daemon. Credentials come from your Docker
 configuration, so `docker login` once (for GitHub's `ghcr.io`, a token with `write:packages`):
 
@@ -156,6 +161,8 @@ Each entry names one package and the files in the image that it owns:
 
 - `source` is the source package, which is the name that security advisories use.
 - `type` is `deb` on a dpkg host and `rpm` on an rpm host.
+- On an rpm host, `version` is the version and the release with a hyphen between them, such as
+  `2.34-83.el9.7`. If the package has an epoch, the epoch and a colon come first.
 - `files` are paths in the image. One host file can be in the image two times, as the loader
   is in this example.
 - The lookup covers the binary, the libraries that it needs, the loader, and the NSS modules.
@@ -167,6 +174,9 @@ Each entry names one package and the files in the image that it owns:
   built from that package. This one entry is a convention and not a lookup.
 - A locale from `--locale` is not in the list.
 - A file that no package owns, such as a binary that you built, is not in the list.
+- On a dpkg host, a file whose host path contains `*`, `?`, `[` or `\` is not in the list.
+  `dpkg-query` reads those characters as a pattern, so scratchsmith does not ask about that
+  path, and it prints a warning that names the file.
 - Scratchsmith asks which package owns the path. It does not compare the file's contents with
   the package's. If a file on the host was replaced by hand, the report still names the package.
 
@@ -462,7 +472,8 @@ halfway does not end the watch.
 - `--push`, and a `push` key from the configuration file. A registry is not the place for an
   image from every save.
 - `--no-build`. That sink stages into one directory, and a second pack into the same directory
-  collides with the files from the first.
+  merges with the files from the first. The [Deprecations](deprecations.md#an-output-directory-that-is-not-empty)
+  page has the detail.
 - `--format json`. Each pack prints a text report.
 
 `--watch` is a command-line flag only. It has no key in the configuration file and no input on
@@ -491,14 +502,19 @@ The compiled-in certificates are as new as the scratchsmith release that carries
 certificate store on the host gets updates from the operating system. The compiled-in set
 changes only with a newer scratchsmith release.
 
+Scratchsmith reads the compiled-in certificates through `/proc`. A container runtime mounts
+`/proc` by default. Without it, the command fails and says so.
+
 If `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, scratchsmith never uses the compiled-in
 certificates. If the path that you set gives no certificates, the command fails and names the
 variable.
 
 One subcommand does not run there. `pack` needs ldconfig, strip, and the SBOM tools.
 
-The **`:toolbox`** image bundles the full `pack` toolchain (ldconfig, strip, syft, grype, cosign,
-upx, tini, the docker CLI) on a Wolfi base. With it, `pack` itself runs inside a container:
+The **`:toolbox`** image bundles the `pack` toolchain (ldconfig, strip, syft, grype, cosign,
+upx, tini, the docker CLI) on a Wolfi base. With it, `pack` itself runs inside a container.
+That image has no dpkg and no rpm database, so `--packages` has no data there: `packages` is
+`null`, and the `sbom` and `image` outputs fail.
 
 ```sh
 # Daemonless — no socket needed; write an OCI archive or push straight to a registry.

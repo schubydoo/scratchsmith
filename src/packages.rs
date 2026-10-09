@@ -2,7 +2,7 @@
 //!
 //! A scratch image carries libraries copied from the build host and no package database, so
 //! an SBOM of it names almost none of them: syft finds what a binary classifier can guess and
-//! nothing else. The host does know. This module asks dpkg which package owns each file, and
+//! nothing else. The host does know. This module asks dpkg, or rpm through `crate::rpm`, which package owns each file, and
 //! hands that to three places the user can pick from: the JSON report, the SBOM, and the
 //! image itself.
 //!
@@ -46,7 +46,7 @@ pub struct PackagesSelection {
     pub report: bool,
     pub sbom: bool,
     pub image: bool,
-    /// The user named the outputs. A default selection stays quiet on a host with no dpkg;
+    /// The user named the outputs. A default selection stays quiet on a host with no dpkg or rpm;
     /// an explicit one warns, or fails when it asked for records (`needs_records`).
     pub explicit: bool,
 }

@@ -80,6 +80,8 @@ cargo +nightly fuzz run parse_elf_info -- -max_total_time=60
 cargo +nightly fuzz run analyze_hardening -- -max_total_time=60
 cargo +nightly fuzz run unpack -- -max_total_time=60
 cargo +nightly fuzz run registry_parse -- -max_total_time=60
+cargo +nightly fuzz run rpm_headers -- -max_total_time=60
+cargo +nightly fuzz run dpkg_output -- -max_total_time=60
 cargo llvm-cov --test fuzz_corpus_replay -- --ignored
 ```
 

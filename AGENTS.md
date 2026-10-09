@@ -2,7 +2,7 @@
 
 Daemonless supply-chain packager. It takes a prebuilt **dynamic glibc** Linux ELF and
 produces a minimal, non-root `FROM scratch` OCI image with an SBOM and an ELF-hardening
-lint. On `--push` it also signs the image with cosign. Rust CLI. See `README.md` for the
+lint. With `--push --sign` it also signs the image with cosign. Rust CLI. See `README.md` for the
 product story and `CONTRIBUTING.md` for the flow.
 
 ## Critical commands
@@ -20,7 +20,9 @@ product story and `CONTRIBUTING.md` for the flow.
 - `src/image.rs`: reproducible layer/config, plus `docker load` and `write_oci_archive`.
 - `src/registry.rs`: daemonless `--push` via `oci-client`. Docker-config auth includes the identity-token OAuth2 exchange.
 - `src/pack.rs`: orchestration. Delivery goes through a `Sink` enum (`Rootfs`/`DockerLoad`/`OciArchive`/`Push`).
-- `src/supplychain.rs`: SBOM (syft) + image signing/attestation (cosign), shelled out.
+- `src/supplychain.rs`: SBOM (syft), scan (grype) + image signing/attestation (cosign), shelled out.
+- `src/packages.rs` + `src/rpm.rs`: `--packages`, which package owns each bundled file (dpkg, rpm), and the records for the SBOM and the image.
+- `src/watch.rs`: `pack --watch`.
 - `src/{cli,lint,doctor,report,config}.rs` · `tests/`: integration tests.
 
 ## Hard rules
@@ -33,7 +35,7 @@ product story and `CONTRIBUTING.md` for the flow.
 - If `audit · deny` CI fails with a RustSec advisory-db **fetch** error, that is a transient flake. Run `gh run rerun <id> --failed`. It is not a real advisory.
 - **Use `command grep` for repo-wide or negative searches**. The shimmed `grep` silently skips gitignored paths (`scratch/`, `.claude/`), so a plain `grep` cannot prove a negative.
 - All GitHub Actions are **SHA-pinned** (enforced). Renovate auto-merges github-actions minor/patch/digest. Its rules live in the shared `schubydoo/renovate-config` preset, not here.
-- **Fuzz the untrusted-input boundary.** Some `pub fn` items consume untrusted external bytes, such as `resolver::parse_elf_info`, `lint::hardening_from_bytes` and `resolver::resolve_with`. A new one gets a fuzz target added or extended under `fuzz/fuzz_targets/` in the **same PR**. Put token literals in a `fuzz/<target>.dict` for code that branches on specific strings. `fuzz/` is a **detached workspace** that the main build never compiles. So the required **`fuzz harness check`** job (`cargo check` on it) is what catches a fuzz target broken by an API change. The weekly `cflite_cron` report tracks reach. Do not gate on the percentage, because it drifts with the corpus.
+- **Fuzz the untrusted-input boundary.** Some `pub fn` items consume untrusted external bytes, such as `resolver::parse_elf_info`, `lint::hardening_from_bytes`, `resolver::resolve_with`, `rpm::header_names` and `packages::parse_dpkg_output`. A new one gets a fuzz target added or extended under `fuzz/fuzz_targets/` in the **same PR**. Put token literals in a `fuzz/<target>.dict` for code that branches on specific strings. `fuzz/` is a **detached workspace** that the main build never compiles. So the required **`fuzz harness check`** job (`cargo check` on it) is what catches a fuzz target broken by an API change. The weekly `cflite_cron` report tracks reach. Do not gate on the percentage, because it drifts with the corpus.
 - **Do not silently break the v1.0 contract** (`COMPATIBILITY.md`). The stable surfaces are the CLI flags (names/shorts/defaults/`multiple`/enum values), `scratchsmith.toml` keys, `--format json` fields, and exit codes. In a **minor/patch** these change **additively only**. These are **major** changes: removing or renaming a flag or key, dropping a short, changing a default, tightening validation, or removing an enum value. A flag that becomes newly required is **major** too. A **major** change starts with a **deprecation**. Keep the old surface working, warn on **stderr**, and leave the exit code unchanged. Hold that deprecation for at least the rest of the major line, then remove the surface in the next major. The **`cli_surface`** golden test flags any surface change. A needed `BLESS=1` regen is the cue to check that the change is not breaking. The Rust **library API is not a contract** (`cargo-semver-checks` runs informationally only).
 
 ## Workflow preferences

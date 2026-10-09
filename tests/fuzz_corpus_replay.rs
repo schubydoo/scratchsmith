@@ -68,3 +68,11 @@ fn replay_rpm_headers() {
         let _ = scratchsmith::rpm::header_names(&b);
     }
 }
+
+#[test]
+#[ignore = "coverage audit; needs a grown fuzz/corpus"]
+fn replay_dpkg_output() {
+    for b in corpus("dpkg_output") {
+        let _ = scratchsmith::packages::parse_dpkg_output(&String::from_utf8_lossy(&b));
+    }
+}

@@ -35,7 +35,7 @@ file**.
 | `require` | `--require` | If this library does not ship, the pack fails (list). Same scope as `deny`. |
 | `sign` | `--sign` | cosign-sign the pushed image (keyless, by digest). Requires a push target. |
 | `push` | `--push` | Push the image straight to this registry reference, daemonless. |
-| `max-size` | `--max-size` | If the packed image exceeds this size, the pack fails. The packed image is the fully-staged rootfs: payload + NSS includes + runtime extras. Write the size as `12MB`, `512KiB`, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024). |
+| `max-size` | `--max-size` | If the packed image exceeds this size, the pack fails. The packed image is the fully-staged rootfs: payload + NSS includes + runtime extras + added files + locales + the `--packages image` records. Write the size as `12MB`, `512KiB`, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024). |
 | `runtime` | `--runtime` | Container engine for the default load sink and the `--smoke` run: `docker` (default), `podman`, or `nerdctl`. The daemonless sinks (`--oci-archive`, `--push`) never invoke a runtime, so this is ignored there. |
 
 A full config file, and how to run it:

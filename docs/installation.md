@@ -14,7 +14,8 @@ curl -fsSL https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install
 
 Piping to `bash` runs [`install.sh`](https://github.com/schubydoo/scratchsmith/blob/main/install.sh).
 You can read it first. `VERSION` and `BIN_DIR` env vars override the tag and install
-directory. Uninstall with `--uninstall`:
+directory. If a download stalls for 30 seconds, the script stops with an error. It does not
+retry. Uninstall with `--uninstall`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install.sh | bash -s -- --uninstall

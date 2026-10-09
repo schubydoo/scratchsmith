@@ -265,8 +265,8 @@ fn bundled_files(
 // is off, the host has no package database, or the lookup failed.
 //
 // How a host that cannot answer is treated depends on what was asked:
-// - the default selection stays quiet. It is on for every pack, so it must not turn a pack
-//   that worked into one that fails, or nag on a host with neither dpkg nor rpm;
+// - the default selection stays quiet. It is on for every pack with a JSON report, so it must
+//   not turn a pack that worked into one that fails, or nag on a host with neither dpkg nor rpm;
 // - an explicit `report` gets a warning, and the report says `null`;
 // - an explicit `sbom` or `image` FAILS. The user asked for an SBOM or an image that
 //   carries the package data, and shipping one without it would look the same from outside.
