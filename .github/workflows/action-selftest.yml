@@ -228,6 +228,41 @@ jobs:
           [ -n "$ROOTFS" ] || { echo "::error::nss=none pack produced no rootfs — is --nss wired in action.yml?"; exit 1; }
           test ! -e "$ROOTFS/etc/nsswitch.conf" || { echo "::error::nss=none staged an nsswitch.conf — the --nss value did not reach the stager"; exit 1; }
           echo "nss input wired (none staged no nsswitch.conf)"
+      # packages=image keeps the dpkg records in the staged tree, and the default (report) keeps
+      # none. So the records fail this if the input is dropped, and a mangled value fails the
+      # pack, which leaves no rootfs. The runner is Ubuntu, so the host has a dpkg database.
+      - name: Pack with packages=image → rootfs
+        id: packages-image
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          output: ./staged-packages
+          packages: image
+      - name: Assert packages=image kept the package records
+        env:
+          ROOTFS: ${{ steps.packages-image.outputs.rootfs }}
+        run: |
+          set -euo pipefail
+          [ -n "$ROOTFS" ] || { echo "::error::packages=image pack produced no rootfs — is --packages wired in action.yml?"; exit 1; }
+          [ -n "$(ls -A "$ROOTFS/var/lib/dpkg/status.d" 2>/dev/null)" ] || { echo "::error::packages=image staged no package records — the --packages value did not reach the pack"; exit 1; }
+          test -e "$ROOTFS/etc/os-release" || { echo "::error::packages=image staged no os-release"; exit 1; }
+          echo "packages input wired (image kept the records)"
+      # The other direction. The action reads the JSON report, so the default fills `packages`
+      # with a list. `none` must leave it null: a dropped input would still give the list.
+      - name: Pack with packages=none → rootfs
+        id: packages-none
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          output: ./staged-packages-none
+          packages: none
+      - name: Assert packages=none looked nothing up
+        env:
+          REPORT: ${{ steps.packages-none.outputs.report }}
+        run: |
+          set -euo pipefail
+          echo "$REPORT" | jq -e 'has("packages") and .packages == null' >/dev/null || { echo "::error::packages=none still reported packages — the --packages value did not reach the pack"; exit 1; }
+          echo "packages input wired (none reported null)"
       # add-file is the one input that puts a caller-chosen file in the image, so the positive
       # case pins the wiring by itself: drop the input and the asserted paths are simply absent.
       # Two lines exercise the per-line loop — one relocated (SRC:DST), one mirrored (bare SRC).
