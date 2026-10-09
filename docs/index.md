@@ -44,6 +44,7 @@ report, a non-root image, and no Dockerfile, it is equally handy. More:
 - [Usage](usage.md): pack recipes and daemonless output.
 - [GitHub Action](github-action.md): pack in a CI workflow with the composite action.
 - [Configuration](configuration.md): the `scratchsmith.toml` key reference and profiles.
+- [Deprecations](deprecations.md): what a warning means, what ends in 2.0, and what to write instead.
 - [Verifying releases](verifying.md): cosign signatures, SLSA provenance, and the SBOM.
 - [Comparison & limitations](comparison.md): how it compares, and what it does not do.
 - [Architecture](architecture.md): how resolve → stage → assemble works, and the 1.0 stability contract.

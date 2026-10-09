@@ -47,7 +47,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "syft",
         version_args: &["version"],
-        purpose: "SBOM generation (--sbom, v0.2)",
+        purpose: "--sbom (generate the SBOM)",
         hint: "https://github.com/anchore/syft",
     },
     Tool {
@@ -59,7 +59,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "cosign",
         version_args: &["version"],
-        purpose: "image signing (v0.2)",
+        purpose: "--sign (sign the pushed image, attest the SBOM)",
         hint: "https://github.com/sigstore/cosign",
     },
     Tool {
