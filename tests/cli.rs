@@ -836,6 +836,56 @@ esac
 }
 
 #[test]
+fn a_default_text_pack_runs_no_package_lookup() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    // Both package tools are scripts that write a line to a log and answer nothing, and PATH
+    // holds nothing else. Any lookup, and even the probe for a database, leaves a line.
+    let tmp = tempfile::tempdir().unwrap();
+    let tools = tmp.path().join("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let log = tmp.path().join("asked");
+    for name in ["dpkg-query", "rpm"] {
+        let path = tools.join(name);
+        std::fs::write(&path, "#!/bin/sh\necho \"$0 $*\" >> \"$ASKED\"\nexit 1\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let pack = |name: &str, extra: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["pack", "--no-build", "-o"])
+            .arg(tmp.path().join(name))
+            .args(extra)
+            .arg(bin)
+            .env("PATH", &tools)
+            .env("ASKED", &log)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "pack {extra:?}: {stderr}");
+    };
+
+    // The text report prints no package list, so the default has no reader there.
+    pack("text", &[]);
+    assert!(
+        !log.exists(),
+        "a default text pack must not ask a package tool"
+    );
+
+    // The same pack with a reader for the list, and then with the outputs named, does ask.
+    pack("json", &["--format", "json"]);
+    assert!(
+        log.exists(),
+        "a JSON report carries the list, so it must ask"
+    );
+    std::fs::remove_file(&log).unwrap();
+    pack("named", &["--packages", "report"]);
+    assert!(log.exists(), "an explicit --packages report must still ask");
+}
+
+#[test]
 fn a_registry_command_with_a_broken_explicit_ca_store_fails_closed() {
     // SSL_CERT_FILE is the user's own choice of whom to trust. When it yields no roots, the
     // command must fail and name the variable. It must NOT widen trust to the bundled
