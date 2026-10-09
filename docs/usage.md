@@ -121,7 +121,8 @@ see them. The host knows which package owns each of those paths. `--packages` re
 The default is `report`. The default changes no SBOM, no scan and no image.
 
 The text report does not show the list. So a pack with the text report, and with no `--packages`
-value from you, skips the lookup. To run the lookup with the text report, name the outputs.
+value and no `packages` key, skips the lookup. To run the lookup with the text report, name the
+outputs on the command line or in the configuration file.
 
 ```sh
 scratchsmith pack --format json ./app | jq .packages       # default: the report

@@ -171,7 +171,8 @@ pub enum Command {
         )]
         nss: Vec<crate::stager::NssModule>,
         /// Where to record the distribution packages that own the bundled files
-        /// (comma-separated: report, sbom, image; or none). Default: report.
+        /// (comma-separated: report, sbom, image; or none). Default: report, which a text
+        /// report skips.
         #[arg(
             long = "packages",
             value_enum,
