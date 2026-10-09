@@ -509,6 +509,20 @@ fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// The unresolved sonames, joined for an error line.
+///
+/// A soname is a raw `DT_NEEDED` string out of the packed binary, and it can hold any byte
+/// but NUL. Printed as it is, a newline or a terminal escape in one would let the binary
+/// forge a line of scratchsmith's own output, so each is escaped. `missing` itself stays
+/// raw: `--require` and `--deny` match on it.
+pub fn missing_for_display(missing: &[String]) -> String {
+    missing
+        .iter()
+        .map(|soname| soname.escape_debug().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Append `item` to `v` unless already present. A parent can list a soname twice.
 pub(crate) fn push_unique(v: &mut Vec<String>, item: String) {
     if !v.contains(&item) {
@@ -1026,6 +1040,26 @@ mod tests {
         infos.insert(canonical(&exe), elf(&["libghost.so"], &[], &[], None));
         let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
         assert_eq!(res.missing, vec!["libghost.so".to_string()]);
+    }
+
+    #[test]
+    fn missing_sonames_are_escaped_for_display_and_stay_raw_in_the_list() {
+        // A DT_NEEDED entry that does not resolve, holding a newline and a terminal escape.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        touch(&exe);
+        let evil = "libx.so\nerror: forged\x1b[2J";
+        let infos = HashMap::from([(canonical(&exe), elf(&[evil, "libok.so"], &[], &[], None))]);
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        // The list keeps the real soname: `--require` and `--deny` match on it.
+        assert_eq!(res.missing, [evil, "libok.so"]);
+        let shown = missing_for_display(&res.missing);
+        assert!(
+            !shown.contains('\n') && !shown.contains('\x1b'),
+            "{shown:?}"
+        );
+        assert_eq!(shown, "libx.so\\nerror: forged\\u{1b}[2J, libok.so");
     }
 
     #[test]

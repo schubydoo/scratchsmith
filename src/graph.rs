@@ -71,7 +71,10 @@ pub fn check_complete(report: &DepGraphReport) -> Result<()> {
     if report.missing.is_empty() {
         Ok(())
     } else {
-        bail!("unresolved dependencies: {}", report.missing.join(", "));
+        bail!(
+            "unresolved dependencies: {}",
+            resolver::missing_for_display(&report.missing)
+        );
     }
 }
 

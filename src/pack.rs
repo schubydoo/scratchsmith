@@ -197,7 +197,7 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
     if !resolution.missing.is_empty() {
         bail!(
             "cannot pack: unresolved dependencies: {}",
-            resolution.missing.join(", ")
+            resolver::missing_for_display(&resolution.missing)
         );
     }
     clock.timings.resolve_ms = millis(clock.started);

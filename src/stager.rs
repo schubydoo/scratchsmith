@@ -818,7 +818,7 @@ fn stage_files(
     if !resolution.missing.is_empty() {
         bail!(
             "refusing to stage: unresolved dependencies: {}",
-            resolution.missing.join(", ")
+            crate::resolver::missing_for_display(&resolution.missing)
         );
     }
 
