@@ -87,6 +87,47 @@ fn doctor_exits_zero_and_reports_tools() {
 }
 
 #[test]
+fn doctor_says_when_an_rpm_is_too_old_for_the_package_records() {
+    use std::os::unix::fs::PermissionsExt;
+    // Two scripts stand in for rpm, and PATH holds nothing else. `rpmdb --help` is the
+    // question doctor asks: rpm 4.11 (CentOS 7) does not list `--exportdb` there.
+    let doctor_with = |rpmdb_help: &str| {
+        let tmp = tempfile::tempdir().unwrap();
+        for (name, body) in [
+            ("rpm", "echo 'RPM version 4.11.3'".to_string()),
+            ("rpmdb", format!("echo '{rpmdb_help}'")),
+        ] {
+            let path = tmp.path().join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .arg("doctor")
+            .env("PATH", tmp.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "doctor always exits 0");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        stdout
+            .lines()
+            .find(|line| line.split_whitespace().nth(1) == Some("rpm"))
+            .unwrap_or_else(|| panic!("no rpm row: {stdout}"))
+            .to_string()
+    };
+
+    let old = doctor_with("  --rebuilddb   rebuild database");
+    assert!(
+        old.contains("warn") && old.contains("--exportdb") && old.contains("--packages report"),
+        "an rpm with no export option must say what fails and what works: {old}"
+    );
+    let new = doctor_with("  --exportdb    export database to stdout header list");
+    assert!(
+        new.contains("ok") && !new.contains("warn"),
+        "an rpm with the export option is a plain ok row: {new}"
+    );
+}
+
+#[test]
 fn pack_of_a_missing_binary_fails_cleanly() {
     // A nonexistent path fails at resolution with a non-zero exit and a real message,
     // without touching Docker.

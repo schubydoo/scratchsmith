@@ -222,6 +222,9 @@ depends on what you asked for:
 If you asked for `sbom` or `image` and scratchsmith cannot write the records, the pack also
 fails.
 
+`scratchsmith doctor` tells you before you pack. On an rpm host that cannot write the records,
+the `rpm` row starts with `warn` and names the outputs that fail.
+
 ## Trim the NSS modules
 
 glibc loads name-service (NSS) modules at runtime to resolve names: hostnames to IP addresses,
