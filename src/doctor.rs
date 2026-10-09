@@ -95,7 +95,7 @@ const TOOLS: &[Tool] = &[
         name: "rpm",
         version_args: &["--version"],
         purpose: "--packages on an rpm host (Fedora, RHEL and their relatives)",
-        hint: "present on rpm-based hosts; a host with neither gets no package data, and --packages sbom or image fails there",
+        hint: "present on rpm-based hosts; a host with neither gets no package data, and --packages image fails there, as does sbom with --sbom or --scan",
     },
 ];
 
@@ -170,7 +170,8 @@ fn rpm_records_limit(rpmdb_help: Option<impl AsRef<str>>) -> Option<&'static str
     let has_export = rpmdb_help.is_some_and(|help| help.as_ref().contains("--exportdb"));
     (!has_export).then_some(
         "no `rpmdb --exportdb` here (an rpm too old for it, or no `rpmdb` on PATH), so \
-         `--packages sbom` and `--packages image` fail; `--packages report` works",
+         `--packages image` fails, as does `--packages sbom` with `--sbom` or `--scan`; \
+         `--packages report` works",
     )
 }
 

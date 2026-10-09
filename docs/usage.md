@@ -129,6 +129,10 @@ see them. The host knows which package owns each of those paths. `--packages` re
 
 The default is `report`. The default changes no SBOM, no scan and no image.
 
+`sbom` needs a reader. If neither `--sbom` nor `--scan` is on, nothing reads the records.
+Scratchsmith then turns that output off, skips its lookup, and prints a warning. The pack does
+not fail.
+
 The text report does not show the list. So a pack with the text report, and with no `--packages`
 value and no `packages` key, skips the lookup. To run the lookup with the text report, name the
 outputs on the command line or in the configuration file.
@@ -221,8 +225,8 @@ The records depend on the package manager of the build host:
   give two digests. The pack prints a warning. The `report` and `sbom` outputs are not
   affected.
 - The records need an rpm that has `rpmdb --exportdb`. rpm 4.11, on CentOS 7 and Amazon
-  Linux 2, does not have it. On those hosts the `sbom` and `image` outputs fail, and `report`
-  works.
+  Linux 2, does not have it. On those hosts `report` works and the `image` output fails. If
+  `--sbom` or `--scan` is on, the `sbom` output fails too.
 - If you add a file with `--add-file` at a path that a record needs, the pack fails.
   Scratchsmith does not replace a file that you added.
 
@@ -235,10 +239,12 @@ depends on what you asked for:
 |---|---|
 | Nothing (the default) | `packages` is `null`. No warning |
 | `--packages report` | `packages` is `null`, with a warning |
-| `--packages` with `sbom` or `image` | The pack fails. Scratchsmith does not ship an SBOM or an image without the data that you asked for |
+| `--packages` with `image` | The pack fails. Scratchsmith does not ship an image without the data that you asked for |
+| `--packages` with `sbom`, and `--sbom` or `--scan` | The pack fails. Scratchsmith does not ship an SBOM without the data that you asked for |
+| `--packages` with `sbom`, and neither `--sbom` nor `--scan` | The pack works and warns. Nothing reads the records, so scratchsmith does not ask for them |
 
-If you asked for `sbom` or `image` and scratchsmith cannot write the records, the pack also
-fails.
+If scratchsmith needs the records for one of those outputs and cannot write them, the pack
+also fails.
 
 `scratchsmith doctor` tells you before you pack. On an rpm host that cannot write the records,
 the `rpm` row starts with `warn` and names the outputs that fail.

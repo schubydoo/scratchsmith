@@ -102,8 +102,8 @@ inputs:
     description: >-
       Where to record the distribution packages that own the bundled files, comma-separated
       (`report`, `sbom`, `image`, or `none`). `sbom` shows them to `sbom` and `scan`. `image`
-      keeps the package records in the image. `sbom` does nothing unless the `sbom` or the
-      `scan` input is on. Empty keeps the default (`report`).
+      keeps the package records in the image. `sbom` does nothing, and warns, unless the `sbom` or
+      the `scan` input is on. Empty keeps the default (`report`).
     required: false
     default: ""
   entrypoint:

@@ -337,6 +337,31 @@ fn lookup_owners(
     }
 }
 
+// `--packages sbom` has two readers, syft (`--sbom`) and grype (`--scan`). With neither on,
+// nothing reads the records, so the output is turned off and the pack says so: asking for
+// something and getting nothing must not be quiet. With `sbom` alone that also skips the
+// lookup, whose answer would go nowhere. Not an error: a configuration file can set the
+// output once, for packs that pass `--sbom` only some of the time.
+//
+// Only `sbom` is ever cleared here. The report reads `report` alone, so `report_packages`
+// gives the same answer for this selection and for `opts.packages`.
+fn drop_unread_sbom(
+    mut selection: PackagesSelection,
+    reads_tree: bool,
+    warnings: &mut Vec<String>,
+) -> PackagesSelection {
+    if selection.sbom && !reads_tree {
+        warnings.push(
+            "--packages sbom: neither --sbom nor --scan is on, so nothing reads the package \
+             records and this output does nothing. Add --sbom or --scan, or remove sbom from \
+             --packages"
+                .to_string(),
+        );
+        selection.sbom = false;
+    }
+    selection
+}
+
 // The report's `packages` field. `None` (JSON `null`) is "not reported": the output is off,
 // or the host could not answer. An empty list is a real answer: dpkg was asked, and no
 // package owns any bundled file. A gate must be able to tell the two apart.
@@ -574,10 +599,12 @@ fn finish_staging(
         } else {
             Vec::new()
         };
+    let reads_tree = opts.sbom.is_some() || opts.scan.is_some();
+    let selection = drop_unread_sbom(opts.packages, reads_tree, warnings);
     let found = lookup_owners(
         &bundled,
         &conventions,
-        &opts.packages,
+        &selection,
         packages::manager,
         warnings,
     )?;
@@ -585,7 +612,7 @@ fn finish_staging(
     let added: Vec<PathBuf> = opts.add_files.iter().map(|f| f.dst.clone()).collect();
     // `--packages image`: the records are image content, so they land before the size gate.
     let owners = found.as_ref().filter(|o| !o.packages.is_empty());
-    if let (true, Some(owners)) = (opts.packages.image, owners) {
+    if let (true, Some(owners)) = (selection.image, owners) {
         let records = packages::stage_records(dest, owners, &added)?;
         if records.berkeley_db() {
             warnings.push(
@@ -602,9 +629,9 @@ fn finish_staging(
     // `--packages sbom` without `image`: syft and grype must see the records and the image
     // must not carry them, so they are in the tree only while those two run. The guard
     // removes them on every path out of this function, a failed SBOM included.
-    let reads_tree = opts.sbom.is_some() || opts.scan.is_some();
+    // `drop_unread_sbom` turned `sbom` off already when neither of the two runs.
     let _records = match owners {
-        Some(owners) if opts.packages.sbom && !opts.packages.image && reads_tree => {
+        Some(owners) if selection.sbom && !selection.image => {
             Some(packages::stage_records(dest, owners, &added)?)
         }
         _ => None,
@@ -932,6 +959,40 @@ mod tests {
             report_packages(&select(&[Image]), Some(Owners::default())),
             None
         );
+    }
+
+    #[test]
+    fn an_sbom_output_with_no_reader_is_dropped_with_a_warning() {
+        use crate::packages::PackagesOutput::{Image, Report, Sbom};
+        let select = |outputs: &[_]| PackagesSelection::from_outputs(outputs).unwrap();
+        let drop = |selection, reads_tree| {
+            let mut warnings = Vec::new();
+            (
+                drop_unread_sbom(selection, reads_tree, &mut warnings),
+                warnings,
+            )
+        };
+
+        // Neither syft nor grype runs: `sbom` goes, and with it the only reason to look up.
+        let (kept, warnings) = drop(select(&[Sbom]), false);
+        assert!(!kept.any() && !kept.needs_records());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("--packages sbom") && warnings[0].contains("--scan"));
+        // The other outputs are kept as they were.
+        let (kept, warnings) = drop(select(&[Report, Sbom, Image]), false);
+        assert!(kept.report && kept.image && !kept.sbom);
+        assert_eq!(warnings.len(), 1);
+
+        // A reader is on, or `sbom` was not asked for: nothing changes and nothing is said.
+        for (selection, reads_tree) in [
+            (select(&[Report, Sbom]), true),
+            (select(&[Report, Image]), false),
+            (PackagesSelection::default(), false),
+        ] {
+            let (kept, warnings) = drop(selection, reads_tree);
+            assert_eq!(kept, selection);
+            assert!(warnings.is_empty(), "{warnings:?}");
+        }
     }
 
     fn resolution(sonames: &[&str]) -> resolver::Resolution {
