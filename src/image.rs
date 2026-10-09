@@ -115,12 +115,19 @@ pub fn write_oci_archive(
         ar.finish().context("finishing OCI archive")
     };
 
-    // A destination that exists and is not a regular file (/dev/stdout, a FIFO, a symlink) is
-    // written straight into, as before: there is nothing to replace, or the link is the
-    // user's own indirection to keep.
+    // A destination that exists and is a stream or a link (/dev/stdout, a FIFO, a symlink)
+    // is written straight into, as before: there is nothing to replace, or the link is the
+    // user's own indirection to keep. A directory is not a stream, so it falls through and
+    // fails at the rename with the path in the message.
     let existing = out.symlink_metadata().ok();
-    if existing.as_ref().is_some_and(|m| !m.is_file()) {
-        return write(&std::fs::File::create(out)?);
+    if existing
+        .as_ref()
+        .is_some_and(|m| !m.is_file() && !m.is_dir())
+    {
+        return std::fs::File::create(out)
+            .map_err(anyhow::Error::from)
+            .and_then(|file| write(&file))
+            .with_context(|| format!("writing the OCI archive {}", out.display()));
     }
 
     // Otherwise write a sibling file and rename it over the destination, so a reader never
@@ -145,10 +152,11 @@ pub fn write_oci_archive(
     write(tmp.as_file())?;
     // Replacing an archive must not loosen it: the in-place write kept the old file's mode,
     // so carry it over. (Its owner cannot be carried over without privilege.)
-    if let Some(old) = &existing {
+    if let Some(old) = existing.as_ref().filter(|m| m.is_file()) {
         tmp.as_file().set_permissions(old.permissions())?;
     }
-    // On any error above or here, dropping `tmp` removes the sibling.
+    // On any error above or here, dropping `tmp` removes the sibling. A signal does not: an
+    // interrupted pack can leave one `.scratchsmith-oci-*.tmp` beside the archive.
     tmp.persist(out)
         .with_context(|| format!("moving the OCI archive into place at {}", out.display()))?;
     Ok(())
@@ -727,8 +735,9 @@ mod tests {
         std::fs::remove_file(&fresh).unwrap();
         std::fs::remove_file(&plain).unwrap();
 
-        // A failed write leaves no sibling either. A directory where the destination should
-        // be makes the final rename fail after the whole archive is written.
+        // A failed write leaves no sibling either. A non-empty directory where the
+        // destination should be takes the replace path, and the final rename fails after
+        // the whole archive is written to the sibling.
         let blocked = dir.join("blocked.tar");
         std::fs::create_dir(&blocked).unwrap();
         std::fs::write(blocked.join("keep"), b"").unwrap();
@@ -752,7 +761,9 @@ mod tests {
             Path::new("/dev/null"),
         )
         .expect("a character device must be written in place");
-        assert!(Path::new("/dev/null").symlink_metadata().is_ok());
+        // If the stream check ever stopped matching a device, the write would rename a
+        // regular file over it. Still a character device means it did not.
+        assert!(!Path::new("/dev/null").symlink_metadata().unwrap().is_file());
     }
 
     #[test]
