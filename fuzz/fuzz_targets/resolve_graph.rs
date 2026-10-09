@@ -173,5 +173,28 @@ fuzz_target!(|scn: Scenario| {
 
     let sysroot = Sysroot::new(root);
     let includes: Vec<String> = scn.includes.into_iter().take(8).collect();
-    let _ = resolve_with(&exe, &sysroot, &includes, &MapSource { infos, unreadable });
+    let Ok(resolution) = resolve_with(&exe, &sysroot, &includes, &MapSource { infos, unreadable })
+    else {
+        return;
+    };
+    // A warning quotes strings that came out of the packed binary and is printed to the
+    // user's terminal as it is. None may carry a character that breaks or reorders a line: a
+    // raw newline or escape would let the input forge a line of scratchsmith's own output.
+    // The unit test checks one input; this checks every one the engine finds.
+    //
+    // What this really exercises is the search-path entry in the `$PLATFORM` warning, which
+    // is an arbitrary `String`. A FILE NAME in a warning is not exercised: every name here
+    // passes `safe_name`, so the escaping of paths rests on the unit tests alone.
+    //
+    // `is_control` is the Cc category only. The line and paragraph separators and the
+    // bidirectional overrides are not in it, and each one also breaks or reverses a line.
+    let breaks_a_line = |c: char| {
+        c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}')
+    };
+    for warning in &resolution.warnings {
+        assert!(
+            !warning.chars().any(breaks_a_line),
+            "a warning carries a character that breaks a line: {warning:?}"
+        );
+    }
 });

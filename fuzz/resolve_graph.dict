@@ -13,3 +13,9 @@
 ".so"
 "ld-linux-x86-64.so.2"
 "ld-musl-x86_64.so.1"
+# The harness's own loader file. It carries the ELF magic and has no scripted facts, so a
+# DT_NEEDED entry that names it is the one way to reach the "starts like an ELF and cannot be
+# parsed" warning arm in `resolve_with`. `exists()` gives the engine no byte-by-byte feedback
+# on a path, so without these literals that arm stays unreached.
+"ld-fuzz.so.2"
+"/lib64/ld-fuzz.so.2"
