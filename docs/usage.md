@@ -87,7 +87,7 @@ scratchsmith pack --format json --sbom --oci-archive app.tar ./app | jq .timings
 | Field | Phase |
 |---|---|
 | `resolve_ms` | Read the binary and resolve its libraries |
-| `stage_ms` | Build the root filesystem: libraries, loader, NSS, extras, added files, locales, strip and UPX |
+| `stage_ms` | Build the root filesystem: libraries, loader, NSS, extras, added files, locales, strip and UPX, and the package lookup |
 | `sbom_ms` | Generate the SBOM (`--sbom`) |
 | `scan_ms` | Scan for vulnerabilities (`--scan`) |
 | `deliver_ms` | Build the image and load it, write the archive, or push it |
@@ -98,6 +98,97 @@ scratchsmith pack --format json --sbom --oci-archive app.tar ./app | jq .timings
 A phase that did not run is `null`. With `--no-build`, `deliver_ms` is `null`, because no image
 is built. The phases add up to a little less than `total_ms`. The text report does not show the
 timings.
+
+## Name the packages behind the bundled files
+
+Scratchsmith copies libraries from the build host into the image. The image has no package
+database, so an SBOM of it names almost none of those libraries, and a vulnerability scan cannot
+see them. The host knows which package owns each of those paths. `--packages` records that.
+
+`--packages` takes a comma-separated list of the places the data goes:
+
+| Value | Where the data goes |
+|---|---|
+| `report` | A `packages` list in the `--format json` report |
+| `sbom` | The SBOM (`--sbom`) names the packages, and the scan (`--scan`) sees them |
+| `image` | The package records stay in the image, for any scanner that reads the image |
+| `none` | Nowhere. Scratchsmith looks nothing up. `none` must be the only value |
+
+The default is `report`. The default changes no SBOM, no scan and no image.
+
+```sh
+scratchsmith pack --format json ./app | jq .packages       # default: the report
+scratchsmith pack --packages report,sbom --sbom --scan ./app
+scratchsmith pack --packages report,sbom,image --push ghcr.io/you/app:1.0 ./app
+scratchsmith pack --packages none ./app                    # look nothing up
+```
+
+The `sbom` output can make a scan gate fail. With `sbom`, the scan sees packages such as glibc
+and openssl that it did not see before. A pipeline that runs `--scan --scan-fail-on high` can
+pass without `--packages sbom` and fail with it. The vulnerabilities were in the image before.
+The scan did not see them.
+
+### The report
+
+Each entry names one package and the files in the image that it owns:
+
+```json
+{
+  "name": "libc6",
+  "version": "2.41-12+deb13u4",
+  "arch": "amd64",
+  "source": "glibc",
+  "type": "deb",
+  "files": [
+    "/lib64/ld-linux-x86-64.so.2",
+    "/usr/lib/x86_64-linux-gnu/libc.so.6"
+  ]
+}
+```
+
+- `source` is the source package, which is the name that security advisories use.
+- `files` are paths in the image. One host file can be in the image two times, as the loader
+  is in this example.
+- The lookup covers the binary, the libraries that it needs, the loader, and the NSS modules.
+- A file that no package owns, such as a binary that you built, is not in the list.
+- Scratchsmith asks which package owns the path. It does not compare the file's contents with
+  the package's. If a file on the host was replaced by hand, the report still names the package.
+
+The `packages` field is always in the JSON report. Its value tells you what scratchsmith knows:
+
+| Value | Meaning |
+|---|---|
+| A list with entries | The host named these owners |
+| An empty list | The host was asked, and no package owns a bundled file |
+| `null` | Not reported: the `report` output is off, the host has no dpkg database, or the lookup failed |
+
+### The SBOM and the image
+
+For the `sbom` and `image` outputs, scratchsmith writes one record for each package under
+`/var/lib/dpkg/status.d/`, and copies the host's `/etc/os-release`. Syft, grype and other
+scanners read both. The scanner needs `os-release` to know the distribution. Without it, a
+scanner cannot match a package to an advisory.
+
+- With `sbom`, those files are in the staged tree only while the SBOM and the scan run. The
+  image does not contain them.
+- With `image`, they stay, and they count toward `--max-size`. Your image then has an
+  `/etc/os-release` that names the build host's distribution. If you add your own
+  `/etc/os-release` with `--add-file`, scratchsmith keeps yours. An SBOM of that image names
+  the packages too, because the records are in the tree that syft reads.
+
+### Hosts with no dpkg database
+
+This works on a host with a dpkg database, which is Debian, Ubuntu and their relatives. What
+happens on another host depends on what you asked for:
+
+| You set | Result on a host with no dpkg database |
+|---|---|
+| Nothing (the default) | `packages` is `null`. No warning |
+| `--packages report` | `packages` is `null`, with a warning |
+| `--packages` with `sbom` or `image` | The pack fails. Scratchsmith does not ship an SBOM or an image without the data that you asked for |
+
+If you asked for `sbom` or `image` and scratchsmith cannot write the records, the pack also
+fails.
 
 ## Trim the NSS modules
 

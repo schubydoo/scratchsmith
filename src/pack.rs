@@ -2,6 +2,7 @@
 //! This is the glue behind `scratchsmith pack`.
 
 use crate::image::{self, ImageConfig};
+use crate::packages::{self, Owners, Package, PackagesSelection};
 use crate::report::{PackReport, Timings};
 use crate::resolver::{self, Sysroot};
 use crate::stager::{self, AddFile, NssSelection, RuntimeExtras, SizeReport, StagedTree};
@@ -124,6 +125,8 @@ struct StagedRootfs {
     warnings: Vec<String>,
     /// The loader's image path (`PT_INTERP`), or `None` for a static binary.
     interpreter: Option<String>,
+    /// The packages that own the bundled files, when a lookup ran and the host could answer.
+    owners: Option<Owners>,
     clock: Clock,
 }
 
@@ -212,14 +215,118 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
     )?;
     let sizes = stager::strip_and_measure(dest, &tree, &resolution, opts.strip, opts.upx)?;
     let interpreter = resolution.interpreter_path();
+    let owners = lookup_owners(
+        &bundled_files(binary, &tree, &resolution, &default_includes.staged),
+        &opts.packages,
+        packages::dpkg_available(),
+        &mut warnings,
+    )?;
     clock.timings.stage_ms = millis(staging);
     Ok(StagedRootfs {
         tree,
         size: sizes,
         warnings,
         interpreter,
+        owners,
         clock,
     })
+}
+
+// The files whose owner is worth asking for, as `(host path, image path)`: the binary, the
+// resolved libraries, the loader and the NSS modules. The two paths are the same for all
+// but two. The loader is read from its real file and staged at the path PT_INTERP names,
+// and the binary is asked about by its real path and named by its entrypoint.
+fn bundled_files(
+    binary: &Path,
+    tree: &StagedTree,
+    resolution: &resolver::Resolution,
+    staged_includes: &[PathBuf],
+) -> Vec<(PathBuf, PathBuf)> {
+    let host_binary = std::fs::canonicalize(binary).unwrap_or_else(|_| binary.to_path_buf());
+    let mut files = vec![(host_binary, tree.entrypoint.clone())];
+    files.extend(
+        resolution
+            .libs
+            .iter()
+            .map(|lib| (lib.path.clone(), lib.path.clone())),
+    );
+    files.extend(
+        resolution
+            .interpreter
+            .iter()
+            .map(|i| (i.source.clone(), i.image_path.clone())),
+    );
+    // The include report also lists nsswitch.conf, which scratchsmith writes itself.
+    files.extend(
+        staged_includes
+            .iter()
+            .filter(|p| p.to_string_lossy().contains(".so"))
+            .map(|p| (p.clone(), p.clone())),
+    );
+    files
+}
+
+// Ask the host which package owns each bundled file. `None` means "not known": the lookup
+// is off, the host has no dpkg, or the lookup failed.
+//
+// How a host that cannot answer is treated depends on what was asked:
+// - the default selection stays quiet. It is on for every pack, so it must not turn a pack
+//   that worked into one that fails, or nag on a host with no dpkg;
+// - an explicit `report` gets a warning, and the report says `null`;
+// - an explicit `sbom` or `image` FAILS. The user asked for an SBOM or an image that
+//   carries the package data, and shipping one without it would look the same from outside.
+//
+// `dpkg` is a parameter so each of those is testable on any host.
+fn lookup_owners(
+    files: &[(PathBuf, PathBuf)],
+    selection: &PackagesSelection,
+    dpkg: bool,
+    warnings: &mut Vec<String>,
+) -> Result<Option<Owners>> {
+    if !selection.any() {
+        return Ok(None);
+    }
+    let asked: &str = if selection.sbom && selection.image {
+        "sbom,image"
+    } else if selection.image {
+        "image"
+    } else {
+        "sbom"
+    };
+    if !dpkg {
+        if selection.needs_records() {
+            bail!(
+                "--packages {asked} needs a dpkg database to name the packages, and this \
+                 host has none; only Debian-based hosts are supported. Remove {asked} from \
+                 --packages to pack without it"
+            );
+        }
+        if selection.explicit {
+            warnings.push(
+                "--packages: this host has no dpkg database, so the report names no \
+                 packages; only Debian-based hosts are supported"
+                    .to_string(),
+            );
+        }
+        return Ok(None);
+    }
+    match packages::owners(files) {
+        Ok(owners) => Ok(Some(owners)),
+        Err(err) if selection.needs_records() => {
+            Err(err.context(format!("--packages {asked}: the package lookup failed")))
+        }
+        Err(err) => {
+            warnings.push(format!("package lookup failed: {err:#}"));
+            Ok(None)
+        }
+    }
+}
+
+// The report's `packages` field. `None` (JSON `null`) is "not reported": the output is off,
+// or the host could not answer. An empty list is a real answer: dpkg was asked, and no
+// package owns any bundled file. A gate must be able to tell the two apart.
+fn report_packages(selection: &PackagesSelection, owners: Option<Owners>) -> Option<Vec<Package>> {
+    owners.filter(|_| selection.report).map(|o| o.packages)
 }
 
 // Sum the sizes of the staged rootfs's regular files — the uncompressed image content,
@@ -354,6 +461,8 @@ pub struct PackOptions {
     /// Container engine for the docker-load sink and `--smoke` run (`--runtime`). Ignored by
     /// the daemonless sinks (`--oci-archive`, `--push`), which never invoke a runtime.
     pub runtime: crate::image::Runtime,
+    /// Where the owning-package data for the bundled files goes (`--packages`).
+    pub packages: PackagesSelection,
 }
 
 /// Where a pack delivers its result. Every sink shares the resolve → stage pipeline and
@@ -403,6 +512,7 @@ fn finish_staging(
     opts: &PackOptions,
     warnings: &mut Vec<String>,
     timings: &mut Timings,
+    owners: Option<&Owners>,
 ) -> Result<Finished> {
     let staging = Instant::now();
     let extras = stager::stage_runtime_extras(dest, &opts.extras)?;
@@ -413,8 +523,23 @@ fn finish_staging(
     )?);
     stager::stage_locales(dest, &opts.locales)?;
     warnings.extend(locale_env_warning(&opts.locales, &opts.image.env));
+    // `--packages image`: the records are image content, so they land before the size gate.
+    let owners = owners.filter(|o| !o.packages.is_empty());
+    if let (true, Some(owners)) = (opts.packages.image, owners) {
+        packages::stage_records(dest, owners)?.keep();
+    }
     enforce_max_size(dest, opts.max_size)?;
     timings.stage_ms += millis(staging);
+    // `--packages sbom` without `image`: syft and grype must see the records and the image
+    // must not carry them, so they are in the tree only while those two run. The guard
+    // removes them on every path out of this function, a failed SBOM included.
+    let reads_tree = opts.sbom.is_some() || opts.scan.is_some();
+    let _records = match owners {
+        Some(owners) if opts.packages.sbom && !opts.packages.image && reads_tree => {
+            Some(packages::stage_records(dest, owners)?)
+        }
+        _ => None,
+    };
     let (sbom, ms) = timed(|| maybe_sbom(dest, opts.sbom.as_ref()))?;
     timings.sbom_ms = opts.sbom.is_some().then_some(ms);
     let (scan, ms) = timed(|| maybe_scan(dest, sbom.as_deref(), opts.scan.as_ref()))?;
@@ -434,11 +559,17 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
         size,
         mut warnings,
         interpreter,
+        owners,
         mut clock,
     } = build_rootfs(binary, out_dir, opts)?;
     // `extras` is unused here: no image is built, so there is no config to wrap with tini.
-    let Finished { sbom, scan, .. } =
-        finish_staging(out_dir, opts, &mut warnings, &mut clock.timings)?;
+    let Finished { sbom, scan, .. } = finish_staging(
+        out_dir,
+        opts,
+        &mut warnings,
+        &mut clock.timings,
+        owners.as_ref(),
+    )?;
     Ok(PackReport {
         tag: None,
         archive: None,
@@ -453,6 +584,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
         scan,
         signed: None,
         timings: clock.finish(),
+        packages: report_packages(&opts.packages, owners),
     })
 }
 
@@ -470,6 +602,8 @@ struct StagedImage {
     scan: Option<ScanSummary>,
     /// The loader's image path, carried through to every image sink's report.
     interpreter: Option<String>,
+    /// The report's `packages` field, ready to move into it.
+    packages: Option<Vec<Package>>,
     clock: Clock,
 }
 
@@ -481,12 +615,18 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         size,
         mut warnings,
         interpreter,
+        owners,
         mut clock,
     } = build_rootfs(binary, &dest, opts)?;
     // finish_staging generates the SBOM and scan while the staged rootfs still exists (dest is
     // temporary), which is why this call sits here rather than after the image config.
-    let Finished { extras, sbom, scan } =
-        finish_staging(&dest, opts, &mut warnings, &mut clock.timings)?;
+    let Finished { extras, sbom, scan } = finish_staging(
+        &dest,
+        opts,
+        &mut warnings,
+        &mut clock.timings,
+        owners.as_ref(),
+    )?;
 
     // Effective image config: if --init staged tini, wrap the entrypoint so tini is
     // pid 1 and reaps/forwards for the real binary.
@@ -517,6 +657,7 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         sbom,
         scan,
         interpreter,
+        packages: report_packages(&opts.packages, owners),
         clock,
     })
 }
@@ -557,6 +698,7 @@ pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
         interpreter: s.interpreter,
         signed: None,
         timings: s.clock.finish(),
+        packages: s.packages,
     })
 }
 
@@ -583,6 +725,7 @@ fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackR
         interpreter: s.interpreter,
         signed: None,
         timings: s.clock.finish(),
+        packages: s.packages,
     })
 }
 
@@ -621,6 +764,7 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackRep
         interpreter: s.interpreter,
         signed,
         timings: s.clock.finish(),
+        packages: s.packages,
     })
 }
 
@@ -656,6 +800,51 @@ fn image_tag(binary: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_host_that_cannot_name_packages_fails_only_what_asked_for_records() {
+        use crate::packages::PackagesOutput::{Image, None as Off, Report, Sbom};
+        let select = |outputs: &[_]| PackagesSelection::from_outputs(outputs).unwrap();
+        // No dpkg on this "host", whatever the real one has.
+        let lookup = |selection: &PackagesSelection| {
+            let mut warnings = Vec::new();
+            let result = lookup_owners(&[], selection, false, &mut warnings);
+            (result, warnings)
+        };
+
+        // The default is on for every pack: it must not fail one, or say anything.
+        let (result, warnings) = lookup(&PackagesSelection::default());
+        assert!(
+            matches!(result, Ok(None)) && warnings.is_empty(),
+            "{warnings:?}"
+        );
+        // Off is off.
+        let (result, warnings) = lookup(&select(&[Off]));
+        assert!(matches!(result, Ok(None)) && warnings.is_empty());
+        // An explicit report cannot be filled, and says so, and the pack goes on.
+        let (result, warnings) = lookup(&select(&[Report]));
+        assert!(matches!(result, Ok(None)));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        // An SBOM or an image that was asked to carry the data must not ship without it.
+        for (outputs, named) in [
+            (&[Sbom][..], "--packages sbom "),
+            (&[Image][..], "--packages image "),
+            (&[Report, Sbom, Image][..], "--packages sbom,image "),
+        ] {
+            let (result, _) = lookup(&select(outputs));
+            let err = format!("{:#}", result.expect_err("records were asked for"));
+            assert!(err.contains(named) && err.contains("dpkg"), "{err}");
+        }
+
+        // "Not known" and "known to be none" must stay apart in the report.
+        let on = PackagesSelection::default();
+        assert_eq!(report_packages(&on, None), None);
+        assert_eq!(report_packages(&on, Some(Owners::default())), Some(vec![]));
+        assert_eq!(
+            report_packages(&select(&[Image]), Some(Owners::default())),
+            None
+        );
+    }
 
     fn resolution(sonames: &[&str]) -> resolver::Resolution {
         resolver::Resolution {

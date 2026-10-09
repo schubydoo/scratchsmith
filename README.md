@@ -67,6 +67,7 @@ build. It is purpose-built for the hard case and useful for the easy one.
 | Image metadata: labels (`--label`), `HEALTHCHECK` (`--healthcheck`) | ✅ |
 | Configuration file (`scratchsmith.toml`) + named profiles (`--profile`), JSON output (`--format json`) | ✅ |
 | **Pluggable runtime**: `--runtime` (docker / podman / nerdctl) for the default load sink | ✅ |
+| **Package provenance**: `--packages` (name the distribution package behind each bundled library, in the report, the SBOM, or the image) | ✅ |
 | **Watch mode**: `pack --watch` (pack again each time the binary changes) | ✅ |
 | Shell completions: `--completions <bash\|zsh\|fish>` | ✅ |
 | **Signed releases**: amd64 + arm64 binaries, cosign-signed `checksums.txt` + SLSA provenance, signed multi-arch GHCR image | ✅ |

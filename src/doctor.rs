@@ -82,6 +82,14 @@ const TOOLS: &[Tool] = &[
         purpose: "--locale (compile a locale the host has no directory for)",
         hint: "install glibc tools (libc-bin) and the locale sources (locales)",
     },
+    // Absent on every host that is not Debian-based, and that is fine: without it the
+    // package list is empty and the SBOM is as it was.
+    Tool {
+        name: "dpkg-query",
+        version_args: &["--version"],
+        purpose: "--packages (name the package that owns each bundled library)",
+        hint: "present on Debian and Ubuntu; other hosts get no package data",
+    },
 ];
 
 /// One tool's availability.

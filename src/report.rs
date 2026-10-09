@@ -53,7 +53,7 @@ pub struct Timings {
     /// Reading the ELF and resolving its dependency graph.
     pub resolve_ms: u64,
     /// Building the rootfs: libraries, loader, NSS, runtime extras, added files, locales,
-    /// strip and UPX.
+    /// strip and UPX, and the package lookup (`--packages`).
     pub stage_ms: u64,
     /// Generating the SBOM (`--sbom`).
     pub sbom_ms: Option<u64>,
@@ -105,6 +105,11 @@ pub struct PackReport {
     pub signed: Option<String>,
     /// Time per phase. Not shown in the text report.
     pub timings: Timings,
+    /// The distribution packages that own the bundled files (`--packages report`, on by
+    /// default). `None` is "not reported": the output is off, the host has no dpkg
+    /// database, or the lookup failed. An empty list is an answer: dpkg was asked and owns
+    /// none of them. Not shown in the text report.
+    pub packages: Option<Vec<crate::packages::Package>>,
 }
 
 impl PackReport {
@@ -535,6 +540,7 @@ mod tests {
             scan: None,
             signed: None,
             timings: Timings::default(),
+            packages: None,
         }
     }
 
@@ -578,6 +584,7 @@ mod tests {
                 "archive",
                 "entrypoint",
                 "interpreter",
+                "packages",
                 "pushed",
                 "sbom",
                 "scan",
@@ -589,6 +596,20 @@ mod tests {
                 "timings",
                 "warnings",
             ]
+        );
+        // `packages` is null in the sample; its element shape is pinned from the type.
+        let package = serde_json::to_value(crate::packages::Package {
+            name: "libc6".into(),
+            version: "2.41-12".into(),
+            arch: "amd64".into(),
+            source: "glibc".into(),
+            kind: "deb",
+            files: vec!["/usr/lib/x86_64-linux-gnu/libc.so.6".into()],
+        })
+        .unwrap();
+        assert_eq!(
+            sorted_keys(&package),
+            ["arch", "files", "name", "source", "type", "version"]
         );
         assert_eq!(
             sorted_keys(&json["timings"]),
@@ -669,6 +690,7 @@ mod tests {
             scan: None,
             signed: None,
             timings: Timings::default(),
+            packages: None,
         };
         assert!(report.to_text().contains("pushed ghcr.io/you/app:latest"));
     }
@@ -755,6 +777,7 @@ mod tests {
             scan: None,
             signed: None,
             timings: Timings::default(),
+            packages: None,
         };
         assert!(report.to_text().contains("staged to /out/rootfs"));
     }

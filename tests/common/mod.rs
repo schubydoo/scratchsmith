@@ -116,8 +116,8 @@ fn tool_runs(bin: &str, args: &[&str]) -> bool {
 /// - `getent` ships in `libc-bin`, which is `Essential: yes` — the same package as `ldconfig`,
 ///   which `CONTRIBUTING.md` already names as the suite's one hard prerequisite.
 /// - `docker info` answers on the runner.
-/// - `ci.yml` installs `upx-ucl` for the test and coverage jobs, which are the only two jobs
-///   that run the suite.
+/// - `ci.yml` installs `upx-ucl` and `syft` for the test and coverage jobs, which are the
+///   only two jobs that run the suite. (Seven with syft, added for the `--packages` test.)
 ///
 /// A miss is therefore a broken runner rather than a host to tolerate.
 ///

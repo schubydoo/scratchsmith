@@ -1,0 +1,823 @@
+//! Which distribution package each bundled file came from (`--packages`).
+//!
+//! A scratch image carries libraries copied from the build host and no package database, so
+//! an SBOM of it names almost none of them: syft finds what a binary classifier can guess and
+//! nothing else. The host does know. This module asks dpkg which package owns each file, and
+//! hands that to three places the user can pick from: the JSON report, the SBOM, and the
+//! image itself.
+//!
+//! The SBOM and image outputs use one mechanism: distroless-style records under
+//! `var/lib/dpkg/status.d/`, plus the host's `etc/os-release`. syft and every scanner that
+//! reads a Debian image already understand both, in every SBOM format, so nothing here writes
+//! SBOM JSON. The os-release file is not optional: without it syft has no distribution, every
+//! package URL comes out empty, and a scanner has nothing to match on.
+//!
+//! dpkg only. An rpm database is binary, so there is no record to stage for it yet.
+
+use anyhow::{bail, Context, Result};
+use serde::Serialize;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// A place the package data can go, selectable with `--packages` / the `packages` config key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive] // may gain outputs in a minor; not a stable exhaustive library API
+pub enum PackagesOutput {
+    /// A `packages` field in the `--format json` report.
+    Report,
+    /// Name the packages in the SBOM (`--sbom`) and show them to the scan (`--scan`).
+    Sbom,
+    /// Keep the package records in the image, so any scanner that reads it finds them.
+    Image,
+    /// Look nothing up and write nothing. Must be the only value.
+    None,
+}
+
+/// Where the package data goes. Built from `--packages`; the default is the report alone.
+///
+/// The default stops there on purpose. With `sbom`, a scan starts to see the bundled glibc
+/// and openssl, so a `--scan-fail-on` gate that passes today could fail after an upgrade
+/// with nothing changed on the user's side. That is for the user to switch on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackagesSelection {
+    pub report: bool,
+    pub sbom: bool,
+    pub image: bool,
+    /// The user named the outputs. A default selection stays quiet on a host with no dpkg;
+    /// an explicit one warns, or fails when it asked for records (`needs_records`).
+    pub explicit: bool,
+}
+
+impl Default for PackagesSelection {
+    fn default() -> Self {
+        Self {
+            report: true,
+            sbom: false,
+            image: false,
+            explicit: false,
+        }
+    }
+}
+
+impl PackagesSelection {
+    /// Build a selection from the `--packages` values. Empty means the default. A `none`
+    /// value must stand alone; combining it with an output is a usage error.
+    pub fn from_outputs(outputs: &[PackagesOutput]) -> Result<Self> {
+        if outputs.is_empty() {
+            return Ok(Self::default());
+        }
+        if outputs.contains(&PackagesOutput::None) && outputs.len() > 1 {
+            bail!("--packages none cannot be combined with another output");
+        }
+        Ok(Self {
+            report: outputs.contains(&PackagesOutput::Report),
+            sbom: outputs.contains(&PackagesOutput::Sbom),
+            image: outputs.contains(&PackagesOutput::Image),
+            explicit: true,
+        })
+    }
+
+    /// True when any output is on, so the lookup is worth running.
+    pub fn any(&self) -> bool {
+        self.report || self.sbom || self.image
+    }
+
+    /// True when the user asked for records in the SBOM or the image. Only an explicit
+    /// selection can, so a pack that cannot write them fails instead of shipping an SBOM or
+    /// an image that silently lacks what was asked for.
+    pub fn needs_records(&self) -> bool {
+        self.sbom || self.image
+    }
+}
+
+/// One distribution package that owns at least one bundled file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Package {
+    /// The binary package name, e.g. `libc6`.
+    pub name: String,
+    /// The package version exactly as the package manager reports it.
+    pub version: String,
+    /// The package architecture, e.g. `amd64` or `all`.
+    pub arch: String,
+    /// The source package it was built from, e.g. `glibc`. This is the name advisories use.
+    pub source: String,
+    /// The package format: `deb`.
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    /// The files in the image whose host path this package owns, by image path, sorted.
+    /// Ownership is of the path: the bytes are not compared with the package's.
+    pub files: Vec<String>,
+}
+
+/// The result of a lookup: the packages for the report, and each one's database record for
+/// the SBOM and the image.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Owners {
+    pub packages: Vec<Package>,
+    /// `(record file name, dpkg status stanza)`, one per package.
+    records: Vec<(String, String)>,
+}
+
+/// True when this host has a dpkg database to ask.
+pub fn dpkg_available() -> bool {
+    Path::new("/var/lib/dpkg/status").exists()
+        && Command::new("dpkg-query")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+}
+
+/// Ask dpkg which packages own the given files. Each file is `(host path, image path)`: the
+/// host path is what dpkg is asked about, and the image path is what the report names, so
+/// the list joins with the rest of the report. A path no package owns (the user's own
+/// binary, a library under /opt) is simply absent from the result.
+pub fn owners(files: &[(PathBuf, PathBuf)]) -> Result<Owners> {
+    let host_paths: Vec<PathBuf> = files.iter().map(|(host, _)| host.clone()).collect();
+    // One host file can be in the image twice: the loader is staged where PT_INTERP names
+    // it, and again at its real path when libc lists it as a library. Both are named.
+    let mut by_package: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (package, host) in search(&host_paths)? {
+        let image_paths = files
+            .iter()
+            .filter(|(h, _)| h.to_string_lossy() == host)
+            .map(|(_, image)| image.to_string_lossy().into_owned());
+        by_package.entry(package).or_default().extend(image_paths);
+    }
+    if by_package.is_empty() {
+        return Ok(Owners::default());
+    }
+    let names: Vec<String> = by_package.keys().cloned().collect();
+    let qualified = as_strs(&names);
+
+    let shown = dpkg_query(
+        &[
+            "-W",
+            "-f",
+            "${binary:Package}\\t${Package}\\t${Version}\\t${Architecture}\\t${source:Package}\\n",
+        ],
+        &qualified,
+        &[0],
+    )?;
+    let mut packages = parse_show(&shown, &mut by_package);
+    packages.sort_by(|a, b| (&a.name, &a.arch).cmp(&(&b.name, &b.arch)));
+
+    // Keep a record only for a package the report names, so the SBOM and the report cannot
+    // disagree about what is in the image.
+    let mut records = parse_records(&dpkg_query(&["-s"], &qualified, &[0])?)?;
+    records.retain(|(file, _)| {
+        let name = file.split(':').next().unwrap_or(file);
+        packages.iter().any(|p| p.name == name)
+    });
+    Ok(Owners { packages, records })
+}
+
+// `dpkg-query -S` for every path, returning `(qualified package, path as asked)`.
+//
+// A merged-/usr host can know a file under either spelling: the resolver hands over the real
+// path (/usr/lib/...), and an older package lists it as shipped (/lib/...). So a path dpkg
+// does not know under /usr is asked again without the prefix.
+//
+// `-S` reads each argument as a GLOB PATTERN, not a path: `/usr/bin/i?` answers for both
+// /usr/bin/id and /usr/bin/ip. A path with a pattern character is therefore not asked at
+// all (it reads as unowned), and every answer is kept only when it is for a path that was
+// asked, so a package can never enter the report for a file the image does not hold.
+fn search(host_paths: &[PathBuf]) -> Result<Vec<(String, String)>> {
+    let asked: Vec<String> = host_paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .filter(|p| !is_pattern(p))
+        .collect();
+    // Exit 1 is normal: one path with no owner, and every found owner is still printed.
+    let mut found = parse_search(&dpkg_query(&["-S"], &as_strs(&asked), &[0, 1])?);
+    found.retain(|(_, path)| asked.contains(path));
+
+    let retry: Vec<(String, String)> = asked
+        .iter()
+        .filter(|p| !found.iter().any(|(_, path)| path == *p))
+        // The `/usr/` component, not the letters: `/usrlocal/x` is not under /usr.
+        .filter_map(|p| Some((format!("/{}", p.strip_prefix("/usr/")?), p.clone())))
+        // Only where the two spellings are ONE file. On a host that is not merged, /lib/x
+        // and /usr/lib/x are different files, and the owner of one says nothing about the
+        // other: crediting it would put a package in the SBOM that did not supply the file.
+        .filter(|(short, full)| same_file(short, full))
+        .collect();
+    if !retry.is_empty() {
+        let short: Vec<&str> = retry.iter().map(|(short, _)| short.as_str()).collect();
+        for (package, short_path) in parse_search(&dpkg_query(&["-S"], &short, &[0, 1])?) {
+            if let Some((_, full)) = retry.iter().find(|(short, _)| *short == short_path) {
+                found.push((package, full.clone()));
+            }
+        }
+    }
+    Ok(found)
+}
+
+// True when dpkg would read `path` as a pattern and not as one literal path.
+fn is_pattern(path: &str) -> bool {
+    path.contains(['*', '?', '[', '\\'])
+}
+
+// True when both paths resolve to the same real file.
+fn same_file(a: &str, b: &str) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn as_strs(v: &[String]) -> Vec<&str> {
+    v.iter().map(String::as_str).collect()
+}
+
+// Run dpkg-query and return its stdout. `ok` lists the exit codes that are an answer; any
+// other one is an error that carries dpkg's own words, so a broken database is never read
+// as "no packages".
+fn dpkg_query(flags: &[&str], args: &[&str], ok: &[i32]) -> Result<String> {
+    if args.is_empty() {
+        return Ok(String::new());
+    }
+    let out = Command::new("dpkg-query")
+        .args(flags)
+        // `--` so a path can never be read as an option.
+        .arg("--")
+        .args(args)
+        // Parsed below, so the text must not depend on the user's locale.
+        .env("LC_ALL", "C")
+        .output()
+        .context("running dpkg-query")?;
+    if !out.status.code().is_some_and(|code| ok.contains(&code)) {
+        bail!(
+            "dpkg-query {} failed ({}): {}",
+            flags[0],
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+// Parse `dpkg-query -S` output into `(qualified package, path)` pairs.
+//
+// A line is `pkg[:arch][, pkg2[:arch]]: /path`.
+//
+// A diversion needs care. `diversion by X from: /path` (or `local diversion from: /path`)
+// says that the file a package ships at /path was moved aside, and that what sits at /path
+// now came from X, or from the administrator for a local one. The owner lines for /path
+// still list every package that ships it. So for a diverted path only the diverting package
+// keeps the credit, and only if it is an owner too; otherwise nobody does.
+fn parse_search(stdout: &str) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    let mut diverted: BTreeMap<String, Option<String>> = BTreeMap::new();
+    for line in stdout.lines() {
+        if let Some(rest) = line.strip_prefix("diversion by ") {
+            if let Some((diverter, path)) = rest.split_once(" from: /") {
+                diverted.insert(format!("/{path}"), Some(diverter.to_string()));
+            }
+            continue;
+        }
+        if let Some(path) = line.strip_prefix("local diversion from: /") {
+            diverted.insert(format!("/{path}"), None);
+            continue;
+        }
+        if line.contains("diversion ") {
+            continue; // the matching `to:` line
+        }
+        let Some((packages, path)) = line.split_once(": /") else {
+            continue;
+        };
+        for package in packages.split(", ") {
+            if is_package_name(package) {
+                found.push((package.to_string(), format!("/{path}")));
+            }
+        }
+    }
+    found.retain(|(package, path)| match diverted.get(path) {
+        None => true,
+        Some(diverter) => {
+            let name = package.split(':').next().unwrap_or(package);
+            diverter.as_deref() == Some(name)
+        }
+    });
+    found
+}
+
+// Parse the `-W` rows (`binary:Package`, `Package`, `Version`, `Architecture`,
+// `source:Package`) and attach each package's files, keyed by the qualified name `-S` gave.
+fn parse_show(stdout: &str, files: &mut BTreeMap<String, Vec<String>>) -> Vec<Package> {
+    let mut packages = Vec::new();
+    for line in stdout.lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let [qualified, name, version, arch, source] = fields[..] else {
+            continue;
+        };
+        // `-S` qualifies a name with its architecture only for a multi-arch package, and
+        // `binary:Package` follows the same rule, so one of these two is the key.
+        let Some(mut owned) = files
+            .remove(qualified)
+            .or_else(|| files.remove(&format!("{name}:{arch}")))
+            .or_else(|| files.remove(name))
+        else {
+            continue;
+        };
+        owned.sort();
+        owned.dedup();
+        packages.push(Package {
+            name: name.to_string(),
+            version: version.to_string(),
+            arch: arch.to_string(),
+            source: source.to_string(),
+            kind: "deb",
+            files: owned,
+        });
+    }
+    packages
+}
+
+// Split `dpkg-query -s` output into one stanza per package, named for its record file.
+//
+// The name becomes a file name, so it is checked against the characters a Debian package
+// name can hold. Two architectures of one package would share a name; the second keeps its
+// architecture in the file name.
+fn parse_records(stdout: &str) -> Result<Vec<(String, String)>> {
+    let mut records: Vec<(String, String)> = Vec::new();
+    for stanza in stdout
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let field = |key: &str| {
+            stanza
+                .lines()
+                .find_map(|l| l.strip_prefix(key)?.strip_prefix(": "))
+        };
+        let Some(name) = field("Package") else {
+            continue;
+        };
+        if !is_package_name(name) {
+            bail!("dpkg reported a package name that is not one: {name:?}");
+        }
+        // The second architecture of a name is qualified. The architecture goes into the
+        // file name too, so it gets the same character check as the name.
+        let file = if records.iter().any(|(f, _)| f == name) {
+            let arch = field("Architecture").unwrap_or("unknown");
+            if !is_package_name(arch) {
+                bail!("dpkg reported an architecture that is not one: {arch:?}");
+            }
+            format!("{name}:{arch}")
+        } else {
+            name.to_string()
+        };
+        // The same name and architecture twice is one package reported twice.
+        if records.iter().any(|(f, _)| *f == file) {
+            continue;
+        }
+        records.push((file, format!("{stanza}\n")));
+    }
+    Ok(records)
+}
+
+// A Debian package name, optionally `:arch`-qualified: lower-case letters, digits, `+`, `-`
+// and `.`. Nothing that could be a path component with meaning (`/`, `..`).
+fn is_package_name(s: &str) -> bool {
+    let ok = |part: &str| {
+        !part.is_empty()
+            && part != "."
+            && part != ".."
+            && part
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "+-.".contains(c))
+    };
+    match s.split_once(':') {
+        Some((name, arch)) => ok(name) && ok(arch),
+        None => ok(s),
+    }
+}
+
+/// The package records written into a rootfs. Dropping it removes them again, which is how
+/// the `sbom` output shows the packages to syft and grype without changing the image; call
+/// `keep` for the `image` output.
+///
+/// It removes only what it created. A record that was already there (a second pack into
+/// the same `--output` directory) is replaced and then left alone.
+#[derive(Debug, Default)]
+pub struct StagedRecords {
+    files: Vec<PathBuf>,
+    dirs: Vec<PathBuf>,
+}
+
+impl StagedRecords {
+    /// Leave the records in the rootfs.
+    pub fn keep(mut self) {
+        self.files.clear();
+        self.dirs.clear();
+    }
+}
+
+impl Drop for StagedRecords {
+    fn drop(&mut self) {
+        for file in &self.files {
+            let _ = std::fs::remove_file(file);
+        }
+        // Deepest first, so each directory is empty by its turn. `remove_dir` refuses a
+        // directory that is not empty, so nothing the user staged is lost.
+        self.dirs
+            .sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+        for dir in &self.dirs {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+}
+
+/// Write `owners`' records under `rootfs/var/lib/dpkg/status.d/`, and the host's os-release
+/// to `rootfs/etc/os-release` unless the rootfs already has one.
+///
+/// On an error the guard built so far is dropped, so a failed call leaves nothing behind.
+pub fn stage_records(rootfs: &Path, owners: &Owners) -> Result<StagedRecords> {
+    let mut staged = StagedRecords::default();
+
+    let status_d = rootfs.join("var/lib/dpkg/status.d");
+    create_dirs(rootfs, &status_d, &mut staged.dirs)?;
+    for (file, stanza) in &owners.records {
+        let path = status_d.join(file);
+        if write_record(&path, stanza.as_bytes())? {
+            staged.files.push(path);
+        }
+    }
+
+    let os_release = rootfs.join("etc/os-release");
+    if os_release.symlink_metadata().is_err() {
+        // /etc/os-release is usually a link to /usr/lib/os-release; read through either.
+        let host = ["/etc/os-release", "/usr/lib/os-release"]
+            .iter()
+            .find_map(|p| std::fs::read(p).ok())
+            .context("reading the host's os-release, which names the distribution")?;
+        create_dirs(rootfs, &rootfs.join("etc"), &mut staged.dirs)?;
+        write_record(&os_release, &host)?;
+        staged.files.push(os_release);
+    }
+    Ok(staged)
+}
+
+// Write one record, and say whether the file is new (`true`) or replaced one that was there.
+//
+// Never through a link. A new file is opened O_EXCL, which does not follow a link at the
+// final component. An existing REGULAR file is replaced by a rename, which swaps the name
+// and does not follow one either. Anything else at that name (a link, a directory) is not
+// ours to touch.
+fn write_record(path: &Path, bytes: &[u8]) -> Result<bool> {
+    use std::io::Write;
+    let context = || format!("writing {}", path.display());
+    match path.symlink_metadata() {
+        Err(_) => {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .and_then(|mut f| f.write_all(bytes))
+                .with_context(context)?;
+            Ok(true)
+        }
+        Ok(meta) if meta.is_file() => {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = path.parent().context("a record path has a parent")?;
+            let mut tmp = tempfile::Builder::new()
+                .permissions(std::fs::Permissions::from_mode(0o666))
+                .tempfile_in(dir)
+                .with_context(context)?;
+            tmp.write_all(bytes).with_context(context)?;
+            tmp.persist(path).with_context(context)?;
+            Ok(false)
+        }
+        Ok(_) => bail!(
+            "cannot record packages: {} exists and is not a regular file",
+            path.display()
+        ),
+    }
+}
+
+// Create `dir` and record each directory that did not exist before, so a later removal takes
+// away exactly what this call added.
+//
+// Refuses to go through a symlink. The rootfs can hold links the user asked for
+// (`--symlinks preserve`, an `--add-file` link), and a link at `var` or `etc` would send
+// these writes to wherever it points, outside the rootfs and onto the host.
+fn create_dirs(rootfs: &Path, dir: &Path, created: &mut Vec<PathBuf>) -> Result<()> {
+    let relative = dir.strip_prefix(rootfs).unwrap_or(dir);
+    let mut walked = rootfs.to_path_buf();
+    for part in relative.components() {
+        walked.push(part);
+        if walked.symlink_metadata().is_ok_and(|m| m.is_symlink()) {
+            bail!(
+                "cannot record packages: {} is a symlink in the staged tree, and writing \
+                 through it would leave the image",
+                walked.display()
+            );
+        }
+        if !walked.exists() {
+            std::fs::create_dir(&walked)
+                .with_context(|| format!("creating {}", walked.display()))?;
+            created.push(walked.clone());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_selection_defaults_to_the_report_alone_and_none_stands_alone() {
+        let default = PackagesSelection::from_outputs(&[]).unwrap();
+        assert!(default.report && !default.sbom && !default.image && !default.explicit);
+        assert!(
+            !default.needs_records(),
+            "the default must never have to fail a pack"
+        );
+
+        let all = PackagesSelection::from_outputs(&[
+            PackagesOutput::Report,
+            PackagesOutput::Sbom,
+            PackagesOutput::Image,
+        ])
+        .unwrap();
+        assert!(all.report && all.sbom && all.image && all.explicit && all.any());
+        assert!(all.needs_records());
+
+        let image = PackagesSelection::from_outputs(&[PackagesOutput::Image]).unwrap();
+        assert!(image.image && !image.report && !image.sbom);
+
+        let none = PackagesSelection::from_outputs(&[PackagesOutput::None]).unwrap();
+        assert!(!none.any() && none.explicit);
+        assert!(
+            PackagesSelection::from_outputs(&[PackagesOutput::None, PackagesOutput::Sbom]).is_err()
+        );
+    }
+
+    #[test]
+    fn search_output_yields_owners_and_skips_diversions() {
+        let out = "libc6:amd64: /usr/lib/x86_64-linux-gnu/libc.so.6\n\
+                   diversion by libc6 from: /lib64/ld-linux-x86-64.so.2\n\
+                   diversion by libc6 to: /lib64/ld-linux-x86-64.so.2.usr-is-merged\n\
+                   zlib1g:amd64, zlib1g:i386: /usr/share/doc/zlib1g/copyright\n\
+                   tzdata: /usr/share/zoneinfo/UTC\n\
+                   garbage with no path\n\
+                   ../evil: /etc/passwd\n\
+                   diversion by dash from: /usr/bin/sh\n\
+                   diversion by dash to: /usr/bin/sh.distrib\n\
+                   dash, bash: /usr/bin/sh\n\
+                   local diversion from: /usr/bin/vi\n\
+                   local diversion to: /usr/bin/vi.orig\n\
+                   vim: /usr/bin/vi\n";
+        assert_eq!(
+            parse_search(out),
+            [
+                ("libc6:amd64", "/usr/lib/x86_64-linux-gnu/libc.so.6"),
+                ("zlib1g:amd64", "/usr/share/doc/zlib1g/copyright"),
+                ("zlib1g:i386", "/usr/share/doc/zlib1g/copyright"),
+                ("tzdata", "/usr/share/zoneinfo/UTC"),
+                // Diverted by dash: what is at the path is dash's, not bash's.
+                ("dash", "/usr/bin/sh"),
+                // Diverted locally: what is at /usr/bin/vi is the administrator's, so vim
+                // gets no credit and neither does anyone else.
+            ]
+            .map(|(p, f)| (p.to_string(), f.to_string()))
+        );
+    }
+
+    #[test]
+    fn show_rows_attach_files_by_either_spelling_of_the_name() {
+        let mut files = BTreeMap::from([
+            (
+                "libc6:amd64".to_string(),
+                vec!["/b".to_string(), "/a".to_string(), "/a".to_string()],
+            ),
+            ("tzdata".to_string(), vec!["/z".to_string()]),
+            ("ghost".to_string(), vec!["/g".to_string()]),
+        ]);
+        let rows = "libc6:amd64\tlibc6\t2.41-12\tamd64\tglibc\n\
+                    tzdata\ttzdata\t2025b-4\tall\ttzdata\n\
+                    short\trow\n";
+        let packages = parse_show(rows, &mut files);
+        assert_eq!(packages.len(), 2);
+        assert_eq!(packages[0].name, "libc6");
+        assert_eq!(packages[0].source, "glibc");
+        assert_eq!(packages[0].files, ["/a", "/b"], "sorted and deduplicated");
+        assert_eq!(packages[1].arch, "all");
+        // A package -S named and -W did not show is dropped, not invented.
+        assert!(files.contains_key("ghost"));
+    }
+
+    #[test]
+    fn records_are_split_per_package_and_a_bad_name_is_refused() {
+        let out = "Package: libc6\nStatus: install ok installed\nArchitecture: amd64\n\
+                   Version: 2.41-12\nDescription: GNU C Library\n one more line\n\n\
+                   Package: libc6\nArchitecture: i386\nVersion: 2.41-12\n\n\
+                   Package: tzdata\nVersion: 2025b-4\n";
+        let records = parse_records(out).unwrap();
+        let names: Vec<&str> = records.iter().map(|(f, _)| f.as_str()).collect();
+        assert_eq!(names, ["libc6", "libc6:i386", "tzdata"]);
+        assert!(records[0].1.starts_with("Package: libc6\n"));
+        assert!(records[0].1.ends_with(" one more line\n"));
+
+        // The name becomes a file name under status.d, so it must not be a path.
+        assert!(parse_records("Package: ../../etc/passwd\nVersion: 1\n").is_err());
+        // So does the architecture of a second stanza with the same name.
+        let two = "Package: a\nArchitecture: amd64\n\nPackage: a\nArchitecture: ../x\n";
+        assert!(parse_records(two).is_err());
+        // The same package twice is kept one time, not written twice.
+        let twice = "Package: a\nArchitecture: i386\n\nPackage: a\nArchitecture: i386\n\n\
+                     Package: a\nArchitecture: i386\n";
+        let names: Vec<String> = parse_records(twice)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.0)
+            .collect();
+        assert_eq!(names, ["a", "a:i386"]);
+
+        for pattern in ["/usr/bin/i?", "/usr/lib/*", "/opt/[ab]/x", "/a\\b"] {
+            assert!(is_pattern(pattern), "{pattern}");
+        }
+        assert!(!is_pattern("/usr/lib/x86_64-linux-gnu/libstdc++.so.6"));
+    }
+
+    #[test]
+    fn package_names_exclude_anything_path_like() {
+        for good in [
+            "libc6",
+            "libstdc++6",
+            "libssl3t64",
+            "zlib1g:amd64",
+            "g++-14",
+        ] {
+            assert!(is_package_name(good), "{good}");
+        }
+        for bad in [
+            "", "..", ".", "a/b", "a b", "Libc6", "a:", ":amd64", "a:b:c",
+        ] {
+            assert!(!is_package_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn staged_records_are_removed_on_drop_and_kept_on_keep() {
+        let owners = Owners {
+            packages: vec![],
+            records: vec![("libc6".into(), "Package: libc6\n".into())],
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path();
+        // Something the user staged: its directory must survive the cleanup.
+        std::fs::create_dir_all(rootfs.join("var/lib/mine")).unwrap();
+        std::fs::write(rootfs.join("var/lib/mine/data"), b"x").unwrap();
+
+        if !["/etc/os-release", "/usr/lib/os-release"]
+            .iter()
+            .any(|p| Path::new(p).exists())
+        {
+            eprintln!("skipping: this host has no os-release to copy");
+            return;
+        }
+        let staged = stage_records(rootfs, &owners).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(rootfs.join("var/lib/dpkg/status.d/libc6")).unwrap(),
+            "Package: libc6\n"
+        );
+        assert!(rootfs.join("etc/os-release").is_file());
+        drop(staged);
+        assert!(!rootfs.join("var/lib/dpkg").exists(), "created dirs go too");
+        assert!(!rootfs.join("etc").exists());
+        assert!(
+            rootfs.join("var/lib/mine/data").exists(),
+            "the user's file stays"
+        );
+
+        // An os-release the user staged is theirs: it is neither replaced nor removed.
+        std::fs::create_dir_all(rootfs.join("etc")).unwrap();
+        std::fs::write(rootfs.join("etc/os-release"), b"ID=mine\n").unwrap();
+        drop(stage_records(rootfs, &owners).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(rootfs.join("etc/os-release")).unwrap(),
+            "ID=mine\n"
+        );
+
+        stage_records(rootfs, &owners).unwrap().keep();
+        assert!(rootfs.join("var/lib/dpkg/status.d/libc6").is_file());
+
+        // A second pack into the same directory finds the kept record. It is replaced, not
+        // refused, and because this call did not create it, the guard leaves it in place.
+        let newer = Owners {
+            packages: vec![],
+            records: vec![("libc6".into(), "Package: libc6\nVersion: 2\n".into())],
+        };
+        drop(stage_records(rootfs, &newer).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(rootfs.join("var/lib/dpkg/status.d/libc6")).unwrap(),
+            "Package: libc6\nVersion: 2\n"
+        );
+    }
+
+    #[test]
+    fn a_failed_staging_leaves_no_directories_behind() {
+        // A directory where a record must go makes the write fail after status.d exists.
+        let owners = Owners {
+            packages: vec![],
+            records: vec![("libc6".into(), "Package: libc6\n".into())],
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path();
+        std::fs::create_dir_all(rootfs.join("var")).unwrap();
+        std::fs::create_dir_all(rootfs.join("blocker")).unwrap();
+        // Make `var/lib/dpkg/status.d/libc6` a directory by staging it first.
+        std::fs::create_dir_all(rootfs.join("var/lib/dpkg/status.d/libc6")).unwrap();
+        assert!(stage_records(rootfs, &owners).is_err());
+        assert!(
+            rootfs.join("var/lib/dpkg/status.d/libc6").is_dir(),
+            "theirs stays"
+        );
+
+        // With nothing pre-staged, a failure part-way must take its own directories away.
+        let rootfs = tmp.path().join("clean");
+        std::fs::create_dir(&rootfs).unwrap();
+        std::fs::create_dir(rootfs.join("etc")).unwrap();
+        std::os::unix::fs::symlink("/nonexistent", rootfs.join("etc/os-release")).unwrap();
+        // os-release "exists" (as a dangling link), so it is left alone and staging succeeds;
+        // dropping the guard must then remove var/ entirely.
+        drop(stage_records(&rootfs, &owners).unwrap());
+        assert!(!rootfs.join("var").exists());
+    }
+
+    #[test]
+    fn records_never_follow_a_symlink_out_of_the_rootfs() {
+        let owners = Owners {
+            packages: vec![],
+            records: vec![("libc6".into(), "Package: libc6\n".into())],
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+
+        // A directory link: `var` points out of the rootfs.
+        let rootfs = tmp.path().join("a");
+        std::fs::create_dir(&rootfs).unwrap();
+        std::os::unix::fs::symlink(&outside, rootfs.join("var")).unwrap();
+        let err = stage_records(&rootfs, &owners).unwrap_err();
+        assert!(format!("{err:#}").contains("is a symlink"), "{err:#}");
+        assert_eq!(
+            std::fs::read_dir(&outside).unwrap().count(),
+            0,
+            "nothing escaped"
+        );
+
+        // A file link at the record's own name must not be written through either.
+        let rootfs = tmp.path().join("b");
+        std::fs::create_dir_all(rootfs.join("var/lib/dpkg/status.d")).unwrap();
+        let target = outside.join("victim");
+        std::fs::write(&target, b"untouched").unwrap();
+        std::os::unix::fs::symlink(&target, rootfs.join("var/lib/dpkg/status.d/libc6")).unwrap();
+        assert!(stage_records(&rootfs, &owners).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
+    }
+
+    #[test]
+    fn a_path_dpkg_would_read_as_a_pattern_is_never_asked() {
+        // On a dpkg host `dpkg-query -S '/usr/bin/i?'` answers for id AND ip. Neither is
+        // the file that was asked about, so the answer must be empty. With no dpkg the
+        // query itself fails or is empty, which is the same answer.
+        let found = search(&[PathBuf::from("/usr/bin/i?")]).unwrap_or_default();
+        assert_eq!(found, Vec::<(String, String)>::new());
+        if dpkg_available() && Path::new("/usr/bin/id").exists() {
+            // Guard the premise: the literal path IS owned, so an empty answer above is the
+            // filter at work and not a host that knows nothing.
+            let literal = search(&[PathBuf::from("/usr/bin/id")]).unwrap();
+            assert!(
+                literal.iter().all(|(_, p)| p == "/usr/bin/id"),
+                "{literal:?}"
+            );
+            assert!(!literal.is_empty(), "dpkg owns /usr/bin/id on this host");
+        }
+    }
+
+    #[test]
+    fn the_usr_retry_needs_both_spellings_to_be_one_file() {
+        // The retry strips the `/usr/` component, never the bare letters.
+        assert_eq!("/usrlocal/x".strip_prefix("/usr/"), None);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        let link = tmp.path().join("link");
+        let other = tmp.path().join("other");
+        std::fs::write(&real, b"x").unwrap();
+        std::fs::write(&other, b"x").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let s = |p: &Path| p.to_str().unwrap().to_string();
+        assert!(same_file(&s(&real), &s(&link)), "a merged path is one file");
+        assert!(
+            !same_file(&s(&real), &s(&other)),
+            "same bytes, different file"
+        );
+        assert!(!same_file(&s(&real), "/no/such/path"));
+    }
+}

@@ -30,6 +30,7 @@ file**.
 | `symlinks` | `--symlinks` | What a symlink you name becomes in the image: `copy-all` (default), `preserve`, `copy-unsafe`, or `skip-unsafe`. Covers the packed binary path and each `add-file` source. See [Usage](usage.md) for the mode table. |
 | `include` | `--include` | Force-stage extra libraries by soname or path, for example `dlopen`'d plugins (list). |
 | `nss` | `--nss` | Name-service (NSS) modules to stage for glibc name lookups: `files`, `dns`, or `none` (list). Fewer modules trim CVE surface. A mode without `files` also drops `/etc/passwd` and `/etc/group`, which glibc reads through the `files` module. Default: `files` and `dns`. |
+| `packages` | `--packages` | Where to record the distribution packages that own the bundled files: `report`, `sbom`, `image`, or `none` (list). Default: `report`. `sbom` shows the packages to `--sbom` and `--scan`. `image` adds package records and `/etc/os-release` to the image. Needs a dpkg host: with `sbom` or `image` on another host, the pack fails. |
 | `deny` | `--deny` | If this library ships, the pack fails (list). Resolved libraries, the loader, and NSS modules are all in scope, matched by soname or staged file name. This is a CI policy gate. Read sonames from `scratchsmith graph`. |
 | `require` | `--require` | If this library does not ship, the pack fails (list). Same scope as `deny`. |
 | `sign` | `--sign` | cosign-sign the pushed image (keyless, by digest). Requires a push target. |
@@ -65,6 +66,7 @@ locale = ["en_US.UTF-8"]
 symlinks = "copy-all"
 include = ["libnss_myhostname.so.2"]
 nss = ["files", "dns"]
+packages = ["report", "sbom"]
 deny = ["libssl.so.3"]
 require = ["libseccomp.so.2"]
 sign = true
@@ -78,8 +80,8 @@ scratchsmith pack --config scratchsmith.toml                 # binary + all keys
 scratchsmith pack --config scratchsmith.toml --push ghcr.io/you/app:dev ./other   # CLI overrides binary + push
 ```
 
-The delivery sinks `--oci-archive <file>` and `--no-build` / `--output <dir>`, and the display-only
-`--format`, stay command-line-only. They are not config keys.
+The delivery sinks `--oci-archive <file>` and `--no-build` / `--output <dir>`, the display-only
+`--format`, and `--watch` stay command-line-only. They are not config keys.
 
 ## Profiles
 

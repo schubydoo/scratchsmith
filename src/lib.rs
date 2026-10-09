@@ -13,6 +13,7 @@ pub mod graph;
 pub mod image;
 pub mod lint;
 pub mod pack;
+pub mod packages;
 pub mod registry;
 pub mod report;
 pub mod resolver;

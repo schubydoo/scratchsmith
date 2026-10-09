@@ -169,6 +169,15 @@ pub enum Command {
             value_name = "MODULES"
         )]
         nss: Vec<crate::stager::NssModule>,
+        /// Where to record the distribution packages that own the bundled files
+        /// (comma-separated: report, sbom, image; or none). Default: report.
+        #[arg(
+            long = "packages",
+            value_enum,
+            value_delimiter = ',',
+            value_name = "OUTPUTS"
+        )]
+        packages: Vec<crate::packages::PackagesOutput>,
         /// Fail the pack if this library ships — resolved libs, the loader, and NSS
         /// modules are all in scope. Matches a soname or staged file name; repeatable.
         #[arg(long = "deny", value_name = "SONAME")]
@@ -313,6 +322,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             symlinks,
             include,
             nss,
+            packages,
             deny,
             require,
             watch,
@@ -407,6 +417,13 @@ fn dispatch(cli: Cli) -> Result<()> {
                     .map(|s| crate::report::parse_size(&s))
                     .transpose()?,
                 runtime: runtime.or(file.runtime).unwrap_or_default(),
+                packages: crate::packages::PackagesSelection::from_outputs(
+                    if packages.is_empty() {
+                        &file.packages
+                    } else {
+                        &packages
+                    },
+                )?,
             };
 
             // Deprecation warnings go here, not in a sink path: the effective config is complete,

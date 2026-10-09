@@ -44,6 +44,7 @@
   --nss  value=true  multiple=true  required=false  values=[files,dns,none]
   --oci-archive  value=true  multiple=false  required=false
   --output -o  value=true  multiple=false  required=false
+  --packages  value=true  multiple=true  required=false  values=[report,sbom,image,none]
   --profile  value=true  multiple=false  required=false
   --push  value=true  multiple=false  required=false
   --require  value=true  multiple=true  required=false
