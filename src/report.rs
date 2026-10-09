@@ -281,7 +281,7 @@ fn render_children<'a>(
         // A raw DT_NEEDED string from the binary: escaped, or it could forge a line here.
         out.push_str(&format!(
             "{prefix}{branch}{} (missing)\n",
-            soname.escape_debug()
+            crate::resolver::escape_for_display(soname)
         ));
     }
 }
@@ -406,10 +406,10 @@ mod tests {
         assert!(text.contains("libC.so (*)"), "diamond not marked: {text}");
         assert!(text.contains("libghost.so (missing)"), "{text}");
 
-        // A soname is a raw string out of the binary. One with a newline and a terminal
-        // escape must stay on its own line of the tree, as text.
         assert!(text.contains("interpreter: /lib64/ld.so"), "{text}");
 
+        // A soname is a raw string out of the binary. One with a newline and a terminal
+        // escape must stay on its own line of the tree, as text.
         let forged = DepGraphReport {
             root: "/app".into(),
             interpreter: None,

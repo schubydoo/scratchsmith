@@ -489,7 +489,14 @@ fn reroot(root: &Path, path: &Path) -> PathBuf {
 // name can hold anything but `/` and NUL, so escape control characters: a raw newline or
 // terminal escape would let the input forge a line of scratchsmith's own output.
 fn printable(path: &Path) -> String {
-    path.to_string_lossy().escape_debug().to_string()
+    escape_for_display(&path.to_string_lossy())
+}
+
+/// A string from the packed binary, made safe to print: control characters are escaped, so
+/// it cannot break or forge a line. The one escape policy for everything this crate prints
+/// from a binary.
+pub fn escape_for_display(text: &str) -> String {
+    text.escape_debug().to_string()
 }
 
 // True when the file opens and begins with the ELF magic. Any IO failure reads as "no",
@@ -515,10 +522,13 @@ fn canonical(path: &Path) -> PathBuf {
 /// but NUL. Printed as it is, a newline or a terminal escape in one would let the binary
 /// forge a line of scratchsmith's own output, so each is escaped. `missing` itself stays
 /// raw: `--require` and `--deny` match on it.
+///
+/// Each one is also quoted. The list is joined with a comma, and a soname can hold a comma
+/// and a space, so without the quotes one crafted name would read as two libraries.
 pub fn missing_for_display(missing: &[String]) -> String {
     missing
         .iter()
-        .map(|soname| soname.escape_debug().to_string())
+        .map(|soname| format!("\"{}\"", escape_for_display(soname)))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -1059,7 +1069,10 @@ mod tests {
             !shown.contains('\n') && !shown.contains('\x1b'),
             "{shown:?}"
         );
-        assert_eq!(shown, "libx.so\\nerror: forged\\u{1b}[2J, libok.so");
+        assert_eq!(shown, r#""libx.so\nerror: forged\u{1b}[2J", "libok.so""#);
+        // A comma inside one name stays inside its quotes: one library, not two.
+        let two = missing_for_display(&["liba.so, libb.so".to_string()]);
+        assert_eq!(two, r#""liba.so, libb.so""#);
     }
 
     #[test]
