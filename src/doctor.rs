@@ -59,7 +59,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "cosign",
         version_args: &["version"],
-        purpose: "--sign (sign the pushed image, attest the SBOM)",
+        purpose: "--sign (sign the pushed image or index, attest any SBOM)",
         hint: "https://github.com/sigstore/cosign",
     },
     Tool {
