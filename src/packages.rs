@@ -313,6 +313,22 @@ fn search(host_paths: &[PathBuf]) -> Result<Vec<(String, String)>> {
     Ok(found)
 }
 
+/// Run every reader of `dpkg-query` output over one text, and return what they hand on: the
+/// `(package, path)` owners from `-S`, and the record file names from `-s`. A text-level
+/// entry point for fuzzing. The text comes from a tool on the build host, so it is not
+/// hostile in the usual case, but a package name from it becomes a file name in the image.
+pub fn parse_dpkg_output(text: &str) -> (Vec<(String, String)>, Vec<String>) {
+    let owners = parse_search(text);
+    let mut files: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (package, path) in &owners {
+        files.entry(package.clone()).or_default().push(path.clone());
+    }
+    let _ = parse_show(text, &mut files);
+    let _ = installed_packages(text).count();
+    let records = parse_records(text).unwrap_or_default();
+    (owners, records.into_iter().map(|(file, _)| file).collect())
+}
+
 // The qualified names in `-W` rows (`binary:Package`, `db:Status-Status`) whose status is
 // exactly `installed`.
 fn installed_packages(rows: &str) -> impl Iterator<Item = &str> {
@@ -463,14 +479,16 @@ fn parse_records(stdout: &str) -> Result<Vec<(String, String)>> {
         let Some(name) = field("Package") else {
             continue;
         };
-        if !is_package_name(name) {
+        // A stanza names the package bare. A qualified name here would take a second
+        // qualifier below (`name:arch:arch`), so only one part is a name in this field.
+        if name.contains(':') || !is_package_name(name) {
             bail!("dpkg reported a package name that is not one: {name:?}");
         }
         // The second architecture of a name is qualified. The architecture goes into the
         // file name too, so it gets the same character check as the name.
         let file = if records.iter().any(|(f, _)| f == name) {
             let arch = field("Architecture").unwrap_or("unknown");
-            if !is_package_name(arch) {
+            if arch.contains(':') || !is_package_name(arch) {
                 bail!("dpkg reported an architecture that is not one: {arch:?}");
             }
             format!("{name}:{arch}")
@@ -786,6 +804,11 @@ mod tests {
         // So does the architecture of a second stanza with the same name.
         let two = "Package: a\nArchitecture: amd64\n\nPackage: a\nArchitecture: ../x\n";
         assert!(parse_records(two).is_err());
+        // A stanza names its package bare. A qualified name would be qualified a second
+        // time when the name repeats (`a:amd64:unknown`). Found by the dpkg_output fuzz target.
+        assert!(parse_records("Package: a:amd64\n\nPackage: a:amd64\n").is_err());
+        let arch = "Package: a\nArchitecture: amd64\n\nPackage: a\nArchitecture: i386:x\n";
+        assert!(parse_records(arch).is_err());
         // The same package twice is kept one time, not written twice.
         let twice = "Package: a\nArchitecture: i386\n\nPackage: a\nArchitecture: i386\n\n\
                      Package: a\nArchitecture: i386\n";

@@ -108,6 +108,14 @@ rpm_seed="$(mktemp -d)"
   printf 'a\0001\0001\000x\000'
 } > "$rpm_seed/header.bin"
 
+# Text seeds for dpkg_output, one per `dpkg-query` mode that the readers take: `-S` owner rows
+# with a diversion, `-W` rows (five fields, and the two-field status form), and one `-s`
+# stanza. Without them the engine has to find the row shapes one byte at a time.
+dpkg_seed="$(mktemp -d)"
+printf 'diversion by dash from: /bin/sh\ndiversion by dash to: /bin/sh.distrib\ndash: /bin/sh\nlibc6:amd64, libc6:i386: /usr/lib/os-release\n' > "$dpkg_seed/search.txt"
+printf 'libc6:amd64\tlibc6\t2.41-12\tamd64\tglibc\nlibc6:amd64\tinstalled\n' > "$dpkg_seed/show.txt"
+printf 'Package: libc6\nStatus: install ok installed\nArchitecture: amd64\nVersion: 2.41-12\n\nPackage: libc6\nArchitecture: i386\n' > "$dpkg_seed/status.txt"
+
 # Map each target to its seed set (empty = no seed), zip, and stage in $OUT.
 seed_dir_for() {
   case "$1" in
@@ -115,6 +123,7 @@ seed_dir_for() {
   unpack) printf '%s' "$oci_seed" ;;
   registry_parse) printf '%s' "$json_seed" ;;
   rpm_headers) printf '%s' "$rpm_seed" ;;
+  dpkg_output) printf '%s' "$dpkg_seed" ;;
   *) printf '' ;;
   esac
 }
@@ -126,4 +135,4 @@ for f in fuzz/fuzz_targets/*.rs; do
   rm -f "$dest" # zip appends; keep it idempotent if $OUT is reused
   ( cd "$src" && zip -q -r "$dest" . )
 done
-rm -rf "$elf_seed" "$oci_seed" "$oci" "$json_seed"
+rm -rf "$elf_seed" "$oci_seed" "$oci" "$json_seed" "$rpm_seed" "$dpkg_seed"
