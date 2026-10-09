@@ -107,6 +107,8 @@ pub struct ToolStatus {
     pub version: Option<String>,
     pub purpose: &'static str,
     pub hint: &'static str,
+    /// Set when the tool is present and cannot do all of its job on this host.
+    pub limit: Option<&'static str>,
 }
 
 /// Probe every known tool. Always succeeds — reporting absence is the job.
@@ -118,7 +120,13 @@ pub fn probe() -> Vec<ToolStatus> {
 pub fn run() -> Result<()> {
     for status in probe() {
         match &status.version {
-            Some(v) => println!("  ok    {:10} {}  ({})", status.name, v, status.purpose),
+            Some(v) => match status.limit {
+                None => println!("  ok    {:10} {}  ({})", status.name, v, status.purpose),
+                Some(limit) => println!(
+                    "  warn  {:10} {}  ({}) — {}",
+                    status.name, v, status.purpose, limit
+                ),
+            },
             None => println!(
                 "  MISS  {:10} not found — {}; {}",
                 status.name, status.purpose, status.hint
@@ -132,12 +140,35 @@ fn probe_tool(tool: &Tool) -> ToolStatus {
     let version = locate(tool.name)
         .and_then(|path| run_version(&path, tool.version_args))
         .map(|out| first_line(&out));
+    // `rpmdb` ships with `rpm`, so its help text is asked only where rpm answered.
+    let limit = (tool.name == "rpm" && version.is_some())
+        .then(|| {
+            let help = Command::new("rpmdb").arg("--help").output().ok();
+            rpm_records_limit(
+                help.as_ref()
+                    .map(|out| String::from_utf8_lossy(&out.stdout)),
+            )
+        })
+        .flatten();
     ToolStatus {
         name: tool.name,
         version,
         purpose: tool.purpose,
         hint: tool.hint,
+        limit,
     }
+}
+
+// The package records for `--packages sbom` and `image` come from `rpmdb --exportdb`, and an
+// old rpm (4.11 on CentOS 7 and Amazon Linux 2) does not have it. It answers every other
+// question, so without this line the user learns it from a failed pack. The help text is the
+// cheap way to ask: the export itself reads every package on the host.
+fn rpm_records_limit(rpmdb_help: Option<impl AsRef<str>>) -> Option<&'static str> {
+    let has_export = rpmdb_help.is_some_and(|help| help.as_ref().contains("--exportdb"));
+    (!has_export).then_some(
+        "this rpm has no `rpmdb --exportdb`, so `--packages sbom` and `--packages image` \
+         fail here; `--packages report` works",
+    )
 }
 
 // Try the bare name (PATH) then the system sbins where ldconfig usually lives.
@@ -197,6 +228,17 @@ mod tests {
                 "strip is on PATH but probe missed it"
             );
         }
+    }
+
+    #[test]
+    fn an_rpm_without_the_export_option_is_limited() {
+        // The line that matters from the help of rpm 4.14 and newer, and from rpm 4.11.
+        let new = "  --exportdb    export database to stdout header list";
+        let old = "  --initdb      initialize database\n  --rebuilddb   rebuild database";
+        assert!(rpm_records_limit(Some(new)).is_none());
+        assert!(rpm_records_limit(Some(old)).is_some_and(|l| l.contains("--exportdb")));
+        // No rpmdb to ask at all: the records cannot be built either.
+        assert!(rpm_records_limit(None::<&str>).is_some());
     }
 
     #[test]
