@@ -282,8 +282,23 @@ fn header_nevra(header: &[u8]) -> Option<Nevra> {
 /// replaced: `rpmdb --importdb` would add to it, and the result must hold these packages and
 /// no others.
 pub fn import(rootfs: &Path, db_dir: &Path, headers: &[u8]) -> Result<Vec<PathBuf>> {
-    for stale in db_files(db_dir)? {
-        std::fs::remove_file(&stale).with_context(|| format!("removing {}", stale.display()))?;
+    // rpm opens its database by NAME inside this directory and follows whatever is there.
+    // The tree can hold links the user asked for, so a link at one of those names would send
+    // rpm's writes outside the rootfs and onto the host. Nothing but a regular file may be
+    // in the way: a regular file is an earlier database and is replaced, and anything else
+    // stops the pack.
+    for entry in
+        std::fs::read_dir(db_dir).with_context(|| format!("reading {}", db_dir.display()))?
+    {
+        let path = entry?.path();
+        if !path.symlink_metadata()?.is_file() {
+            bail!(
+                "cannot record packages: {} is in the way of the rpm database and is not a \
+                 regular file; writing through it could leave the image",
+                path.display()
+            );
+        }
+        std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
     }
     // rpm ignores a `--root` that is not absolute and would then write to the HOST database
     // path, so the rootfs is made absolute first. A failure to do so is an error, never a
@@ -436,6 +451,34 @@ mod tests {
         let no_epoch = nevra("openssl", 0, "3.5", "2.fc44", "x86_64");
         assert!(filter_headers(&list, &[&no_epoch]).unwrap().is_empty());
         assert!(filter_headers(&[], &[&want_glibc]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn import_refuses_a_link_where_the_database_goes() {
+        // The refusal comes before rpmdb is started, so this runs on a host with no rpm.
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        let db_dir = rootfs.join("usr/lib/sysimage/rpm");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let victim = tmp.path().join("victim");
+        std::fs::write(&victim, b"untouched").unwrap();
+        std::os::unix::fs::symlink(&victim, db_dir.join("rpmdb.sqlite")).unwrap();
+
+        let err = import(&rootfs, &db_dir, b"not reached").unwrap_err();
+        assert!(format!("{err:#}").contains("not a regular file"), "{err:#}");
+        assert_eq!(std::fs::read(&victim).unwrap(), b"untouched");
+        assert!(db_dir
+            .join("rpmdb.sqlite")
+            .symlink_metadata()
+            .unwrap()
+            .is_symlink());
+
+        // A directory in the way is refused the same way, and left alone.
+        let rootfs = tmp.path().join("second");
+        let db_dir = rootfs.join("usr/lib/sysimage/rpm");
+        std::fs::create_dir_all(db_dir.join("subdir")).unwrap();
+        assert!(import(&rootfs, &db_dir, b"not reached").is_err());
+        assert!(db_dir.join("subdir").is_dir());
     }
 
     #[test]
