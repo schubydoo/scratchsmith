@@ -26,11 +26,11 @@ refuses to write a `..` entry, so neither builder reaches the escaping-entry bai
 `unpack::run`. The unit tests cover that path instead. Keep both targets.
 
 The `resolve_graph` target reaches the "starts like an ELF and cannot be parsed" warning by one
-route only. Every library that the harness creates also gets scripted facts, so the one file with
-the ELF magic and no facts is the harness's own loader, `/lib64/ld-fuzz.so.2`. A `DT_NEEDED`
+route only. Every library that the target creates also gets scripted facts, so the one file with
+the ELF magic and no facts is the target's own loader, `/lib64/ld-fuzz.so.2`. A `DT_NEEDED`
 entry must name it, which is why `resolve_graph.dict` holds that literal. Its line-break
 assertion exercises the search-path entry in the `$PLATFORM` warning. It does not exercise a
-file name, because every file name in the harness is a safe one.
+file name, because every file name that the target creates is a safe one.
 
 ## Seeds
 
