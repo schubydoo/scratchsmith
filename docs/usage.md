@@ -197,6 +197,14 @@ The records depend on the package manager of the build host:
   the packages too, because the records are in the tree that syft reads.
 - On an rpm host, the database is about half a megabyte for a small program. The dpkg records
   are a few kilobytes.
+- On an rpm host that keeps its database in the Berkeley DB format, an image with the records
+  is not reproducible. Rocky Linux 8 and the rest of the RHEL 8 family are such hosts. rpm
+  writes different bytes each time it builds that database, so two packs of the same program
+  give two digests. The pack prints a warning. The `report` and `sbom` outputs are not
+  affected.
+- The records need an rpm that has `rpmdb --exportdb`. rpm 4.11, on CentOS 7 and Amazon
+  Linux 2, does not have it. On those hosts the `sbom` and `image` outputs fail, and `report`
+  works.
 - If you add a file with `--add-file` at a path that a record needs, the pack fails.
   Scratchsmith does not replace a file that you added.
 
