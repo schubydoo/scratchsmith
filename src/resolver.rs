@@ -525,7 +525,14 @@ fn reroot(root: &Path, path: &Path) -> PathBuf {
 // name can hold anything but `/` and NUL, so escape control characters: a raw newline or
 // terminal escape would let the input forge a line of scratchsmith's own output.
 fn printable(path: &Path) -> String {
-    path.to_string_lossy().escape_debug().to_string()
+    escape_for_display(&path.to_string_lossy())
+}
+
+/// A string from the packed binary, made safe to print: control characters are escaped, so
+/// it cannot break or forge a line. The one escape policy for everything this crate prints
+/// from a binary.
+pub fn escape_for_display(text: &str) -> String {
+    text.escape_debug().to_string()
 }
 
 // True when the file opens and begins with the ELF magic. Any IO failure reads as "no",
@@ -543,6 +550,23 @@ fn has_elf_magic(path: &Path) -> bool {
 // transient error never silently drops a dependency.
 fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// The unresolved sonames, joined for an error line.
+///
+/// A soname is a raw `DT_NEEDED` string out of the packed binary, and it can hold any byte
+/// but NUL. Printed as it is, a newline or a terminal escape in one would let the binary
+/// forge a line of scratchsmith's own output, so each is escaped. `missing` itself stays
+/// raw: `--require` and `--deny` match on it.
+///
+/// Each one is also quoted. The list is joined with a comma, and a soname can hold a comma
+/// and a space, so without the quotes one crafted name would read as two libraries.
+pub fn missing_for_display(missing: &[String]) -> String {
+    missing
+        .iter()
+        .map(|soname| format!("\"{}\"", escape_for_display(soname)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Append `item` to `v` unless already present. A parent can list a soname twice.
@@ -1128,6 +1152,29 @@ mod tests {
         infos.insert(canonical(&exe), elf(&["libghost.so"], &[], &[], None));
         let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
         assert_eq!(res.missing, vec!["libghost.so".to_string()]);
+    }
+
+    #[test]
+    fn missing_sonames_are_escaped_for_display_and_stay_raw_in_the_list() {
+        // A DT_NEEDED entry that does not resolve, holding a newline and a terminal escape.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        touch(&exe);
+        let evil = "libx.so\nerror: forged\x1b[2J";
+        let infos = HashMap::from([(canonical(&exe), elf(&[evil, "libok.so"], &[], &[], None))]);
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        // The list keeps the real soname: `--require` and `--deny` match on it.
+        assert_eq!(res.missing, [evil, "libok.so"]);
+        let shown = missing_for_display(&res.missing);
+        assert!(
+            !shown.contains('\n') && !shown.contains('\x1b'),
+            "{shown:?}"
+        );
+        assert_eq!(shown, r#""libx.so\nerror: forged\u{1b}[2J", "libok.so""#);
+        // A comma inside one name stays inside its quotes: one library, not two.
+        let two = missing_for_display(&["liba.so, libb.so".to_string()]);
+        assert_eq!(two, r#""liba.so, libb.so""#);
     }
 
     #[test]

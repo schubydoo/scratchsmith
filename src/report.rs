@@ -278,7 +278,11 @@ fn render_children<'a>(
         idx += 1;
         let last = idx == total;
         let branch = if last { "└── " } else { "├── " };
-        out.push_str(&format!("{prefix}{branch}{soname} (missing)\n"));
+        // A raw DT_NEEDED string from the binary: escaped, or it could forge a line here.
+        out.push_str(&format!(
+            "{prefix}{branch}{} (missing)\n",
+            crate::resolver::escape_for_display(soname)
+        ));
     }
 }
 
@@ -401,7 +405,28 @@ mod tests {
         assert!(text.contains("libC.so (/libC)"), "{text}");
         assert!(text.contains("libC.so (*)"), "diamond not marked: {text}");
         assert!(text.contains("libghost.so (missing)"), "{text}");
+
         assert!(text.contains("interpreter: /lib64/ld.so"), "{text}");
+
+        // A soname is a raw string out of the binary. One with a newline and a terminal
+        // escape must stay on its own line of the tree, as text.
+        let forged = DepGraphReport {
+            root: "/app".into(),
+            interpreter: None,
+            nodes: vec![node("/app", "app", &[], &["libx.so\nerror: forged\x1b[2J"])],
+            missing: vec!["libx.so\nerror: forged\x1b[2J".into()],
+        };
+        let forged_text = forged.to_text();
+        assert_eq!(
+            forged_text.lines().count(),
+            2,
+            "one line for app, one for the soname: {forged_text}"
+        );
+        assert!(!forged_text.contains('\x1b'), "{forged_text:?}");
+        assert!(
+            forged_text.contains("libx.so\\nerror: forged\\u{1b}[2J (missing)"),
+            "{forged_text}"
+        );
     }
 
     #[test]
