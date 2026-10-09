@@ -5,6 +5,24 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 1.7.0 (2026-10-09)
+
+### Features
+
+#### `packages` GitHub Action input ([#296](https://github.com/schubydoo/scratchsmith/pull/296))
+
+The action now exposes `--packages` as an input. Set `packages: report,sbom` to make the SBOM
+and the scan see the distribution packages, or `packages: image` to keep the package records
+in the image. Set `packages: none` to turn the lookup off. Empty keeps the default, `report`.
+
+### Fixes
+
+#### `--packages sbom` with nothing to read it now warns ([#298](https://github.com/schubydoo/scratchsmith/pull/298))
+
+`--packages sbom` shows the packages to `--sbom` and `--scan`. With neither of them on, the pack
+looked the packages up, wrote them nowhere, and said nothing. It now prints a warning and
+skips that lookup. The pack still succeeds.
+
 ## 1.6.0 (2026-10-09)
 
 ### Features
