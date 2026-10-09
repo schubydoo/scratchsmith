@@ -110,6 +110,16 @@ jobs:
           echo "$out"
           grep -q 'bundled with scratchsmith' <<<"$out"
           grep -q 'pulling the manifest' <<<"$out"
+          # That registry is plain HTTP, so it proves the clients were built and not that the
+          # bundled roots verify anything. This one completes a real TLS handshake with GHCR
+          # and pulls a public manifest. The source is itself an index, which `index` refuses,
+          # and that refusal is the proof: it can only be reached with the manifest in hand.
+          out="$(docker run --rm scratchsmith:smoke \
+            index ghcr.io/schubydoo/scratchsmith:zz-smoke-never-pushed \
+            ghcr.io/schubydoo/scratchsmith:1.5.1 2>&1 || true)"
+          echo "$out"
+          grep -q 'bundled with scratchsmith' <<<"$out"
+          grep -q 'is itself a multi-arch index' <<<"$out"
       - name: Build and push
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0

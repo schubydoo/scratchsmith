@@ -697,7 +697,7 @@ fn a_registry_command_with_a_broken_explicit_ca_store_fails_closed() {
         "the error must name the cause and the fix: {stderr}"
     );
     assert!(
-        !stderr.contains("note: ") && !stderr.contains("Mozilla"),
+        !stderr.contains("warning: ") && !stderr.contains("Mozilla"),
         "an explicit store must never be widened: {stderr}"
     );
 }
@@ -706,7 +706,21 @@ fn a_registry_command_with_a_broken_explicit_ca_store_fails_closed() {
 fn a_registry_command_with_a_ca_store_does_not_mention_the_bundled_roots() {
     // The fallback is for a host with no store. Where the system store works, nothing about
     // whom scratchsmith trusts may change, and nothing is printed about it.
-    let out = run(&["index", "127.0.0.1:1/x/y:1", "127.0.0.1:1/x/y:1-amd64"]);
+    //
+    // The store is named explicitly, so the test does not depend on what the host has: a
+    // host with no store, or with a broken SSL_CERT_FILE of its own, would print "bundled"
+    // for reasons that have nothing to do with the code.
+    let bundle = std::path::Path::new("/etc/ssl/certs/ca-certificates.crt");
+    if !bundle.exists() {
+        common::skip_optional("no CA bundle at /etc/ssl/certs/ca-certificates.crt");
+        return;
+    }
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["index", "127.0.0.1:1/x/y:1", "127.0.0.1:1/x/y:1-amd64"])
+        .env("SSL_CERT_FILE", bundle)
+        .env_remove("SSL_CERT_DIR")
+        .output()
+        .expect("failed to run scratchsmith binary");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{stderr}");
     assert!(!stderr.contains("bundled"), "{stderr}");

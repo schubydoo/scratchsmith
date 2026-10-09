@@ -647,7 +647,7 @@ fn registry_clients(endpoint: &str) -> Result<Clients> {
     })?;
     // A supply-chain tool must not change whom it trusts in silence.
     eprintln!(
-        "note: the system CA trust store could not be used ({system:#}), so TLS uses the \
+        "warning: the system CA trust store could not be used ({system:#}), so TLS uses the \
          Mozilla root certificates bundled with scratchsmith. Set SSL_CERT_FILE to use your own."
     );
     Ok(clients)

@@ -318,8 +318,12 @@ every one as missing, which is the right answer on an image that carries none.
 `index` reaches a registry over HTTPS, which needs a list of trusted certificate authorities.
 On a host with a certificate store, scratchsmith uses that store. This image has none, so
 scratchsmith uses the Mozilla root certificates that are compiled into the binary. It prints one
-note to standard error to say so. To use your own certificates, mount a PEM file and set
+warning to standard error to say so. To use your own certificates, mount a PEM file and set
 `SSL_CERT_FILE` to its path. A registry behind a proxy that inspects TLS needs that.
+
+The compiled-in certificates are as new as the scratchsmith release that carries them. A
+certificate store on the host gets updates from the operating system. The compiled-in set
+changes only with a newer scratchsmith release.
 
 If `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, scratchsmith never uses the compiled-in
 certificates. If the path that you set gives no certificates, the command fails and names the

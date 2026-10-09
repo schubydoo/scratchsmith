@@ -589,7 +589,7 @@ fn index_in_a_container_with_no_ca_store_uses_the_bundled_roots() {
     );
     assert!(!stderr.contains("panicked"), "must not panic: {stderr}");
     assert!(
-        stderr.contains("note: the system CA trust store could not be used")
+        stderr.contains("warning: the system CA trust store could not be used")
             && stderr.contains("Mozilla root certificates bundled with scratchsmith"),
         "the fallback must be announced: {stderr}"
     );
