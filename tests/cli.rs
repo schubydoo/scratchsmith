@@ -858,3 +858,68 @@ fn watch_refuses_the_sinks_and_formats_it_cannot_serve() {
     assert_eq!(out.status.code(), Some(1), "{stderr}");
     assert!(stderr.contains("--watch cannot push"), "{stderr}");
 }
+
+#[test]
+fn the_json_report_times_the_phases_that_ran() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let timings = |args: &[&str]| -> serde_json::Value {
+        let out = run(args);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{args:?}: {stderr}");
+        let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        report["timings"].clone()
+    };
+
+    // --no-build builds no image and asks for no SBOM, scan, smoke-run or signature, so
+    // those phases are null. `null`, not 0: a skipped phase must not read as a fast one.
+    let rootfs = tmp.path().join("rootfs");
+    let t = timings(&[
+        "pack",
+        "--format",
+        "json",
+        "-n",
+        "-o",
+        rootfs.to_str().unwrap(),
+        bin,
+    ]);
+    for ran in ["resolve_ms", "stage_ms", "total_ms"] {
+        assert!(t[ran].is_u64(), "{ran} must be a number: {t}");
+    }
+    for skipped in ["sbom_ms", "scan_ms", "deliver_ms", "smoke_ms", "sign_ms"] {
+        assert!(t[skipped].is_null(), "{skipped} did not run: {t}");
+    }
+    let sum = t["resolve_ms"].as_u64().unwrap() + t["stage_ms"].as_u64().unwrap();
+    assert!(
+        t["total_ms"].as_u64().unwrap() >= sum,
+        "the phases cannot exceed the total: {t}"
+    );
+
+    // An image sink delivers, so that phase is timed.
+    let archive = tmp.path().join("img.tar");
+    let t = timings(&[
+        "pack",
+        "--format",
+        "json",
+        "--oci-archive",
+        archive.to_str().unwrap(),
+        bin,
+    ]);
+    assert!(
+        t["deliver_ms"].is_u64(),
+        "an archive write is a delivery: {t}"
+    );
+
+    // The text report is for people, and stays as it was.
+    let out = run(&["pack", "--oci-archive", archive.to_str().unwrap(), bin]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!stdout.contains("_ms"), "{stdout}");
+}

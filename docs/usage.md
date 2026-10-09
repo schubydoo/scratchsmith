@@ -63,6 +63,42 @@ case for a static binary.
 scratchsmith pack --format json ./app | jq -e '.interpreter == "/lib64/ld-linux-x86-64.so.2"'
 ```
 
+`--format json` also carries `timings`: the time that each phase of the pack took, in
+milliseconds. Use it to find the slow part of a pack in CI, or to turn the phases into the spans
+of a build trace.
+
+```sh
+scratchsmith pack --format json --sbom --oci-archive app.tar ./app | jq .timings
+```
+
+```json
+{
+  "resolve_ms": 19,
+  "stage_ms": 9,
+  "sbom_ms": 1569,
+  "scan_ms": null,
+  "deliver_ms": 734,
+  "smoke_ms": null,
+  "sign_ms": null,
+  "total_ms": 2332
+}
+```
+
+| Field | Phase |
+|---|---|
+| `resolve_ms` | Read the binary and resolve its libraries |
+| `stage_ms` | Build the root filesystem: libraries, loader, NSS, extras, added files, locales, strip and UPX |
+| `sbom_ms` | Generate the SBOM (`--sbom`) |
+| `scan_ms` | Scan for vulnerabilities (`--scan`) |
+| `deliver_ms` | Build the image and load it, write the archive, or push it |
+| `smoke_ms` | Smoke-run the image (`--smoke`) |
+| `sign_ms` | Sign the image and attest the SBOM (`--sign`) |
+| `total_ms` | The whole pack |
+
+A phase that did not run is `null`. With `--no-build`, `deliver_ms` is `null`, because no image
+is built. The phases add up to a little less than `total_ms`. The text report does not show the
+timings.
+
 ## Trim the NSS modules
 
 glibc loads name-service (NSS) modules at runtime to resolve names: hostnames to IP addresses,
