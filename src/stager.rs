@@ -913,14 +913,20 @@ fn copy_into(src: &Path, root: &Path, abs_target: &Path) -> Result<()> {
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    // Replace a file that an earlier pack into this directory left, never write into it.
-    // `fs::copy` opens the target for writing, so a read-only copy (a 0444 CA bundle) fails
-    // for anyone but root, and a hard link would carry the write to its other name.
-    if target.symlink_metadata().is_ok_and(|m| m.is_file()) {
-        std::fs::remove_file(&target).with_context(|| format!("replacing {}", target.display()))?;
-    }
-    std::fs::copy(src, &target)
+    // Copy to a sibling and rename it over the name, as `packages::write_record` does. A
+    // file that an earlier pack into this directory left is replaced, never written into:
+    // `fs::copy` opens its target for writing, so a read-only copy (a 0444 CA bundle) fails
+    // for anyone but root, and a hard link or a symlink would carry the write elsewhere.
+    let dir = target.parent().context("a staged file has no directory")?;
+    let tmp = tempfile::Builder::new()
+        .prefix(".scratchsmith-")
+        .tempfile_in(dir)
+        .with_context(|| format!("creating a file in {}", dir.display()))?;
+    // `fs::copy` gives the sibling the mode of the source, which the rename keeps.
+    std::fs::copy(src, tmp.path())
         .with_context(|| format!("copying {} -> {}", src.display(), target.display()))?;
+    tmp.persist(&target)
+        .with_context(|| format!("replacing {}", target.display()))?;
     Ok(())
 }
 

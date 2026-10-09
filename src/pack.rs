@@ -611,15 +611,10 @@ fn finish_staging(
     })
 }
 
-/// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
-pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<PackReport> {
-    // No image is built here, so there is nothing to smoke-run. The CLI blocks --smoke --no-build,
-    // but `smoke` can also arrive from the config/profile — fail loud rather than silently drop it.
-    if opts.smoke {
-        bail!("--smoke needs a built image, so it isn't supported with --no-build; drop --smoke, or set `smoke = false` in the profile");
-    }
-    // This pack merges into whatever is there, so a file it does not stage stays in the tree.
-    // stderr, like every tolerance: stdout carries the `--format json` report.
+/// Warn on stderr when the `--no-build` output directory already holds something. The pack
+/// merges into whatever is there, so a file it does not stage stays in the tree. stderr,
+/// like every tolerance: stdout carries the `--format json` report.
+pub fn warn_about_a_used_output_dir(out_dir: &Path) {
     if out_dir
         .read_dir()
         .is_ok_and(|mut entries| entries.next().is_some())
@@ -629,6 +624,15 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
             out_dir.display(),
             crate::image::DEPRECATIONS_URL
         );
+    }
+}
+
+/// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
+pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<PackReport> {
+    // No image is built here, so there is nothing to smoke-run. The CLI blocks --smoke --no-build,
+    // but `smoke` can also arrive from the config/profile — fail loud rather than silently drop it.
+    if opts.smoke {
+        bail!("--smoke needs a built image, so it isn't supported with --no-build; drop --smoke, or set `smoke = false` in the profile");
     }
     let StagedRootfs {
         tree,
