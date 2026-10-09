@@ -22,6 +22,10 @@ Inspect the rootfs without building an image (**no Docker daemon needed**):
 scratchsmith pack --no-build --output ./rootfs ./app
 ```
 
+Give `--output` a new directory or an empty one. Scratchsmith does not empty the directory, so
+a pack into a directory that holds an earlier pack merges with it and prints a warning. The
+[Deprecations](deprecations.md#an-output-directory-that-is-not-empty) page has the detail.
+
 Or write a **daemonless OCI archive** (loadable by skopeo/buildah, and pushable to a registry with
 no Docker daemon):
 

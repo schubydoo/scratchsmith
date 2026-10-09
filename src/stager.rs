@@ -913,8 +913,20 @@ fn copy_into(src: &Path, root: &Path, abs_target: &Path) -> Result<()> {
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::copy(src, &target)
+    // Copy to a sibling and rename it over the name, as `packages::write_record` does. A
+    // file that an earlier pack into this directory left is replaced, never written into:
+    // `fs::copy` opens its target for writing, so a read-only copy (a 0444 CA bundle) fails
+    // for anyone but root, and a hard link or a symlink would carry the write elsewhere.
+    let dir = target.parent().context("a staged file has no directory")?;
+    let tmp = tempfile::Builder::new()
+        .prefix(".scratchsmith-")
+        .tempfile_in(dir)
+        .with_context(|| format!("creating a file in {}", dir.display()))?;
+    // `fs::copy` gives the sibling the mode of the source, which the rename keeps.
+    std::fs::copy(src, tmp.path())
         .with_context(|| format!("copying {} -> {}", src.display(), target.display()))?;
+    tmp.persist(&target)
+        .with_context(|| format!("replacing {}", target.display()))?;
     Ok(())
 }
 
@@ -1560,6 +1572,25 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("already in the image"), "{err}");
+    }
+
+    #[test]
+    fn a_copy_replaces_a_staged_file_and_never_writes_into_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let src = make_file(&tmp.path().join("src/ca.pem"), b"new");
+        // What an earlier pack left: a read-only file, with a second name on the same inode.
+        // The second name fails this test for root too, who can write into a read-only file.
+        let staged = make_file(&dest.join("etc/ca.pem"), b"old");
+        let other_name = tmp.path().join("other-name");
+        fs::hard_link(&staged, &other_name).unwrap();
+        fs::set_permissions(&staged, fs::Permissions::from_mode(0o444)).unwrap();
+
+        copy_into(&src, &dest, Path::new("/etc/ca.pem")).unwrap();
+
+        assert_eq!(fs::read(&staged).unwrap(), b"new");
+        assert_eq!(fs::read(&other_name).unwrap(), b"old");
     }
 
     #[test]

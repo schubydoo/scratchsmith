@@ -85,8 +85,10 @@ Profiles do not inherit from each other, so repeat the keys the inner table reli
 | A library that starts like an ELF and cannot be parsed | 1.6.0 | 2.0.0 | Replace the damaged file |
 | `$PLATFORM` in a search path, on an architecture with no value for it | 1.6.0 | 2.0.0 | Write the directory name in the path |
 | A library found only through an inherited `RPATH`, by an object that has `RUNPATH` | 1.6.0 | 2.0.0 | Give that object the directory in its own `RUNPATH` |
+| `--no-build` into an output directory that is not empty | 1.6.0 | 2.0.0 | Use a new directory, or empty it first |
 
-The warnings come from `pack` and from `graph`, because both resolve the same dependency tree.
+The first three warnings come from `pack` and from `graph`, because both resolve the same
+dependency tree. The last one comes from `pack` only.
 
 ### A library that cannot be parsed
 
@@ -141,4 +143,31 @@ To fix it, link the library that needs the file with a `RUNPATH` that holds the 
 
 ```console
 $ cc -shared -fPIC -Wl,--enable-new-dtags -Wl,-rpath,/opt/app/lib -o libmid.so mid.c -lleaf
+```
+
+### An output directory that is not empty
+
+`pack --no-build --output <dir>` stages the files of the image into a directory and builds no
+image. Scratchsmith does not empty that directory first. A second pack into the same directory
+merges with the files from the first.
+
+A file that the second pack stages replaces the old copy. A file that the second pack does not
+stage stays in the directory. For example, pack once with `--ca-certs` and once without it, and
+the certificate file is still there. The directory then holds more than the flags describe, and
+an SBOM or a scan of it includes the old file.
+
+One case goes the other way. Pack once with `--packages image`, and the package records are in
+the directory. Pack again with `--packages sbom --sbom`, and scratchsmith removes those records
+after the SBOM run, because that output never leaves them in the tree. `--packages sbom` on its
+own stages no records and removes none, because nothing reads the tree.
+
+Two flags stop a second pack. `--add-file` and `--locale` do not replace a file that is already
+in the directory, so the pack ends with an error.
+
+Scratchsmith 2.0 refuses a directory that is not empty. Give each pack a new directory, or
+remove the old one first:
+
+```console
+$ rm -rf ./rootfs
+$ scratchsmith pack --no-build --output ./rootfs ./app
 ```

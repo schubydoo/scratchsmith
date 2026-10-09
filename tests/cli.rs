@@ -661,6 +661,51 @@ fn a_bare_label_warns_on_the_rootfs_sink_too() {
 }
 
 #[test]
+fn a_second_pack_into_the_same_directory_warns_and_replaces_a_read_only_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    // A binary with no write bit stages a copy with no write bit, which is the file a second
+    // pack has to replace.
+    let tmp = tempfile::tempdir().unwrap();
+    let read_only = tmp.path().join("app");
+    std::fs::copy(bin, &read_only).unwrap();
+    std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let rootfs = tmp.path().join("rootfs");
+    let pack = || {
+        run(&[
+            "pack",
+            "--no-build",
+            "-o",
+            rootfs.to_str().unwrap(),
+            read_only.to_str().unwrap(),
+        ])
+    };
+
+    let first = pack();
+    let stderr = String::from_utf8_lossy(&first.stderr);
+    assert!(first.status.success(), "the first pack: {stderr}");
+    assert!(
+        !stderr.contains("is not empty"),
+        "a new directory must stay quiet: {stderr}"
+    );
+
+    let second = pack();
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(second.status.success(), "the second pack: {stderr}");
+    assert!(
+        stderr.contains("is not empty") && stderr.contains("scratchsmith 2.0 rejects it"),
+        "a directory with an earlier pack in it must warn: {stderr}"
+    );
+    assert!(
+        stderr.contains("https://schubydoo.github.io/scratchsmith/latest/deprecations/"),
+        "the warning must point at the versioned Deprecations page: {stderr}"
+    );
+}
+
+#[test]
 fn an_older_rpm_host_is_found_and_its_berkeley_database_warns() {
     use std::os::unix::fs::PermissionsExt;
     let Some(bin) = small_fixture() else {
