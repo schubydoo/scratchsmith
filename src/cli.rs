@@ -117,7 +117,8 @@ pub enum Command {
         /// Compress the packed binary with UPX (it self-decompresses at runtime).
         #[arg(long)]
         upx: bool,
-        /// Fail the pack if the packed payload exceeds this size, e.g. `12MB` or `512KiB`.
+        /// Fail the pack if the staged image (payload, NSS files and extras) exceeds this size,
+        /// e.g. `12MB` or `512KiB`.
         #[arg(long = "max-size", value_name = "SIZE")]
         max_size: Option<String>,
         /// Generate an SBOM of the packed rootfs (requires syft).

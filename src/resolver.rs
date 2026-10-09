@@ -3,8 +3,8 @@
 //!
 //! Two halves, both here: `parse_elf_info` reads the raw dynamic-linking facts out of an
 //! ELF, and `resolve_with` turns each soname into a real path by searching DT_RPATH (the
-//! object's own, then its ancestors' — RPATH is transitive, and ignored when the object
-//! also declares RUNPATH), then its own DT_RUNPATH, then the sysroot default dirs.
+//! object's own, then its ancestors' — RPATH is transitive, and all of it is ignored when
+//! the object also declares RUNPATH), then its own DT_RUNPATH, then the sysroot default dirs.
 //! `$ORIGIN`, `$LIB` and `$PLATFORM` are expanded inside those entries, not searched.
 
 use anyhow::{bail, Context, Result};
@@ -324,12 +324,12 @@ pub fn resolve_with(
     while let Some((obj_path, obj, inherited_rpaths)) = queue.pop_front() {
         let obj_dir = obj_path.parent().unwrap_or(Path::new("/"));
 
-        // An object's own RPATH is ignored when it also declares RUNPATH (glibc rule).
-        let used_rpaths: &[String] = if obj.runpaths.is_empty() {
-            &obj.rpaths
-        } else {
-            &[]
-        };
+        // One glibc rule, read twice below: an object that declares RUNPATH searches NO
+        // RPATH for its own lookups, neither its own nor one inherited from an ancestor
+        // (`_dl_map_object`: "when the object has the RUNPATH information we don't use any
+        // RPATHs").
+        let searches_rpath = obj.runpaths.is_empty();
+        let used_rpaths: &[String] = if searches_rpath { &obj.rpaths } else { &[] };
         // `$PLATFORM` has no value here, so the entry is searched with the token gone and a
         // same-named file in that other directory can stage in place of the arch-specific
         // one. Warn only where a search can use the entry. A soname with a slash is a path
@@ -360,20 +360,56 @@ pub fn resolve_with(
         let runpath_dirs = build_dirs(&obj.runpaths, obj_dir, &sysroot.root, &root_info);
 
         // Search order: RPATH (own, then ancestors' — transitive) -> RUNPATH (this
-        // object only) -> default dirs. LD_LIBRARY_PATH is deliberately omitted.
+        // object only) -> default dirs. LD_LIBRARY_PATH is deliberately omitted, and so is
+        // the host's /etc/ld.so.cache: resolution never trusts the host's loader state.
         let mut search: Vec<PathBuf> = Vec::new();
         search.extend(own_rpaths.iter().cloned());
-        search.extend(inherited_rpaths.iter().cloned());
+        if searches_rpath {
+            search.extend(inherited_rpaths.iter().cloned());
+        }
         search.extend(runpath_dirs);
         search.extend(sysroot.default_dirs.iter().cloned());
+        // The search this resolver ran before it learned that rule: inherited RPATH always.
+        // It is the fallback below, so a pack that only worked through it keeps working
+        // until 2.0, with a warning.
+        let tolerated: &[PathBuf] = if searches_rpath {
+            &[]
+        } else {
+            &inherited_rpaths
+        };
 
-        // Children inherit this object's full RPATH view (own + ancestors'), never
-        // its RUNPATH — that is exactly the "RUNPATH is not inherited" rule.
+        // Children inherit the RPATH view this object searched (own + ancestors'), never its
+        // RUNPATH — that is the "RUNPATH is not inherited" rule. An object with RUNPATH
+        // still passes its ANCESTORS' RPATH on. Its OWN RPATH, if it carries both tags, is
+        // not passed on here. glibc may pass that one on (its ancestor walk tests for
+        // DT_RPATH only); that is unconfirmed and left as it was.
         let mut child_rpaths = own_rpaths;
-        child_rpaths.extend(inherited_rpaths);
+        child_rpaths.extend(inherited_rpaths.iter().cloned());
 
         for soname in &obj.needed {
-            let Some(found) = find_lib(soname, &search, obj_dir, &sysroot.root) else {
+            let faithful = find_lib(soname, &search, obj_dir, &sysroot.root);
+            // The loader does not search here for this object: the file sits only in an RPATH
+            // directory of a parent, and this object has RUNPATH. Whether the program starts
+            // on the host depends on the host's ld.so.cache, which is not read here, so the
+            // warning states the search rule and no more.
+            let found = faithful.or_else(|| {
+                let found = find_lib(soname, tolerated, obj_dir, &sysroot.root)?;
+                // A parent can list a soname twice; say it once.
+                push_unique(
+                    &mut resolution.warnings,
+                    format!(
+                        "{} needs `{}`, and it was found only at {} through an RPATH \
+                         inherited from a parent. {0} has RUNPATH, so the loader does not \
+                         search an inherited RPATH for it, and that copy is not the one \
+                         the loader uses.",
+                        printable(&obj_path),
+                        soname.escape_debug(),
+                        printable(&found)
+                    ),
+                );
+                Some(found)
+            });
+            let Some(found) = found else {
                 push_unique(&mut resolution.missing, soname.clone());
                 resolution.edges.push(DepEdge {
                     from: obj_path.clone(),
@@ -893,6 +929,72 @@ mod tests {
             res.missing.contains(&"libleaf.so".to_string()),
             "runpath must not be inherited by children"
         );
+    }
+
+    #[test]
+    fn an_object_with_runpath_does_not_search_an_inherited_rpath() {
+        // Graph: exe (RPATH app/libs) -> libmid (RUNPATH elsewhere) -> libleaf.
+        // glibc skips every RPATH, the ancestors' included, for an object that has RUNPATH.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        let mid = root.join("app/libs/libmid.so");
+        let rpath_leaf = root.join("app/libs/libleaf.so");
+        let system_leaf = root.join("usr/lib/libleaf.so");
+        for p in [&exe, &mid, &rpath_leaf] {
+            touch(p);
+        }
+        let graph = |mid_runpaths: &[&str]| {
+            HashMap::from([
+                (
+                    canonical(&exe),
+                    elf(&["libmid.so"], &["$ORIGIN/libs"], &[], None),
+                ),
+                (
+                    canonical(&mid),
+                    elf(&["libleaf.so"], &[], mid_runpaths, None),
+                ),
+                // Both copies are plain parsable leaves, wherever they are found.
+                (canonical(&rpath_leaf), elf(&[], &[], &[], None)),
+                (
+                    canonical(root).join("usr/lib/libleaf.so"),
+                    elf(&[], &[], &[], None),
+                ),
+            ])
+        };
+        let resolve = |infos| resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos });
+        let leaf_path = |res: &Resolution| {
+            res.libs
+                .iter()
+                .find(|l| l.soname == "libleaf.so")
+                .map(|l| l.path.clone())
+        };
+
+        // Only the RPATH copy exists. The loader would not find it, so the program cannot
+        // start on the host. The pack keeps working until 2.0, and says so.
+        let res = resolve(graph(&["/opt/elsewhere"])).unwrap();
+        assert_eq!(leaf_path(&res), Some(canonical(&rpath_leaf)));
+        assert!(res.missing.is_empty(), "{:?}", res.missing);
+        assert_eq!(res.warnings.len(), 1, "{:?}", res.warnings);
+        assert!(
+            res.warnings[0].contains("`libleaf.so`") && res.warnings[0].contains("inherited"),
+            "{:?}",
+            res.warnings
+        );
+
+        // A second copy sits in a default directory. That is the one the loader uses, so it
+        // is the one to stage: the old search staged the RPATH copy, a different file than
+        // the program runs with on the host. Found the faithful way, so no warning.
+        touch(&system_leaf);
+        let res = resolve(graph(&["/opt/elsewhere"])).unwrap();
+        assert_eq!(leaf_path(&res), Some(canonical(&system_leaf)));
+        assert!(res.warnings.is_empty(), "{:?}", res.warnings);
+
+        // Without RUNPATH on libmid the inherited RPATH is in force and comes first, as it
+        // always did, with nothing to warn about.
+        let res = resolve(graph(&[])).unwrap();
+        assert_eq!(leaf_path(&res), Some(canonical(&rpath_leaf)));
+        assert!(res.warnings.is_empty(), "{:?}", res.warnings);
     }
 
     #[test]
