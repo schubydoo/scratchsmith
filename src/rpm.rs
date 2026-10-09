@@ -19,11 +19,13 @@ use std::process::{Command, Stdio};
 ///
 /// A database directory is not enough: a Debian host can carry the `rpm` tool with an empty
 /// database, and a broken one must not read as "nothing is owned". So the test is a real
-/// question with a known answer, whether the database knows the `rpm` package itself.
+/// question with a known answer, whether the database knows the package that provides `rpm`.
+/// The name of that package varies (`rpm-ndb` on openSUSE Leap), so the question is by
+/// capability and not by name.
 pub fn available() -> bool {
     db_path().is_some_and(|db| db.is_dir())
         && Command::new("rpm")
-            .args(["-q", "--qf", "%{NAME}\\n", "--", "rpm"])
+            .args(["-q", "--qf", "%{NAME}\\n", "--whatprovides", "rpm"])
             .env("LC_ALL", "C")
             .output()
             .is_ok_and(|out| out.status.success())
@@ -96,11 +98,11 @@ pub fn owners(
             .output()
             .context("running rpmdb --exportdb")?;
         if !export.status.success() {
-            // `--exportdb` arrived in rpm 4.15, and an older rpm (RHEL 8 has 4.14) answers
+            // An old rpm (4.11 on CentOS 7 and Amazon Linux 2) has no `--exportdb`. It answers
             // every `rpm -qf` and then fails here with an "unknown option" message.
             bail!(
-                "rpmdb --exportdb failed ({}): {}. The package records need rpm 4.15 or \
-                 newer; --packages report works without them",
+                "rpmdb --exportdb failed ({}): {}. The package records need an rpm that has \
+                 --exportdb, which rpm 4.11 does not; --packages report works without them",
                 export.status,
                 String::from_utf8_lossy(&export.stderr).trim()
             );
@@ -330,8 +332,9 @@ fn header_nevra(header: &[u8]) -> Option<Nevra> {
 /// links and files the user asked for, so rpm is not pointed at it at all. The caller places
 /// the bytes with the same checks as every other record.
 ///
-/// rpm leaves working files beside the database: its lock, and for the sqlite backend a
-/// shared-memory index and a write-ahead log that is empty once rpm has finished. None is
+/// rpm leaves working files beside the database: its lock, for the sqlite backend a
+/// shared-memory index and a write-ahead log that is empty once rpm has finished, and for the
+/// Berkeley DB backend an environment lock and region files. None is
 /// part of the data and a reader rebuilds what it needs, so they are left behind here. For
 /// the sqlite backend that leaves one file.
 pub fn build_database(headers: &[u8]) -> Result<Vec<(std::ffi::OsString, Vec<u8>)>> {
@@ -383,8 +386,10 @@ pub fn build_database(headers: &[u8]) -> Result<Vec<(std::ffi::OsString, Vec<u8>
         let text = name.to_string_lossy();
         let meta = entry.metadata()?;
         // `__db.NNN` are the Berkeley DB backend's region files: per-machine state, not
-        // data, and rebuilt by a reader like the others.
+        // data, and rebuilt by a reader like the others. `.dbenv.lock` is that backend's
+        // environment lock, the counterpart of `.rpm.lock`, and never holds data.
         let working_file = text == ".rpm.lock"
+            || text == ".dbenv.lock"
             || text.starts_with("__db.")
             || text.ends_with("-shm")
             || (text.ends_with("-wal") && meta.len() == 0);
