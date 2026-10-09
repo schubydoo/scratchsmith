@@ -37,21 +37,23 @@ and `cargo test` still passes:
 **In CI, some of those stop being optional.** A skipped test is recorded as a pass. A runner
 that loses a tool then reports a green suite having run nothing.
 
-Six tools are strict in CI: `cc`, `strip`, `upx`, Docker, `getent` and `/usr/bin/id`. A missing
-one **fails** the test instead of skipping it. The workflow installs or guarantees all six, so a
+Seven tools are strict in CI: `cc`, `strip`, `upx`, Docker, `getent`, `/usr/bin/id` and `syft`. A
+missing one **fails** the test instead of skipping it. The workflow installs or guarantees all seven, so a
 miss there is a broken runner. If the `CI` environment variable holds anything other than an opt-out
 word, the strict gate turns on. The opt-out words are `0`, `false`, `no`, `off` and the empty
 string, in any case.
 
-`musl-gcc`, `tini`, the `registry:2` pull and the host locale sources stay optional everywhere.
+`musl-gcc`, `tini`, the `registry:2` pull, the host locale sources, a dpkg database and the host
+CA bundle stay optional everywhere.
 
 If your own machine has `CI` set for an unrelated reason, set `SCRATCHSMITH_NO_CI_GATE=1` to
 get the local behavior back. That variable reads by the same opt-out words, so an empty value
 does not turn the gate off. The gate lives in `tests/common/mod.rs`.
 
-One tool is neither required nor skipped: **`syft`**. Its `--sbom` test runs in both cases.
-With `syft` present, the test asserts success. With `syft` absent, it asserts a clean
-"missing syft must fail" error. The suite is green either way.
+The `--sbom` test is a special case. It runs with `syft` and without it. With `syft` present,
+the test asserts success. With `syft` absent, it asserts a clean "missing syft must fail"
+error. On your own machine the suite is green either way. The `--packages` tests need `syft`
+for the SBOM, so in CI a missing `syft` fails them.
 
 ```sh
 git clone https://github.com/schubydoo/scratchsmith
@@ -119,9 +121,10 @@ the version bump and `CHANGELOG.md`.
 knope document-change    # scaffolds .changeset/<slug>.md
 ```
 
-…or hand-write a fragment with front-matter `default: patch|minor|major|perf|security`
+…or hand-write a fragment with front-matter `default: patch|minor|major|perf|security|deprecated`
 and a one-line summary. A `major` fragment bumps the major version, so read
-[COMPATIBILITY.md](COMPATIBILITY.md) before you write one.
+[COMPATIBILITY.md](COMPATIBILITY.md) before you write one. A deprecation ships two fragments:
+one `minor` for the warning that it adds, and one `deprecated` for the notice.
 
 Internal-only PRs (CI, refactor, tests, non-user-facing docs) need no fragment. Apply
 the **`no-changelog`** label instead. Never hand-edit `CHANGELOG.md`. It is generated.

@@ -59,6 +59,10 @@ action-specific. `version` picks which release to download. `output` maps to `--
 `--oci-archive`. Note that `push` publishes with `docker tag`/`docker push`, **not** pack's
 daemonless, cosign-signable `--push`.
 
+The action reads the JSON report, so every pack through it runs the `--packages` lookup. The
+`report` output holds a `packages` list and a `timings` object. `--packages` has no input of
+its own. Set it through `args`, for example `args: --packages none` to turn the lookup off.
+
 | Input | Default | Description |
 |---|---|---|
 | `binary` | *(required)* | Path to the dynamically linked glibc ELF binary to pack. |

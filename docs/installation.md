@@ -14,7 +14,9 @@ curl -fsSL https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install
 
 Piping to `bash` runs [`install.sh`](https://github.com/schubydoo/scratchsmith/blob/main/install.sh).
 You can read it first. `VERSION` and `BIN_DIR` env vars override the tag and install
-directory. Uninstall with `--uninstall`:
+directory. If a download stalls for 30 seconds, the script stops with an error. It does not
+retry. That limit needs curl, or a wget that takes `-T`. A BusyBox wget that was built with no
+timeout feature can still hang. Uninstall with `--uninstall`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install.sh | bash -s -- --uninstall

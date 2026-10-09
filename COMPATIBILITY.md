@@ -18,7 +18,7 @@ A breaking change to any of these requires a new **major** version. See the
 - **`scratchsmith.toml`**: the config keys and their types.
 - **`--format json`**: the field names and types of the `pack`, `index`, `graph`, `diff`, and
   `unpack` reports (the schema CI gates consume).
-- **Exit codes**: `0` on success, `2` on an argument/usage error, non-zero on any other failure.
+- **Exit codes**: `0` on success, `2` on an argument-parse error, non-zero on any other failure.
 
 ## What is *not* a contract (can change in any release)
 

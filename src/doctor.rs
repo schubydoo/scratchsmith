@@ -82,8 +82,8 @@ const TOOLS: &[Tool] = &[
         purpose: "--locale (compile a locale the host has no directory for)",
         hint: "install glibc tools (libc-bin) and the locale sources (locales)",
     },
-    // Absent on every host that is not Debian-based, and that is fine: without it the
-    // package list is empty and the SBOM is as it was.
+    // Absent on every host that is not Debian-based, and that is fine: an rpm host uses rpm,
+    // and with neither the report says `null` and the SBOM is as it was.
     Tool {
         name: "dpkg-query",
         version_args: &["--version"],
@@ -95,7 +95,7 @@ const TOOLS: &[Tool] = &[
         name: "rpm",
         version_args: &["--version"],
         purpose: "--packages on an rpm host (Fedora, RHEL and their relatives)",
-        hint: "present on rpm-based hosts; a host with neither gets no package data",
+        hint: "present on rpm-based hosts; a host with neither gets no package data, and --packages sbom or image fails there",
     },
 ];
 

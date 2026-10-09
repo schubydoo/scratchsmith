@@ -35,7 +35,7 @@ fn help_lists_all_subcommands() {
 
 #[test]
 fn exit_codes_follow_the_v1_contract() {
-    // The exit-code contract (COMPATIBILITY.md): 0 on success, 2 on an argument/usage error
+    // The exit-code contract (COMPATIBILITY.md): 0 on success, 2 on an argument-parse error
     // (clap), non-zero on any other failure. Pinned here so a change is deliberate — a script
     // gating on `$?` must not break on an upgrade.
     assert!(run(&["--version"]).status.success(), "0: --version");

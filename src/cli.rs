@@ -117,8 +117,8 @@ pub enum Command {
         /// Compress the packed binary with UPX (it self-decompresses at runtime).
         #[arg(long)]
         upx: bool,
-        /// Fail the pack if the staged image (payload, NSS files and extras) exceeds this size,
-        /// e.g. `12MB` or `512KiB`.
+        /// Fail the pack if the staged image (payload, NSS files, extras, added files, locales
+        /// and package records) exceeds this size, e.g. `12MB` or `512KiB`.
         #[arg(long = "max-size", value_name = "SIZE")]
         max_size: Option<String>,
         /// Generate an SBOM of the packed rootfs (requires syft).
@@ -195,7 +195,7 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
     },
-    /// Report a binary's ELF hardening posture (PIE/RELRO/NX).
+    /// Report a binary's ELF hardening posture (PIE/RELRO/NX/canary/FORTIFY).
     Lint {
         /// Path to the binary to inspect.
         binary: PathBuf,
