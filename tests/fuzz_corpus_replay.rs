@@ -60,3 +60,11 @@ fn replay_registry_parse() {
         let _ = scratchsmith::registry::select_token(&b, "fuzz");
     }
 }
+
+#[test]
+#[ignore = "coverage audit; needs a grown fuzz/corpus"]
+fn replay_rpm_headers() {
+    for b in corpus("rpm_headers") {
+        let _ = scratchsmith::rpm::header_names(&b);
+    }
+}

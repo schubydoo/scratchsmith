@@ -12,7 +12,8 @@
 //! SBOM JSON. The os-release file is not optional: without it syft has no distribution, every
 //! package URL comes out empty, and a scanner has nothing to match on.
 //!
-//! dpkg only. An rpm database is binary, so there is no record to stage for it yet.
+//! dpkg and rpm. The rpm half is in `crate::rpm`: an rpm database is binary, so its records
+//! are a small database built by rpm itself, where dpkg's are text files.
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
@@ -103,7 +104,7 @@ pub struct Package {
     pub arch: String,
     /// The source package it was built from, e.g. `glibc`. This is the name advisories use.
     pub source: String,
-    /// The package format: `deb`.
+    /// The package format: `deb` or `rpm`.
     #[serde(rename = "type")]
     pub kind: &'static str,
     /// The files in the image whose host path this package owns, by image path, sorted.
@@ -119,13 +120,48 @@ pub struct Owners {
     /// Bundled files dpkg was NOT asked about, because their host path holds a character it
     /// would read as a pattern. They look unowned in `packages`, so the caller says so.
     pub unasked: Vec<String>,
-    /// `(record file name, dpkg status stanza)`, one per package.
-    records: Vec<(String, String)>,
+    records: Records,
+}
+
+/// What a scanner reads to learn the packages, in the form the host's package manager uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Records {
+    /// `(record file name, dpkg status stanza)`, one per package, for `status.d`.
+    Dpkg(Vec<(String, String)>),
+    /// The owning packages' rpm headers, as one header list for `rpmdb --importdb`.
+    Rpm(Vec<u8>),
+}
+
+impl Default for Records {
+    fn default() -> Self {
+        Records::Dpkg(Vec::new())
+    }
+}
+
+/// The package manager whose database names the owners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Manager {
+    Dpkg,
+    Rpm,
+}
+
+/// The package manager this host has a database for. dpkg is asked first: a Debian host can
+/// carry the `rpm` tool with an empty database, and its files are dpkg's.
+pub fn manager() -> Option<Manager> {
+    if dpkg_available() {
+        Some(Manager::Dpkg)
+    } else if crate::rpm::available() {
+        Some(Manager::Rpm)
+    } else {
+        None
+    }
 }
 
 /// True when this host has a dpkg database to ask.
 pub fn dpkg_available() -> bool {
-    Path::new("/var/lib/dpkg/status").exists()
+    // A status file that holds nothing is a database that knows no package: an rpm host can
+    // carry the `dpkg` tool, and its files are rpm's.
+    std::fs::metadata("/var/lib/dpkg/status").is_ok_and(|m| m.len() > 0)
         && Command::new("dpkg-query")
             .arg("--version")
             .output()
@@ -141,7 +177,30 @@ pub fn dpkg_available() -> bool {
 /// package is the source of: the CA bundle is generated on the host from `ca-certificates`.
 /// Such a package is named only if it is installed. The package name must be a literal:
 /// `dpkg-query -W` reads its argument as a name pattern, as `-S` reads a path pattern.
-pub fn owners(files: &[(PathBuf, PathBuf)], conventions: &[(&str, PathBuf)]) -> Result<Owners> {
+///
+/// `want_records` says whether the SBOM or image output is on. The rpm half reads every
+/// package on the host to build its records, so it skips that for a report-only pack.
+pub fn owners(
+    manager: Manager,
+    files: &[(PathBuf, PathBuf)],
+    conventions: &[(&str, PathBuf)],
+    want_records: bool,
+) -> Result<Owners> {
+    match manager {
+        Manager::Dpkg => dpkg_owners(files, conventions),
+        Manager::Rpm => {
+            // rpm takes a literal path, so no path is left unasked.
+            let (packages, headers) = crate::rpm::owners(files, conventions, want_records)?;
+            Ok(Owners {
+                packages,
+                unasked: Vec::new(),
+                records: Records::Rpm(headers),
+            })
+        }
+    }
+}
+
+fn dpkg_owners(files: &[(PathBuf, PathBuf)], conventions: &[(&str, PathBuf)]) -> Result<Owners> {
     let host_paths: Vec<PathBuf> = files.iter().map(|(host, _)| host.clone()).collect();
     let mut unasked: Vec<String> = host_paths
         .iter()
@@ -209,7 +268,7 @@ pub fn owners(files: &[(PathBuf, PathBuf)], conventions: &[(&str, PathBuf)]) -> 
     Ok(Owners {
         packages,
         unasked,
-        records,
+        records: Records::Dpkg(records),
     })
 }
 
@@ -486,15 +545,58 @@ impl Drop for StagedRecords {
 /// to `rootfs/etc/os-release` unless the rootfs already has one.
 ///
 /// On an error the guard built so far is dropped, so a failed call leaves nothing behind.
-pub fn stage_records(rootfs: &Path, owners: &Owners) -> Result<StagedRecords> {
+///
+/// `protected` are image paths the user staged in this pack (`--add-file` destinations). A
+/// record that would land on one stops the pack: a file the user asked for is never replaced
+/// or removed behind their back.
+pub fn stage_records(
+    rootfs: &Path,
+    owners: &Owners,
+    protected: &[PathBuf],
+) -> Result<StagedRecords> {
     let mut staged = StagedRecords::default();
+    let write = |path: &Path, bytes: &[u8]| -> Result<()> {
+        let image = Path::new("/").join(path.strip_prefix(rootfs).unwrap_or(path));
+        if protected.contains(&image) {
+            bail!(
+                "cannot record packages: {} is a file you added with --add-file, and the \
+                 package records need that path",
+                image.display()
+            );
+        }
+        write_record(path, bytes)
+    };
 
-    let status_d = rootfs.join("var/lib/dpkg/status.d");
-    create_dirs(rootfs, &status_d, &mut staged.dirs)?;
-    for (file, stanza) in &owners.records {
-        let path = status_d.join(file);
-        write_record(&path, stanza.as_bytes())?;
-        staged.files.push(path);
+    match &owners.records {
+        Records::Dpkg(records) => {
+            let status_d = rootfs.join("var/lib/dpkg/status.d");
+            create_dirs(rootfs, &status_d, &mut staged.dirs)?;
+            for (file, stanza) in records {
+                let path = status_d.join(file);
+                write(&path, stanza.as_bytes())?;
+                staged.files.push(path);
+            }
+        }
+        // Staging is only asked for when there are owners, and every owner has a header, so
+        // an empty list means the export and the report disagreed. An image or an SBOM that
+        // was asked to carry the packages must not go out with none.
+        Records::Rpm(headers) if headers.is_empty() => {
+            bail!("cannot record packages: rpm named owners and exported no header for them")
+        }
+        Records::Rpm(headers) => {
+            // rpm builds the database in a directory of its own, and only its bytes come
+            // here. They are placed like any other record, at the host's database path: no
+            // write goes through a link, and an earlier database is replaced by a rename.
+            let files = crate::rpm::build_database(headers)?;
+            let db = crate::rpm::db_path().context("asking rpm where its database lives")?;
+            let db_dir = rootfs.join(db.strip_prefix("/").unwrap_or(&db));
+            create_dirs(rootfs, &db_dir, &mut staged.dirs)?;
+            for (name, bytes) in files {
+                let path = db_dir.join(name);
+                write(&path, &bytes)?;
+                staged.files.push(path);
+            }
+        }
     }
 
     let os_release = rootfs.join("etc/os-release");
@@ -505,7 +607,7 @@ pub fn stage_records(rootfs: &Path, owners: &Owners) -> Result<StagedRecords> {
             .find_map(|p| std::fs::read(p).ok())
             .context("reading the host's os-release, which names the distribution")?;
         create_dirs(rootfs, &rootfs.join("etc"), &mut staged.dirs)?;
-        write_record(&os_release, &host)?;
+        write(&os_release, &host)?;
         staged.files.push(os_release);
     }
     Ok(staged)
@@ -712,7 +814,7 @@ mod tests {
     #[test]
     fn staged_records_are_removed_on_drop_and_kept_on_keep() {
         let owners = Owners {
-            records: vec![("libc6".into(), "Package: libc6\n".into())],
+            records: Records::Dpkg(vec![("libc6".into(), "Package: libc6\n".into())]),
             ..Owners::default()
         };
         let tmp = tempfile::tempdir().unwrap();
@@ -728,7 +830,7 @@ mod tests {
             eprintln!("skipping: this host has no os-release to copy");
             return;
         }
-        let staged = stage_records(rootfs, &owners).unwrap();
+        let staged = stage_records(rootfs, &owners, &[]).unwrap();
         assert_eq!(
             std::fs::read_to_string(rootfs.join("var/lib/dpkg/status.d/libc6")).unwrap(),
             "Package: libc6\n"
@@ -745,29 +847,32 @@ mod tests {
         // An os-release the user staged is theirs: it is neither replaced nor removed.
         std::fs::create_dir_all(rootfs.join("etc")).unwrap();
         std::fs::write(rootfs.join("etc/os-release"), b"ID=mine\n").unwrap();
-        drop(stage_records(rootfs, &owners).unwrap());
+        drop(stage_records(rootfs, &owners, &[]).unwrap());
         assert_eq!(
             std::fs::read_to_string(rootfs.join("etc/os-release")).unwrap(),
             "ID=mine\n"
         );
 
-        stage_records(rootfs, &owners).unwrap().keep();
+        stage_records(rootfs, &owners, &[]).unwrap().keep();
         assert!(rootfs.join("var/lib/dpkg/status.d/libc6").is_file());
 
         // A second `image` pack into the same directory finds the kept record. It is
         // replaced, not refused.
         let newer = Owners {
-            records: vec![("libc6".into(), "Package: libc6\nVersion: 2\n".into())],
+            records: Records::Dpkg(vec![(
+                "libc6".into(),
+                "Package: libc6\nVersion: 2\n".into(),
+            )]),
             ..Owners::default()
         };
-        stage_records(rootfs, &newer).unwrap().keep();
+        stage_records(rootfs, &newer, &[]).unwrap().keep();
         assert_eq!(
             std::fs::read_to_string(rootfs.join("var/lib/dpkg/status.d/libc6")).unwrap(),
             "Package: libc6\nVersion: 2\n"
         );
         // An `sbom`-only pack into that directory must not leave the record behind: the
         // guard removes it although an earlier pack, not this call, created it.
-        drop(stage_records(rootfs, &newer).unwrap());
+        drop(stage_records(rootfs, &newer, &[]).unwrap());
         assert!(!rootfs.join("var/lib/dpkg/status.d/libc6").exists());
     }
 
@@ -775,7 +880,7 @@ mod tests {
     fn a_failed_staging_leaves_no_directories_behind() {
         // A directory where a record must go makes the write fail after status.d exists.
         let owners = Owners {
-            records: vec![("libc6".into(), "Package: libc6\n".into())],
+            records: Records::Dpkg(vec![("libc6".into(), "Package: libc6\n".into())]),
             ..Owners::default()
         };
         let tmp = tempfile::tempdir().unwrap();
@@ -784,7 +889,7 @@ mod tests {
         std::fs::create_dir_all(rootfs.join("blocker")).unwrap();
         // Make `var/lib/dpkg/status.d/libc6` a directory by staging it first.
         std::fs::create_dir_all(rootfs.join("var/lib/dpkg/status.d/libc6")).unwrap();
-        assert!(stage_records(rootfs, &owners).is_err());
+        assert!(stage_records(rootfs, &owners, &[]).is_err());
         assert!(
             rootfs.join("var/lib/dpkg/status.d/libc6").is_dir(),
             "theirs stays"
@@ -797,14 +902,36 @@ mod tests {
         std::os::unix::fs::symlink("/nonexistent", rootfs.join("etc/os-release")).unwrap();
         // os-release "exists" (as a dangling link), so it is left alone and staging succeeds;
         // dropping the guard must then remove var/ entirely.
-        drop(stage_records(&rootfs, &owners).unwrap());
+        drop(stage_records(&rootfs, &owners, &[]).unwrap());
         assert!(!rootfs.join("var").exists());
+    }
+
+    #[test]
+    fn a_record_never_replaces_a_file_the_user_added() {
+        let owners = Owners {
+            records: Records::Dpkg(vec![("libc6".into(), "Package: libc6\n".into())]),
+            ..Owners::default()
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path();
+        let record = rootfs.join("var/lib/dpkg/status.d/libc6");
+        std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+        std::fs::write(&record, b"the user's own file").unwrap();
+
+        // The user staged this path with --add-file in this very pack.
+        let protected = [PathBuf::from("/var/lib/dpkg/status.d/libc6")];
+        let err = stage_records(rootfs, &owners, &protected).unwrap_err();
+        assert!(format!("{err:#}").contains("--add-file"), "{err:#}");
+        assert_eq!(std::fs::read(&record).unwrap(), b"the user's own file");
+        // The same file with no such claim is an earlier pack's record, and is replaced.
+        stage_records(rootfs, &owners, &[]).unwrap().keep();
+        assert_eq!(std::fs::read(&record).unwrap(), b"Package: libc6\n");
     }
 
     #[test]
     fn records_never_follow_a_symlink_out_of_the_rootfs() {
         let owners = Owners {
-            records: vec![("libc6".into(), "Package: libc6\n".into())],
+            records: Records::Dpkg(vec![("libc6".into(), "Package: libc6\n".into())]),
             ..Owners::default()
         };
         let tmp = tempfile::tempdir().unwrap();
@@ -815,7 +942,7 @@ mod tests {
         let rootfs = tmp.path().join("a");
         std::fs::create_dir(&rootfs).unwrap();
         std::os::unix::fs::symlink(&outside, rootfs.join("var")).unwrap();
-        let err = stage_records(&rootfs, &owners).unwrap_err();
+        let err = stage_records(&rootfs, &owners, &[]).unwrap_err();
         assert!(format!("{err:#}").contains("is a symlink"), "{err:#}");
         assert_eq!(
             std::fs::read_dir(&outside).unwrap().count(),
@@ -829,7 +956,7 @@ mod tests {
         let target = outside.join("victim");
         std::fs::write(&target, b"untouched").unwrap();
         std::os::unix::fs::symlink(&target, rootfs.join("var/lib/dpkg/status.d/libc6")).unwrap();
-        assert!(stage_records(&rootfs, &owners).is_err());
+        assert!(stage_records(&rootfs, &owners, &[]).is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
     }
 

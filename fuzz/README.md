@@ -18,6 +18,7 @@ cargo +nightly fuzz run <target>
 | `unpack` | `unpack::run` | The outer OCI-archive parse (tar, gzip, JSON) on raw bytes. |
 | `unpack_structured` | `unpack::run` | Layer application, whiteout deletion and its symlink containment, digest checks, media dispatch. Structured input. |
 | `registry_parse` | `registry::parse_child_manifest`, `parse_child_config`, `select_token` | Registry manifest, config blob, and token-response JSON parse. |
+| `rpm_headers` | `rpm::header_names` | The rpm header-list reader behind `--packages` on an rpm host: the split into headers and the field reads. |
 
 The `unpack` target feeds raw bytes, which rarely form a valid archive, so it covers the
 outer parse. The `unpack_structured` target assembles a real OCI-layout archive from
@@ -43,6 +44,7 @@ they are not committed:
   (RPATH, RUNPATH with `$ORIGIN`, a shared object, a static PIE, and a full-RELRO build).
 - `unpack`: a real OCI-layout archive whose blob digests match.
 - `registry_parse`: a valid child manifest, config blob, and token response.
+- `rpm_headers`: one small valid header with a name, a version, a release and an architecture.
 
 `fuzz/corpus/` is gitignored, and ClusterFuzzLite persists the accumulated corpus in the
 `scratchsmith-fuzz-corpus` repo. To seed a local run, copy inputs into the target's corpus

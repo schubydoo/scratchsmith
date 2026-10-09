@@ -1,0 +1,14 @@
+# libFuzzer dictionary for rpm_headers: the fixed byte patterns of an rpm header list. The reader
+# rejects anything that does not start with the 8-byte magic, and then matches five tags and two
+# data types as big-endian 32-bit values, so the engine needs these handed over to get past the
+# first check and into the field reads.
+"\x8e\xad\xe8\x01\x00\x00\x00\x00"
+# Tags: NAME 1000, VERSION 1001, RELEASE 1002, EPOCH 1003, ARCH 1022.
+"\x00\x00\x03\xe8"
+"\x00\x00\x03\xe9"
+"\x00\x00\x03\xea"
+"\x00\x00\x03\xeb"
+"\x00\x00\x03\xfe"
+# Data types: INT32 4, STRING 6.
+"\x00\x00\x00\x04"
+"\x00\x00\x00\x06"

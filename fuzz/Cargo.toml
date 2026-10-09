@@ -67,3 +67,10 @@ path = "fuzz_targets/registry_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "rpm_headers"
+path = "fuzz_targets/rpm_headers.rs"
+test = false
+doc = false
+bench = false

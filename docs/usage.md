@@ -147,6 +147,7 @@ Each entry names one package and the files in the image that it owns:
 ```
 
 - `source` is the source package, which is the name that security advisories use.
+- `type` is `deb` on a dpkg host and `rpm` on an rpm host.
 - `files` are paths in the image. One host file can be in the image two times, as the loader
   is in this example.
 - The lookup covers the binary, the libraries that it needs, the loader, and the NSS modules.
@@ -167,14 +168,21 @@ The `packages` field is always in the JSON report. Its value tells you what scra
 |---|---|
 | A list with entries | The host named these owners |
 | An empty list | The host was asked, and no package owns a bundled file |
-| `null` | Not reported: the `report` output is off, the host has no dpkg database, or the lookup failed |
+| `null` | Not reported: the `report` output is off, the host has no dpkg or rpm database, or the lookup failed |
 
 ### The SBOM and the image
 
-For the `sbom` and `image` outputs, scratchsmith writes one record for each package under
-`/var/lib/dpkg/status.d/`, and copies the host's `/etc/os-release`. Syft, grype and other
-scanners read both. The scanner needs `os-release` to know the distribution. Without it, a
-scanner cannot match a package to an advisory.
+For the `sbom` and `image` outputs, scratchsmith writes records that scanners already read, and
+copies the host's `/etc/os-release`. Syft, grype and other scanners read both. The scanner needs
+`os-release` to know the distribution. Without it, a scanner cannot match a package to an
+advisory.
+
+The records depend on the package manager of the build host:
+
+| Host | Records |
+|---|---|
+| dpkg (Debian, Ubuntu and their relatives) | One text file for each package, under `/var/lib/dpkg/status.d/` |
+| rpm (Fedora, RHEL and their relatives) | One rpm database that holds only the owning packages, at the host's database path |
 
 - With `sbom`, those files are in the staged tree only while the SBOM and the scan run. The
   image does not contain them. With `--no-build`, an `/etc/os-release` that is already in the
@@ -183,13 +191,17 @@ scanner cannot match a package to an advisory.
   `/etc/os-release` that names the build host's distribution. If you add your own
   `/etc/os-release` with `--add-file`, scratchsmith keeps yours. An SBOM of that image names
   the packages too, because the records are in the tree that syft reads.
+- On an rpm host, the database is about half a megabyte for a small program. The dpkg records
+  are a few kilobytes.
+- If you add a file with `--add-file` at a path that a record needs, the pack fails.
+  Scratchsmith does not replace a file that you added.
 
-### Hosts with no dpkg database
+### Hosts with no package database
 
-This works on a host with a dpkg database, which is Debian, Ubuntu and their relatives. What
-happens on another host depends on what you asked for:
+`--packages` works on a host with a dpkg or an rpm database. What happens on another host
+depends on what you asked for:
 
-| You set | Result on a host with no dpkg database |
+| You set | Result on a host with neither database |
 |---|---|
 | Nothing (the default) | `packages` is `null`. No warning |
 | `--packages report` | `packages` is `null`, with a warning |
