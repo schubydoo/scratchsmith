@@ -381,8 +381,8 @@ pub fn resolve_with(
         // Children inherit the RPATH view this object searched (own + ancestors'), never its
         // RUNPATH — that is the "RUNPATH is not inherited" rule. An object with RUNPATH
         // still passes its ANCESTORS' RPATH on. Its OWN RPATH, if it carries both tags, is
-        // not passed on here. glibc may pass that one on (its ancestor walk tests for
-        // DT_RPATH only); that is unconfirmed and left as it was.
+        // not passed on, and glibc agrees: it drops DT_RPATH when it reads an object that
+        // also has DT_RUNPATH, so no later walk sees it (checked against glibc 2.41).
         let mut child_rpaths = own_rpaths;
         child_rpaths.extend(inherited_rpaths.iter().cloned());
 
@@ -953,6 +953,38 @@ mod tests {
             res.missing.contains(&"libleaf.so".to_string()),
             "runpath must not be inherited by children"
         );
+    }
+
+    #[test]
+    fn an_rpath_beside_a_runpath_is_ignored_and_not_inherited() {
+        // Graph: exe -> libmid (RUNPATH run, RPATH rp) -> libleaf -> libdeep.
+        // glibc ignores the RPATH of an object that also has RUNPATH, for that object and
+        // for everything below it. So libleaf, found through the RUNPATH, cannot find a
+        // libdeep that is only in the RPATH directory.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        let mid = root.join("usr/lib/libmid.so");
+        let leaf = root.join("usr/lib/run/libleaf.so");
+        let deep = root.join("usr/lib/rp/libdeep.so");
+        for p in [&exe, &mid, &leaf, &deep] {
+            touch(p);
+        }
+        let infos = HashMap::from([
+            (canonical(&exe), elf(&["libmid.so"], &[], &[], None)),
+            (
+                canonical(&mid),
+                elf(&["libleaf.so"], &["$ORIGIN/rp"], &["$ORIGIN/run"], None),
+            ),
+            (canonical(&leaf), elf(&["libdeep.so"], &[], &[], None)),
+            (canonical(&deep), elf(&[], &[], &[], None)),
+        ]);
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+
+        let sonames: Vec<&str> = res.libs.iter().map(|l| l.soname.as_str()).collect();
+        assert_eq!(sonames, ["libmid.so", "libleaf.so"]);
+        assert_eq!(res.missing, ["libdeep.so"]);
+        assert!(res.warnings.is_empty(), "{:?}", res.warnings);
     }
 
     #[test]
