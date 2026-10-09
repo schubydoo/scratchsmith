@@ -585,7 +585,16 @@ fn finish_staging(
     // `--packages image`: the records are image content, so they land before the size gate.
     let owners = found.as_ref().filter(|o| !o.packages.is_empty());
     if let (true, Some(owners)) = (opts.packages.image, owners) {
-        packages::stage_records(dest, owners, &added)?.keep();
+        let records = packages::stage_records(dest, owners, &added)?;
+        if records.berkeley_db() {
+            warnings.push(
+                "--packages image: this host's rpm database is a Berkeley DB, and rpm writes \
+                 different bytes each time it builds one, so this image is not reproducible. \
+                 Remove image from --packages to keep a stable digest"
+                    .to_string(),
+            );
+        }
+        records.keep();
     }
     enforce_max_size(dest, opts.max_size)?;
     timings.stage_ms += millis(staging);
