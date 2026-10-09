@@ -543,25 +543,37 @@ fn finish_staging(
     warnings.extend(locale_env_warning(&opts.locales, &opts.image.env));
     // Everything a package can own is in the tree now, so this is where the owners are
     // asked for: the files the flags above copied in, on top of the binary and its libraries.
+    let staged_at = |image: &Path| dest.join(image.strip_prefix("/").unwrap_or(image));
     bundled.extend(extras.copied.iter().cloned());
-    bundled.extend(opts.add_files.iter().map(|f| {
-        let host = std::fs::canonicalize(&f.src).unwrap_or_else(|_| f.src.clone());
-        (host, f.dst.clone())
-    }));
-    // Named only if it is really there: a symlink mode can skip an `--add-file` entry.
-    bundled.retain(|(_, image)| {
-        let staged = dest.join(image.strip_prefix("/").unwrap_or(image));
-        staged.symlink_metadata().is_ok()
-    });
+    // An `--add-file` entry is credited only when its BYTES are in the image: a regular file
+    // at the destination. A symlink mode can skip the entry, or stage a link in its place,
+    // and a link carries none of the package's content, so naming the package for it would
+    // put something in the SBOM that the image does not hold.
+    bundled.extend(
+        opts.add_files
+            .iter()
+            .filter(|f| {
+                staged_at(&f.dst)
+                    .symlink_metadata()
+                    .is_ok_and(|m| m.is_file())
+            })
+            .map(|f| {
+                let host = std::fs::canonicalize(&f.src).unwrap_or_else(|_| f.src.clone());
+                (host, f.dst.clone())
+            }),
+    );
+    // Nothing is named that is not in the tree.
+    bundled.retain(|(_, image)| staged_at(image).symlink_metadata().is_ok());
     // The CA bundle is generated on the host by `update-ca-certificates`, so no package owns
     // its path. It is built from the `ca-certificates` package, and that is the name a
     // reader of the SBOM needs, so it is credited by convention and the docs say so.
     let ca_bundle = PathBuf::from("/etc/ssl/certs/ca-certificates.crt");
-    let conventions: Vec<(&str, PathBuf)> = if opts.extras.ca_certs {
-        vec![("ca-certificates", ca_bundle)]
-    } else {
-        Vec::new()
-    };
+    let conventions: Vec<(&str, PathBuf)> =
+        if opts.extras.ca_certs && staged_at(&ca_bundle).is_file() {
+            vec![("ca-certificates", ca_bundle)]
+        } else {
+            Vec::new()
+        };
     let found = lookup_owners(
         &bundled,
         &conventions,

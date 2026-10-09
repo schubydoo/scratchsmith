@@ -160,9 +160,17 @@ pub fn owners(files: &[(PathBuf, PathBuf)], conventions: &[(&str, PathBuf)]) -> 
         by_package.entry(package).or_default().extend(image_paths);
     }
     for (package, image) in conventions {
-        // Exit 1 is "not installed", which just means there is nobody to credit.
-        let installed = dpkg_query(&["-W", "-f", "${binary:Package}\\n"], &[package], &[0, 1])?;
-        for qualified in installed.lines().filter(|l| is_package_name(l)) {
+        // Exit 1 is "no such package", which just means there is nobody to credit.
+        //
+        // `-W` also lists a package that is known and NOT installed (removed with its
+        // configuration left behind, or never installed), so the status is checked. Only an
+        // installed package can be what the bundle on this host was built from.
+        let known = dpkg_query(
+            &["-W", "-f", "${binary:Package}\\t${db:Status-Status}\\n"],
+            &[package],
+            &[0, 1],
+        )?;
+        for qualified in installed_packages(&known) {
             by_package
                 .entry(qualified.to_string())
                 .or_default()
@@ -243,6 +251,15 @@ fn search(host_paths: &[PathBuf]) -> Result<Vec<(String, String)>> {
         }
     }
     Ok(found)
+}
+
+// The qualified names in `-W` rows (`binary:Package`, `db:Status-Status`) whose status is
+// exactly `installed`.
+fn installed_packages(rows: &str) -> impl Iterator<Item = &str> {
+    rows.lines().filter_map(|row| {
+        let (name, status) = row.split_once('\t')?;
+        (status == "installed" && is_package_name(name)).then_some(name)
+    })
 }
 
 // True when dpkg would read `path` as a pattern and not as one literal path.
@@ -832,6 +849,21 @@ mod tests {
             );
             assert!(!literal.is_empty(), "dpkg owns /usr/bin/id on this host");
         }
+    }
+
+    #[test]
+    fn only_an_installed_package_is_credited_by_convention() {
+        // `dpkg-query -W` lists every package the database knows. A removed package whose
+        // configuration files remain reads `config-files`, and one that was never installed
+        // reads `not-installed`. Neither built the file on this host.
+        let rows = "ca-certificates\tinstalled\n\
+                    ca-certificates-java\tconfig-files\n\
+                    never-here\tnot-installed\n\
+                    libfoo:amd64\tinstalled\n\
+                    ../evil\tinstalled\n\
+                    no-tab-in-this-row\n";
+        let named: Vec<&str> = installed_packages(rows).collect();
+        assert_eq!(named, ["ca-certificates", "libfoo:amd64"]);
     }
 
     #[test]

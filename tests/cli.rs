@@ -1174,4 +1174,45 @@ fn the_report_names_the_owners_of_the_extra_files_too() {
     // A file the user wrote has no owner, and must not be given one.
     assert_eq!(owner_of("/etc/mine.conf"), None, "{packages:?}");
     assert!(rootfs.join("etc/mine.conf").is_file(), "it is still staged");
+
+    // A package is credited only when its bytes are in the image. Under `preserve`, a
+    // symlink is staged as a link: the image then holds a name and none of the file, so
+    // the package that owns the link's target must not be named for it.
+    let link = tmp.path().join("version-link");
+    std::os::unix::fs::symlink("/etc/debian_version", &link).unwrap();
+    let linked = tmp.path().join("linked");
+    let out = run(&[
+        "pack",
+        "--format",
+        "json",
+        "-n",
+        "-o",
+        linked.to_str().unwrap(),
+        "--symlinks",
+        "preserve",
+        "--add-file",
+        &format!("{}:/etc/version-link", link.display()),
+        bin,
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        linked
+            .join("etc/version-link")
+            .symlink_metadata()
+            .unwrap()
+            .is_symlink(),
+        "the fixture must stage a link, or this proves nothing"
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let credited = report["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|p| p["files"].as_array().unwrap())
+        .any(|f| f == "/etc/version-link");
+    assert!(
+        !credited,
+        "a staged link carries no package content: {report}"
+    );
 }

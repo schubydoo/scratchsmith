@@ -151,6 +151,8 @@ Each entry names one package and the files in the image that it owns:
   is in this example.
 - The lookup covers the binary, the libraries that it needs, the loader, and the NSS modules.
   It also covers the files from `--tz`, `--init` and `--add-file`.
+- If `--symlinks` staged an `--add-file` entry as a link, that entry is not in the list. A link
+  carries none of the package's content.
 - The `--ca-certs` bundle is a special case. The host generates that file, so no package owns
   its path. Scratchsmith names the `ca-certificates` package for it, because the bundle is
   built from that package. This one entry is a convention and not a lookup.
