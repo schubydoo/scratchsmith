@@ -101,17 +101,67 @@ pub fn write_oci_archive(
         "manifests": [manifest_desc],
     });
 
-    let mut ar = tar::Builder::new(std::fs::File::create(out)?);
-    append_bytes(&mut ar, "oci-layout", br#"{"imageLayoutVersion":"1.0.0"}"#)?;
-    append_bytes(&mut ar, "index.json", &serde_json::to_vec(&index)?)?;
-    append_bytes(
-        &mut ar,
-        &blob_path(&built.config_digest),
-        &built.config_bytes,
-    )?;
-    append_bytes(&mut ar, &blob_path(&built.layer.digest), &built.layer.gzip)?;
-    append_bytes(&mut ar, &blob_path(&manifest_digest), &manifest_bytes)?;
-    ar.finish().context("finishing OCI archive")?;
+    let write = |file: &std::fs::File| -> Result<()> {
+        let mut ar = tar::Builder::new(file);
+        append_bytes(&mut ar, "oci-layout", br#"{"imageLayoutVersion":"1.0.0"}"#)?;
+        append_bytes(&mut ar, "index.json", &serde_json::to_vec(&index)?)?;
+        append_bytes(
+            &mut ar,
+            &blob_path(&built.config_digest),
+            &built.config_bytes,
+        )?;
+        append_bytes(&mut ar, &blob_path(&built.layer.digest), &built.layer.gzip)?;
+        append_bytes(&mut ar, &blob_path(&manifest_digest), &manifest_bytes)?;
+        ar.finish().context("finishing OCI archive")
+    };
+
+    // A destination that exists and is a stream or a link (/dev/stdout, a FIFO, a symlink)
+    // is written straight into, as before: there is nothing to replace, or the link is the
+    // user's own indirection to keep. A directory is not a stream, so it falls through and
+    // fails at the rename with the path in the message.
+    let existing = out.symlink_metadata().ok();
+    if existing
+        .as_ref()
+        .is_some_and(|m| !m.is_file() && !m.is_dir())
+    {
+        return std::fs::File::create(out)
+            .map_err(anyhow::Error::from)
+            .and_then(|file| write(&file))
+            .with_context(|| format!("writing the OCI archive {}", out.display()));
+    }
+
+    // Otherwise write a sibling file and rename it over the destination, so a reader never
+    // sees a half-written archive. `File::create(out)` truncated the old archive first and
+    // then streamed the new one into it; a `skopeo copy` that ran meanwhile read a short tar.
+    // The sibling shares the directory, so the rename stays on one filesystem and is atomic.
+    //
+    // `tempfile` gives it a random name and opens it O_EXCL, so a name planted in a shared
+    // directory (a symlink to some other file) is never followed. Mode 0666 at open means the
+    // umask applies, which is the mode `File::create` gave a new archive.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = match out.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let tmp = tempfile::Builder::new()
+        .prefix(".scratchsmith-oci-")
+        .suffix(".tmp")
+        .permissions(std::fs::Permissions::from_mode(0o666))
+        .tempfile_in(dir)
+        .with_context(|| format!("creating a temporary file in {}", dir.display()))?;
+    // Replacing an archive must not loosen it: the in-place write kept the old file's mode,
+    // so carry it over BEFORE any bytes land in the sibling. Set afterwards, a private 0600
+    // archive would sit in a world-readable sibling for as long as the write takes. (Its
+    // owner cannot be carried over without privilege.) Access is checked at open, so the
+    // descriptor already held still writes to a 0400 file.
+    if let Some(old) = existing.as_ref().filter(|m| m.is_file()) {
+        tmp.as_file().set_permissions(old.permissions())?;
+    }
+    write(tmp.as_file())?;
+    // On any error above or here, dropping `tmp` removes the sibling. A signal does not: an
+    // interrupted pack can leave one `.scratchsmith-oci-*.tmp` beside the archive.
+    tmp.persist(out)
+        .with_context(|| format!("moving the OCI archive into place at {}", out.display()))?;
     Ok(())
 }
 
@@ -624,6 +674,99 @@ mod tests {
         assert_eq!(a.diff_id, b.diff_id, "diff_id must be stable");
         assert_eq!(a.digest, b.digest, "layer digest must be stable");
         assert_eq!(a.gzip, b.gzip, "gzip bytes must be identical");
+    }
+
+    #[test]
+    fn oci_archive_replaces_the_destination_in_one_step() {
+        let tmp = tiny_rootfs();
+        let staged = StagedTree {
+            root: tmp.path().join("root"),
+            entrypoint: "/app".into(),
+        };
+        let dir = tmp.path().join("out");
+        std::fs::create_dir(&dir).unwrap();
+        let out = dir.join("img.tar");
+        let write = |to: &Path| {
+            write_oci_archive(
+                &staged,
+                "scratchsmith/app:packed",
+                &ImageConfig::default(),
+                to,
+            )
+        };
+
+        // A reader that opened the old archive keeps the old bytes, whole. With the old
+        // truncate-then-stream write, the same open file went to zero length under it.
+        std::fs::write(&out, b"the previous archive").unwrap();
+        let mut reader = std::fs::File::open(&out).unwrap();
+        write(&out).unwrap();
+        let mut seen = String::new();
+        std::io::Read::read_to_string(&mut reader, &mut seen).unwrap();
+        assert_eq!(seen, "the previous archive");
+        assert!(tar::Archive::new(std::fs::File::open(&out).unwrap())
+            .entries()
+            .unwrap()
+            .any(|e| e.unwrap().path().unwrap().as_ref() == Path::new("oci-layout")));
+        let names = |d: &Path| -> Vec<_> {
+            let mut v: Vec<_> = std::fs::read_dir(d)
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            names(&dir),
+            ["img.tar"],
+            "the sibling file must not be left behind"
+        );
+
+        // Replacing a private archive must leave it private: the mode carries over.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write(&out).unwrap();
+        let mode_of = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode_of(&out), 0o600, "got {:o}", mode_of(&out));
+        std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        // A NEW archive gets the umask-default mode a plain create gives, not tempfile's 0600.
+        let fresh = dir.join("fresh.tar");
+        write(&fresh).unwrap();
+        let plain = dir.join("plain");
+        std::fs::File::create(&plain).unwrap();
+        assert_eq!(mode_of(&fresh), mode_of(&plain));
+        std::fs::remove_file(&fresh).unwrap();
+        std::fs::remove_file(&plain).unwrap();
+
+        // A failed write leaves no sibling either. A non-empty directory where the
+        // destination should be takes the replace path, and the final rename fails after
+        // the whole archive is written to the sibling.
+        let blocked = dir.join("blocked.tar");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(blocked.join("keep"), b"").unwrap();
+        assert!(write(&blocked).is_err());
+        assert_eq!(names(&dir), ["blocked.tar", "img.tar"]);
+    }
+
+    #[test]
+    fn oci_archive_streams_into_a_destination_that_is_not_a_regular_file() {
+        // `--oci-archive /dev/stdout` and a FIFO are streams: nothing can be renamed over
+        // them, so the archive is written straight in. /dev/null stands in for both.
+        let tmp = tiny_rootfs();
+        let staged = StagedTree {
+            root: tmp.path().join("root"),
+            entrypoint: "/app".into(),
+        };
+        write_oci_archive(
+            &staged,
+            "scratchsmith/app:packed",
+            &ImageConfig::default(),
+            Path::new("/dev/null"),
+        )
+        .expect("a character device must be written in place");
+        // If the stream check ever stopped matching a device, the write would rename a
+        // regular file over it. Still a character device means it did not.
+        assert!(!Path::new("/dev/null").symlink_metadata().unwrap().is_file());
     }
 
     #[test]
