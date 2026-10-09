@@ -22,7 +22,7 @@ concurrency:
 jobs:
   selftest:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -370,3 +370,165 @@ jobs:
           set -euo pipefail
           [ "$OUTCOME" = "failure" ] || { echo "::error::an unknown symlinks mode packed anyway — was the --symlinks wiring dropped from action.yml?"; exit 1; }
           echo "symlinks mode guard verified"
+      # ---- Inputs that had no selftest until now. Each step asserts the EFFECT of the flag, so
+      # ---- a wrong flag name and a dropped mapping both fail it.
+      #
+      # ca-certs and tz each add one fixed file, so one rootfs pack proves both.
+      - name: Pack with ca-certs and tz → rootfs
+        id: extras
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          output: ./staged-extras
+          ca-certs: "true"
+          tz: "true"
+      - name: Assert the CA bundle and the timezone were staged
+        env:
+          ROOTFS: ${{ steps.extras.outputs.rootfs }}
+        run: |
+          set -euo pipefail
+          [ -n "$ROOTFS" ] || { echo "::error::the extras pack produced no rootfs"; exit 1; }
+          test -s "$ROOTFS/etc/ssl/certs/ca-certificates.crt" || { echo "::error::no CA bundle in the rootfs — is --ca-certs wired in action.yml?"; exit 1; }
+          test -s "$ROOTFS/etc/localtime" || { echo "::error::no /etc/localtime in the rootfs — is --tz wired in action.yml?"; exit 1; }
+          echo "ca-certs and tz inputs wired"
+      # include force-stages a library the binary does not link. /usr/bin/id does not need
+      # libz, and zlib1g is on every ubuntu runner.
+      - name: Pack with an included library → rootfs
+        id: include
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          output: ./staged-include
+          include: |
+            libz.so.1
+      - name: Assert the included library was staged
+        env:
+          ROOTFS: ${{ steps.include.outputs.rootfs }}
+        run: |
+          set -euo pipefail
+          [ -n "$ROOTFS" ] || { echo "::error::the include pack produced no rootfs"; exit 1; }
+          [ -n "$(find "$ROOTFS" -name 'libz.so.1*' -print -quit)" ] || { echo "::error::libz.so.1 is not in the rootfs — is --include wired in action.yml?"; exit 1; }
+          echo "include input wired"
+      # args is the verbatim escape hatch. A label is the cheapest flag to observe from outside.
+      - name: Pack with a raw flag through args → image
+        id: rawargs
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          args: --label selftest.args=reached
+      - name: Assert the raw flag reached the CLI
+        env:
+          IMAGE: ${{ steps.rawargs.outputs.image }}
+        run: |
+          set -euo pipefail
+          [ -n "$IMAGE" ] || { echo "::error::the args pack produced no image"; exit 1; }
+          got="$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "selftest.args" }}')"
+          [ "$got" = "reached" ] || { echo "::error::the label from args is '$got' — is the args input still appended in action.yml?"; exit 1; }
+          echo "args input wired"
+      # upx and init each need a tool the runner does not carry; the action preflights for upx.
+      - name: Install upx and tini (for the upx and init inputs)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends upx-ucl tini
+      - name: Pack with upx → image
+        id: upx
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          upx: "true"
+      - name: Assert the binary was compressed
+        env:
+          REPORT: ${{ steps.upx.outputs.report }}
+        run: |
+          set -euo pipefail
+          # `.size.upx` is true only when upx ran on the binary.
+          echo "$REPORT" | jq -e '.size.upx == true' >/dev/null || { echo "::error::report.size.upx is not true — is --upx wired in action.yml?"; exit 1; }
+          echo "upx input wired"
+      - name: Pack with init → image
+        id: init
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          init: "true"
+      - name: Assert tini wraps the entrypoint and the image still runs
+        env:
+          IMAGE: ${{ steps.init.outputs.image }}
+        run: |
+          set -euo pipefail
+          [ -n "$IMAGE" ] || { echo "::error::the init pack produced no image"; exit 1; }
+          first="$(docker image inspect "$IMAGE" --format '{{ index .Config.Entrypoint 0 }}')"
+          [ "$first" = "/tini" ] || { echo "::error::the entrypoint starts with '$first', not /tini — is --init wired in action.yml?"; exit 1; }
+          docker run --rm "$IMAGE" >/dev/null
+          echo "init input wired"
+      # sbom, sbom-format and sbom-file travel together: sbom turns the SBOM on, and the other
+      # two only matter with it. A non-default format and path prove all three.
+      - name: Install syft (for the sbom inputs)
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      - name: Pack with an SPDX SBOM at a chosen path → rootfs
+        id: sbom
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          output: ./staged-sbom
+          sbom: "true"
+          sbom-format: spdx-json
+          sbom-file: ${{ runner.temp }}/ss-selftest.spdx.json
+      - name: Assert the SBOM is SPDX and sits at the chosen path
+        env:
+          REPORT: ${{ steps.sbom.outputs.report }}
+          SBOM: ${{ runner.temp }}/ss-selftest.spdx.json
+        run: |
+          set -euo pipefail
+          test -s "$SBOM" || { echo "::error::no SBOM at the sbom-file path — are --sbom and --sbom-file wired in action.yml?"; exit 1; }
+          # Only an SPDX document has this key; the default format is CycloneDX.
+          jq -e '.spdxVersion | startswith("SPDX-")' "$SBOM" >/dev/null || { echo "::error::the SBOM is not SPDX — is --sbom-format wired in action.yml?"; exit 1; }
+          echo "$REPORT" | jq -e --arg p "$SBOM" '.sbom == $p' >/dev/null || { echo "::error::report.sbom does not name the sbom-file path"; exit 1; }
+          echo "sbom, sbom-format and sbom-file inputs wired"
+      # scan-fail-on: a real severity would pass or fail on whatever the vulnerability database
+      # says that day, so the stable proof is the trip. clap rejects an unknown severity, and
+      # it can only do that if the value reached --scan-fail-on. grype is on PATH from above.
+      - name: Pack with an unknown scan-fail-on severity (must fail)
+        id: failon-trip
+        continue-on-error: true
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          scan-fail-on: not-a-severity
+      - name: Assert the scan-fail-on value reached the CLI
+        env:
+          OUTCOME: ${{ steps.failon-trip.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$OUTCOME" = "failure" ] || { echo "::error::an unknown scan-fail-on severity packed anyway — was the --scan-fail-on wiring dropped from action.yml?"; exit 1; }
+          echo "scan-fail-on input wired"
+      # push tags the built image and runs `docker push`. A throwaway local registry takes it,
+      # so no login and no real registry are involved.
+      - name: Start a local registry (for the push input)
+        run: docker run -d --rm -p 127.0.0.1:5000:5000 --name ss-selftest-registry registry:2
+      - name: Pack and push → local registry
+        id: push
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          push: localhost:5000/selftest/id:pushed
+      - name: Assert the registry holds the pushed tag
+        run: |
+          set -euo pipefail
+          tags="$(curl -fsS --retry 5 --retry-connrefused http://127.0.0.1:5000/v2/selftest/id/tags/list)"
+          echo "$tags" | jq -e '.tags | index("pushed")' >/dev/null || { echo "::error::the registry does not hold selftest/id:pushed (got: $tags) — is the push input still wired in action.yml?"; exit 1; }
+          docker stop ss-selftest-registry >/dev/null
+          echo "push input wired"
+      # version picks the release to download. This step is LAST on purpose: every step above
+      # runs the default release, and an older binary must not be the one they exercise. An
+      # older release than the default proves the input is honored and not just accepted.
+      - name: Pack with a pinned older release → rootfs
+        id: pinned
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          version: v1.5.0
+          output: ./staged-pinned
+      - name: Assert the pinned release is the one that ran
+        run: |
+          set -euo pipefail
+          got="$("${RUNNER_TEMP}/scratchsmith-bin/scratchsmith" --version)"
+          [ "$got" = "scratchsmith 1.5.0" ] || { echo "::error::the action ran '$got', not 1.5.0 — is the version input still honored in action.yml?"; exit 1; }
+          echo "version input wired"
