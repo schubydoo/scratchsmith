@@ -1112,3 +1112,107 @@ fn the_sbom_names_the_owning_packages_and_the_image_does_not_keep_the_records() 
         "an sbom pack must not leave an earlier pack's records in the image"
     );
 }
+
+#[test]
+fn the_report_names_the_owners_of_the_extra_files_too() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    // Three host files that a Debian-based system has, each from a different flag.
+    let hosted = [
+        "/etc/debian_version",
+        "/etc/localtime",
+        "/etc/ssl/certs/ca-certificates.crt",
+    ];
+    if !dpkg_host() || !hosted.iter().all(|p| std::path::Path::new(p).exists()) {
+        common::skip_optional("needs a dpkg host with a timezone and a CA bundle");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let mine = tmp.path().join("mine.conf");
+    std::fs::write(&mine, "my own file\n").unwrap();
+    let rootfs = tmp.path().join("rootfs");
+    let out = run(&[
+        "pack",
+        "--format",
+        "json",
+        "-n",
+        "-o",
+        rootfs.to_str().unwrap(),
+        "--tz",
+        "--ca-certs",
+        "--add-file",
+        "/etc/debian_version",
+        "--add-file",
+        &format!("{}:/etc/mine.conf", mine.display()),
+        bin,
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let packages = report["packages"]
+        .as_array()
+        .expect("a list on a dpkg host");
+    let owner_of = |file: &str| {
+        packages
+            .iter()
+            .find(|p| p["files"].as_array().unwrap().iter().any(|f| f == file))
+            .map(|p| p["name"].as_str().unwrap().to_string())
+    };
+
+    // `--add-file` of a file a package owns, and `--tz`, are real ownership lookups.
+    assert!(owner_of("/etc/debian_version").is_some(), "{packages:?}");
+    assert!(owner_of("/etc/localtime").is_some(), "{packages:?}");
+    // The CA bundle is generated on the host, so no package owns its path. It is credited
+    // to the package it is built from, by convention.
+    assert_eq!(
+        owner_of("/etc/ssl/certs/ca-certificates.crt").as_deref(),
+        Some("ca-certificates"),
+        "{packages:?}"
+    );
+    // A file the user wrote has no owner, and must not be given one.
+    assert_eq!(owner_of("/etc/mine.conf"), None, "{packages:?}");
+    assert!(rootfs.join("etc/mine.conf").is_file(), "it is still staged");
+
+    // A package is credited only when its bytes are in the image. Under `preserve`, a
+    // symlink is staged as a link: the image then holds a name and none of the file, so
+    // the package that owns the link's target must not be named for it.
+    let link = tmp.path().join("version-link");
+    std::os::unix::fs::symlink("/etc/debian_version", &link).unwrap();
+    let linked = tmp.path().join("linked");
+    let out = run(&[
+        "pack",
+        "--format",
+        "json",
+        "-n",
+        "-o",
+        linked.to_str().unwrap(),
+        "--symlinks",
+        "preserve",
+        "--add-file",
+        &format!("{}:/etc/version-link", link.display()),
+        bin,
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        linked
+            .join("etc/version-link")
+            .symlink_metadata()
+            .unwrap()
+            .is_symlink(),
+        "the fixture must stage a link, or this proves nothing"
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let credited = report["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|p| p["files"].as_array().unwrap())
+        .any(|f| f == "/etc/version-link");
+    assert!(
+        !credited,
+        "a staged link carries no package content: {report}"
+    );
+}

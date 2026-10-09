@@ -145,6 +145,7 @@ ships a CycloneDX SBOM of its own dependency graph. The exact `gh attestation` a
 - **[Usage](docs/usage.md)**: pack recipes, daemonless output, and image metadata.
 - **[GitHub Action](docs/github-action.md)**: pack in a CI workflow with the composite action.
 - **[Configuration](docs/configuration.md)**: the `scratchsmith.toml` reference and profiles.
+- **[Deprecations](docs/deprecations.md)**: what a warning means, what ends in 2.0, and what to write instead.
 - **[Verifying releases](docs/verifying.md)**: cosign signatures, SLSA provenance, and the SBOM.
 - **[Comparison & limitations](docs/comparison.md)**: how Scratchsmith compares, and what it does not do.
 - **[Architecture](docs/architecture.md)**: how resolve → stage → assemble works, and the 1.0 stability contract.

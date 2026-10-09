@@ -36,9 +36,14 @@ pub struct RuntimeExtras {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuntimeResult {
     pub tini_image_path: Option<String>,
+    /// The host files that were copied in, as `(host path, image path)`, for the package
+    /// lookup. The CA bundle is not here: it is generated on the host, so no package owns
+    /// its path.
+    pub copied: Vec<(PathBuf, PathBuf)>,
 }
 
-const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
+/// Where the host's CA bundle is read from, and where `--ca-certs` stages it.
+pub const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
 
 /// Inject the requested runtime extras into the staged rootfs.
 pub fn stage_runtime_extras(dest: &Path, extras: &RuntimeExtras) -> Result<RuntimeResult> {
@@ -58,12 +63,14 @@ pub fn stage_runtime_extras(dest: &Path, extras: &RuntimeExtras) -> Result<Runti
         let localtime = Path::new("/etc/localtime");
         let real = std::fs::canonicalize(localtime).context("resolving /etc/localtime")?;
         copy_into(&real, dest, localtime)?;
+        result.copied.push((real, localtime.to_path_buf()));
     }
 
     if extras.init {
         let tini = find_tini().context("--init: tini not found; install tini")?;
         copy_into(&tini, dest, Path::new("/tini"))?;
         result.tini_image_path = Some("/tini".to_string());
+        result.copied.push((tini, PathBuf::from("/tini")));
     }
 
     Ok(result)
