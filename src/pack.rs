@@ -146,7 +146,8 @@ fn millis(since: Instant) -> u64 {
     since.elapsed().as_millis() as u64
 }
 
-// Run one phase and return its result with how long it took, pass or fail.
+// Run one phase and return its result with how long it took. A failure returns early, so
+// a failed phase has no timing -- there is no report to put it in.
 fn timed<T>(phase: impl FnOnce() -> Result<T>) -> Result<(T, u64)> {
     let started = Instant::now();
     let out = phase()?;

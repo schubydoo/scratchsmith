@@ -886,5 +886,11 @@ fn the_json_report_times_the_phases_that_ran() {
 
     // The text report is for people, and stays as it was.
     let out = run(&["pack", "--oci-archive", archive.to_str().unwrap(), bin]);
-    assert!(!String::from_utf8_lossy(&out.stdout).contains("_ms"));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!stdout.contains("_ms"), "{stdout}");
 }

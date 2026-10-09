@@ -87,7 +87,7 @@ scratchsmith pack --format json --sbom --oci-archive app.tar ./app | jq .timings
 | Field | Phase |
 |---|---|
 | `resolve_ms` | Read the binary and resolve its libraries |
-| `stage_ms` | Build the root filesystem, with strip and UPX |
+| `stage_ms` | Build the root filesystem: libraries, loader, NSS, extras, added files, locales, strip and UPX |
 | `sbom_ms` | Generate the SBOM (`--sbom`) |
 | `scan_ms` | Scan for vulnerabilities (`--scan`) |
 | `deliver_ms` | Build the image and load it, write the archive, or push it |
