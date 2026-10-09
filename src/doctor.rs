@@ -143,11 +143,14 @@ fn probe_tool(tool: &Tool) -> ToolStatus {
     // `rpmdb` ships with `rpm`, so its help text is asked only where rpm answered.
     let limit = (tool.name == "rpm" && version.is_some())
         .then(|| {
-            let help = Command::new("rpmdb").arg("--help").output().ok();
-            rpm_records_limit(
-                help.as_ref()
-                    .map(|out| String::from_utf8_lossy(&out.stdout)),
-            )
+            let help = Command::new("rpmdb")
+                .arg("--help")
+                .env("LC_ALL", "C")
+                .output()
+                .ok()
+                // Either stream: the same fallback as `run_version`.
+                .map(|out| [out.stdout, out.stderr].concat());
+            rpm_records_limit(help.as_ref().map(|text| String::from_utf8_lossy(text)))
         })
         .flatten();
     ToolStatus {
@@ -166,8 +169,8 @@ fn probe_tool(tool: &Tool) -> ToolStatus {
 fn rpm_records_limit(rpmdb_help: Option<impl AsRef<str>>) -> Option<&'static str> {
     let has_export = rpmdb_help.is_some_and(|help| help.as_ref().contains("--exportdb"));
     (!has_export).then_some(
-        "this rpm has no `rpmdb --exportdb`, so `--packages sbom` and `--packages image` \
-         fail here; `--packages report` works",
+        "no `rpmdb --exportdb` here (an rpm too old for it, or no `rpmdb` on PATH), so \
+         `--packages sbom` and `--packages image` fail; `--packages report` works",
     )
 }
 
