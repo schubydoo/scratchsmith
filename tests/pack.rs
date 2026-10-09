@@ -636,6 +636,9 @@ scratchsmith pack -n -o sbom --packages report,sbom --sbom --sbom-file /tmp/sbom
 echo "SBOM $(grep -o 'pkg:rpm/fedora/glibc@[^"?]*' sbom.json | head -1)"
 echo "SBOM_LEFT $(find sbom -name 'rpmdb*' | wc -l) $(test -e sbom/etc/os-release && echo os-release || echo none)"
 scratchsmith pack -n -o image --packages image --ca-certs /usr/bin/id > /dev/null
+# The CA bundle is staged read-only, like its source. A second pack into the same directory
+# then cannot replace it unless the user is root, which this container is not under coverage.
+chmod -R u+w image
 scratchsmith pack -n -o image --packages image --ca-certs /usr/bin/id > /dev/null
 scratchsmith pack -n -o again --packages image --ca-certs /usr/bin/id > /dev/null
 echo "IMAGE_FILES $(cd image && find . -path '*rpm*' -type f | sort | tr '\n' ' ')"
@@ -646,10 +649,29 @@ echo "HOST_SAME $([ "$host_before" = "$(rpm -qa | sort | sha256sum)" ] && echo y
 mkdir -p mine && echo mine > mine/db
 if scratchsmith pack -n -o clash --packages image --add-file /tmp/mine/db:/usr/lib/sysimage/rpm/rpmdb.sqlite /usr/bin/id > /dev/null 2> clash.err; then echo "CLASH packed"; else echo "CLASH refused $(grep -c -- '--add-file' clash.err)"; fi
 "#;
-    let out = Command::new("docker")
+    let mut docker = Command::new("docker");
+    docker
         .args(["run", "--rm"])
         .args(["-v", &format!("{bin}:/usr/local/bin/scratchsmith:ro")])
-        .args(["-v", &format!("{syft}:/usr/local/bin/syft:ro")])
+        .args(["-v", &format!("{syft}:/usr/local/bin/syft:ro")]);
+    // Under `cargo llvm-cov` every process that runs the test binary writes a profile to the
+    // path in LLVM_PROFILE_FILE. A container inherits neither the variable nor the
+    // directory, so the rpm code would run here and count as never run. Hand both over, and
+    // run as the current user so the profiles are not left root-owned in the target dir.
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        let profile = std::path::PathBuf::from(profile);
+        if let Some(dir) = profile.parent().filter(|d| d.is_absolute() && d.is_dir()) {
+            let id = |flag: &str| {
+                let out = Command::new("id").arg(flag).output().expect("run id");
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            };
+            docker
+                .args(["--user", &format!("{}:{}", id("-u"), id("-g"))])
+                .args(["-v", &format!("{0}:{0}", dir.display())])
+                .args(["-e", &format!("LLVM_PROFILE_FILE={}", profile.display())]);
+        }
+    }
+    let out = docker
         .args([FEDORA, "bash", "-c", script])
         .output()
         .expect("run the Fedora container");
