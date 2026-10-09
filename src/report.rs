@@ -42,6 +42,34 @@ pub fn human_size(bytes: u64) -> String {
     format!("{bytes} B")
 }
 
+/// Wall-clock time spent in each phase of a pack, in whole milliseconds. JSON only: it is for
+/// a CI job that wants to see where a slow pack went, or to turn the phases into trace spans.
+///
+/// A phase that did not run is `null`, never `0`, so "skipped" and "too fast to measure" stay
+/// apart. The phases are measured one after another, so they add up to a little less than
+/// `total_ms`; the rest is the work between them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Timings {
+    /// Reading the ELF and resolving its dependency graph.
+    pub resolve_ms: u64,
+    /// Building the rootfs: libraries, loader, NSS, runtime extras, added files, locales,
+    /// strip and UPX.
+    pub stage_ms: u64,
+    /// Generating the SBOM (`--sbom`).
+    pub sbom_ms: Option<u64>,
+    /// The vulnerability scan (`--scan`).
+    pub scan_ms: Option<u64>,
+    /// Building the image and handing it to the sink: the load, the archive write, or the
+    /// push. `null` for `--no-build`, which builds no image.
+    pub deliver_ms: Option<u64>,
+    /// The smoke-run (`--smoke`).
+    pub smoke_ms: Option<u64>,
+    /// Signing, and attesting the SBOM (`--sign`).
+    pub sign_ms: Option<u64>,
+    /// The whole pack, from the first read of the binary to the finished report.
+    pub total_ms: u64,
+}
+
 /// The outcome of a pack, emitted as text or JSON. Fields are stable so the JSON can
 /// gate CI.
 #[derive(Debug, Clone, Serialize)]
@@ -75,6 +103,8 @@ pub struct PackReport {
     pub scan: Option<ScanSummary>,
     /// The signed by-digest reference, if `--sign` signed the pushed image.
     pub signed: Option<String>,
+    /// Time per phase. Not shown in the text report.
+    pub timings: Timings,
 }
 
 impl PackReport {
@@ -504,6 +534,7 @@ mod tests {
             sbom: Some("sbom.json".into()),
             scan: None,
             signed: None,
+            timings: Timings::default(),
         }
     }
 
@@ -555,7 +586,21 @@ mod tests {
                 "smoke_ok",
                 "staged_dir",
                 "tag",
+                "timings",
                 "warnings",
+            ]
+        );
+        assert_eq!(
+            sorted_keys(&json["timings"]),
+            [
+                "deliver_ms",
+                "resolve_ms",
+                "sbom_ms",
+                "scan_ms",
+                "sign_ms",
+                "smoke_ms",
+                "stage_ms",
+                "total_ms",
             ]
         );
         assert_eq!(
@@ -623,6 +668,7 @@ mod tests {
             sbom: None,
             scan: None,
             signed: None,
+            timings: Timings::default(),
         };
         assert!(report.to_text().contains("pushed ghcr.io/you/app:latest"));
     }
@@ -708,6 +754,7 @@ mod tests {
             sbom: None,
             scan: None,
             signed: None,
+            timings: Timings::default(),
         };
         assert!(report.to_text().contains("staged to /out/rootfs"));
     }

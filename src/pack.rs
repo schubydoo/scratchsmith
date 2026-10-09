@@ -2,12 +2,13 @@
 //! This is the glue behind `scratchsmith pack`.
 
 use crate::image::{self, ImageConfig};
-use crate::report::PackReport;
+use crate::report::{PackReport, Timings};
 use crate::resolver::{self, Sysroot};
 use crate::stager::{self, AddFile, NssSelection, RuntimeExtras, SizeReport, StagedTree};
 use crate::supplychain::{self, SbomRequest, ScanRequest, ScanSource, ScanSummary};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 /// How long to let a smoke-run's entrypoint run before treating it as "started".
 const SMOKE_TIMEOUT_SECS: u32 = 15;
@@ -123,12 +124,44 @@ struct StagedRootfs {
     warnings: Vec<String>,
     /// The loader's image path (`PT_INTERP`), or `None` for a static binary.
     interpreter: Option<String>,
+    clock: Clock,
+}
+
+/// The pack's stopwatch: when it began, and the time per phase so far. Every sink starts
+/// with `build_rootfs`, so that is where the clock starts.
+struct Clock {
+    started: Instant,
+    timings: Timings,
+}
+
+impl Clock {
+    // Stamp the total and hand the timings to the report.
+    fn finish(mut self) -> Timings {
+        self.timings.total_ms = millis(self.started);
+        self.timings
+    }
+}
+
+fn millis(since: Instant) -> u64 {
+    since.elapsed().as_millis() as u64
+}
+
+// Run one phase and return its result with how long it took. A failure returns early, so
+// a failed phase has no timing -- there is no report to put it in.
+fn timed<T>(phase: impl FnOnce() -> Result<T>) -> Result<(T, u64)> {
+    let started = Instant::now();
+    let out = phase()?;
+    Ok((out, millis(started)))
 }
 
 // Resolve `binary` and build its complete rootfs (libs, loader, cache, NSS/passwd
 // includes) under `dest`, optionally stripping. The shared core of every pack path.
 // Returns the tree, the size report, the loader path and any include warnings (no printing).
 fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<StagedRootfs> {
+    let mut clock = Clock {
+        started: Instant::now(),
+        timings: Timings::default(),
+    };
     let info = resolver::read_elf_info(binary)?;
     // Reject musl up front rather than staging a subtly broken image.
     resolver::ensure_glibc(&info)?;
@@ -164,6 +197,8 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
             resolution.missing.join(", ")
         );
     }
+    clock.timings.resolve_ms = millis(clock.started);
+    let staging = Instant::now();
     let tree = stager::stage(binary, &resolution, dest, opts.symlinks)?;
     let default_includes = stager::stage_default_includes(&resolution, dest, &opts.nss)?;
     warnings.extend(default_includes.warnings);
@@ -177,11 +212,13 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
     )?;
     let sizes = stager::strip_and_measure(dest, &tree, &resolution, opts.strip, opts.upx)?;
     let interpreter = resolution.interpreter_path();
+    clock.timings.stage_ms = millis(staging);
     Ok(StagedRootfs {
         tree,
         size: sizes,
         warnings,
         interpreter,
+        clock,
     })
 }
 
@@ -361,7 +398,13 @@ struct Finished {
 // Extracted because keeping two copies in step is a PROVEN hazard rather than a theoretical
 // one: `--locale` and `--symlinks` each had to be added to both, and a third addition that
 // reached only one would silently apply to one sink and not the other.
-fn finish_staging(dest: &Path, opts: &PackOptions, warnings: &mut Vec<String>) -> Result<Finished> {
+fn finish_staging(
+    dest: &Path,
+    opts: &PackOptions,
+    warnings: &mut Vec<String>,
+    timings: &mut Timings,
+) -> Result<Finished> {
+    let staging = Instant::now();
     let extras = stager::stage_runtime_extras(dest, &opts.extras)?;
     warnings.extend(stager::stage_added_files(
         dest,
@@ -371,8 +414,11 @@ fn finish_staging(dest: &Path, opts: &PackOptions, warnings: &mut Vec<String>) -
     stager::stage_locales(dest, &opts.locales)?;
     warnings.extend(locale_env_warning(&opts.locales, &opts.image.env));
     enforce_max_size(dest, opts.max_size)?;
-    let sbom = maybe_sbom(dest, opts.sbom.as_ref())?;
-    let scan = maybe_scan(dest, sbom.as_deref(), opts.scan.as_ref())?;
+    timings.stage_ms += millis(staging);
+    let (sbom, ms) = timed(|| maybe_sbom(dest, opts.sbom.as_ref()))?;
+    timings.sbom_ms = opts.sbom.is_some().then_some(ms);
+    let (scan, ms) = timed(|| maybe_scan(dest, sbom.as_deref(), opts.scan.as_ref()))?;
+    timings.scan_ms = opts.scan.is_some().then_some(ms);
     Ok(Finished { extras, sbom, scan })
 }
 
@@ -388,9 +434,11 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
         size,
         mut warnings,
         interpreter,
+        mut clock,
     } = build_rootfs(binary, out_dir, opts)?;
     // `extras` is unused here: no image is built, so there is no config to wrap with tini.
-    let Finished { sbom, scan, .. } = finish_staging(out_dir, opts, &mut warnings)?;
+    let Finished { sbom, scan, .. } =
+        finish_staging(out_dir, opts, &mut warnings, &mut clock.timings)?;
     Ok(PackReport {
         tag: None,
         archive: None,
@@ -404,6 +452,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
         sbom,
         scan,
         signed: None,
+        timings: clock.finish(),
     })
 }
 
@@ -421,6 +470,7 @@ struct StagedImage {
     scan: Option<ScanSummary>,
     /// The loader's image path, carried through to every image sink's report.
     interpreter: Option<String>,
+    clock: Clock,
 }
 
 fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
@@ -431,10 +481,12 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         size,
         mut warnings,
         interpreter,
+        mut clock,
     } = build_rootfs(binary, &dest, opts)?;
     // finish_staging generates the SBOM and scan while the staged rootfs still exists (dest is
     // temporary), which is why this call sits here rather than after the image config.
-    let Finished { extras, sbom, scan } = finish_staging(&dest, opts, &mut warnings)?;
+    let Finished { extras, sbom, scan } =
+        finish_staging(&dest, opts, &mut warnings, &mut clock.timings)?;
 
     // Effective image config: if --init staged tini, wrap the entrypoint so tini is
     // pid 1 and reaps/forwards for the real binary.
@@ -465,6 +517,7 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         sbom,
         scan,
         interpreter,
+        clock,
     })
 }
 
@@ -472,12 +525,15 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
 /// `opts.smoke`, run the image once afterwards and fail if the dynamic loader could
 /// not start it — the guard against a silently broken image.
 pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
-    let s = stage_for_image(binary, opts)?;
-    image::load_into_docker(&s.tree, &s.tag, &s.cfg, opts.runtime)?;
+    let mut s = stage_for_image(binary, opts)?;
+    let ((), ms) = timed(|| image::load_into_docker(&s.tree, &s.tag, &s.cfg, opts.runtime))?;
+    s.clock.timings.deliver_ms = Some(ms);
 
     let mut smoke_ok = None;
     if opts.smoke {
-        let outcome = image::smoke_run(opts.runtime, &s.tag, &[], SMOKE_TIMEOUT_SECS)?;
+        let (outcome, ms) =
+            timed(|| image::smoke_run(opts.runtime, &s.tag, &[], SMOKE_TIMEOUT_SECS))?;
+        s.clock.timings.smoke_ms = Some(ms);
         if outcome.loader_failed() {
             bail!(
                 "smoke-run failed: the image could not start the binary.\n{}",
@@ -500,6 +556,7 @@ pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
         scan: s.scan,
         interpreter: s.interpreter,
         signed: None,
+        timings: s.clock.finish(),
     })
 }
 
@@ -509,8 +566,9 @@ fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackR
     if opts.smoke {
         bail!("--smoke needs a running image, so it isn't supported with --oci-archive; load the archive (docker load / skopeo) and run it separately, or drop --smoke");
     }
-    let s = stage_for_image(binary, opts)?;
-    image::write_oci_archive(&s.tree, &s.tag, &s.cfg, out)?;
+    let mut s = stage_for_image(binary, opts)?;
+    let ((), ms) = timed(|| image::write_oci_archive(&s.tree, &s.tag, &s.cfg, out))?;
+    s.clock.timings.deliver_ms = Some(ms);
     Ok(PackReport {
         tag: None,
         archive: Some(out.display().to_string()),
@@ -524,6 +582,7 @@ fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackR
         scan: s.scan,
         interpreter: s.interpreter,
         signed: None,
+        timings: s.clock.finish(),
     })
 }
 
@@ -534,14 +593,17 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackRep
     if opts.smoke {
         bail!("--smoke needs a running image, so it isn't supported with --push; pull the pushed image and run it separately, or drop --smoke");
     }
-    let s = stage_for_image(binary, opts)?;
+    let mut s = stage_for_image(binary, opts)?;
     // The push returns the pushed image's digest when the registry reports one; a plain push
     // never fails on a missing digest — only signing, which needs it, does.
-    let digest_ref = crate::registry::push_to_registry(&s.tree, reference, &s.cfg)?;
+    let (digest_ref, ms) = timed(|| crate::registry::push_to_registry(&s.tree, reference, &s.cfg))?;
+    s.clock.timings.deliver_ms = Some(ms);
     let signed = if opts.sign {
         let dref = digest_ref
             .context("cannot sign: the registry did not return a digest for the pushed image")?;
-        Some(sign_pushed(&dref, opts)?)
+        let (signed, ms) = timed(|| sign_pushed(&dref, opts))?;
+        s.clock.timings.sign_ms = Some(ms);
+        Some(signed)
     } else {
         None
     };
@@ -558,6 +620,7 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackRep
         scan: s.scan,
         interpreter: s.interpreter,
         signed,
+        timings: s.clock.finish(),
     })
 }
 
