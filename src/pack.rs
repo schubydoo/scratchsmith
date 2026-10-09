@@ -318,7 +318,14 @@ fn lookup_owners(
                 warnings.push(format!(
                     "--packages: dpkg reads `*`, `?`, `[` and `\\` in a path as a pattern, so \
                      these files were not looked up and name no package: {}",
-                    owners.unasked.join(", ")
+                    // A path can hold a newline or a terminal escape, and the text
+                    // report prints warnings as they are.
+                    owners
+                        .unasked
+                        .iter()
+                        .map(|p| p.escape_debug().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ));
             }
             Ok(Some(owners))
@@ -327,7 +334,9 @@ fn lookup_owners(
             Err(err.context(format!("--packages {asked}: the package lookup failed")))
         }
         Err(err) => {
-            warnings.push(format!("package lookup failed: {err:#}"));
+            // dpkg's own words can quote a path back, so they are escaped too.
+            let cause = format!("{err:#}");
+            warnings.push(format!("package lookup failed: {}", cause.escape_debug()));
             Ok(None)
         }
     }
