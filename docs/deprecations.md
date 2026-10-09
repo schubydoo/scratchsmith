@@ -131,13 +131,14 @@ Earlier versions of scratchsmith did not apply that rule. Scratchsmith now searc
 loader does. If that search finds the library, scratchsmith stages that copy, which is the copy
 that the program uses on the host.
 
-If that search finds nothing, the program cannot start on the build host. Scratchsmith then
-falls back to the old search, stages what it finds, and prints the warning. The image can still
-run, because the loader cache in the image knows where the file is. Scratchsmith 2.0 reports the
-library as missing.
+If that search finds nothing, scratchsmith falls back to the old search, stages what it finds,
+and prints the warning. The copy that it stages is not the copy that the loader uses. On most
+hosts the loader finds no copy at all, and the program does not start there. The image can
+still run, because the loader cache in the image knows where the file is. Scratchsmith 2.0
+reports the library as missing.
 
 To fix it, link the library that needs the file with a `RUNPATH` that holds the directory:
 
 ```console
-$ cc -shared -Wl,-rpath,/opt/app/lib -o libmid.so mid.c -lleaf
+$ cc -shared -fPIC -Wl,--enable-new-dtags -Wl,-rpath,/opt/app/lib -o libmid.so mid.c -lleaf
 ```

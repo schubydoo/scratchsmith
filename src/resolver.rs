@@ -324,12 +324,12 @@ pub fn resolve_with(
     while let Some((obj_path, obj, inherited_rpaths)) = queue.pop_front() {
         let obj_dir = obj_path.parent().unwrap_or(Path::new("/"));
 
-        // An object's own RPATH is ignored when it also declares RUNPATH (glibc rule).
-        let used_rpaths: &[String] = if obj.runpaths.is_empty() {
-            &obj.rpaths
-        } else {
-            &[]
-        };
+        // One glibc rule, read twice below: an object that declares RUNPATH searches NO
+        // RPATH for its own lookups, neither its own nor one inherited from an ancestor
+        // (`_dl_map_object`: "when the object has the RUNPATH information we don't use any
+        // RPATHs").
+        let searches_rpath = obj.runpaths.is_empty();
+        let used_rpaths: &[String] = if searches_rpath { &obj.rpaths } else { &[] };
         // `$PLATFORM` has no value here, so the entry is searched with the token gone and a
         // same-named file in that other directory can stage in place of the arch-specific
         // one. Warn only where a search can use the entry. A soname with a slash is a path
@@ -360,15 +360,11 @@ pub fn resolve_with(
         let runpath_dirs = build_dirs(&obj.runpaths, obj_dir, &sysroot.root, &root_info);
 
         // Search order: RPATH (own, then ancestors' — transitive) -> RUNPATH (this
-        // object only) -> default dirs. LD_LIBRARY_PATH is deliberately omitted.
-        //
-        // An object that declares RUNPATH switches the whole RPATH walk off for its own
-        // lookups, its ancestors' included (glibc `_dl_map_object`: "when the object has the
-        // RUNPATH information we don't use any RPATHs"). Its children still inherit them.
-        let uses_inherited = obj.runpaths.is_empty();
+        // object only) -> default dirs. LD_LIBRARY_PATH is deliberately omitted, and so is
+        // the host's /etc/ld.so.cache: resolution never trusts the host's loader state.
         let mut search: Vec<PathBuf> = Vec::new();
         search.extend(own_rpaths.iter().cloned());
-        if uses_inherited {
+        if searches_rpath {
             search.extend(inherited_rpaths.iter().cloned());
         }
         search.extend(runpath_dirs);
@@ -376,32 +372,41 @@ pub fn resolve_with(
         // The search this resolver ran before it learned that rule: inherited RPATH always.
         // It is the fallback below, so a pack that only worked through it keeps working
         // until 2.0, with a warning.
-        let tolerated: &[PathBuf] = if uses_inherited {
+        let tolerated: &[PathBuf] = if searches_rpath {
             &[]
         } else {
             &inherited_rpaths
         };
 
-        // Children inherit this object's full RPATH view (own + ancestors'), never
-        // its RUNPATH — that is exactly the "RUNPATH is not inherited" rule.
+        // Children inherit the RPATH view this object searched (own + ancestors'), never its
+        // RUNPATH — that is the "RUNPATH is not inherited" rule. An object with RUNPATH
+        // still passes its ANCESTORS' RPATH on. Its OWN RPATH, if it carries both tags, is
+        // not passed on here. glibc may pass that one on (its ancestor walk tests for
+        // DT_RPATH only); that is unconfirmed and left as it was.
         let mut child_rpaths = own_rpaths;
         child_rpaths.extend(inherited_rpaths.iter().cloned());
 
         for soname in &obj.needed {
             let faithful = find_lib(soname, &search, obj_dir, &sysroot.root);
-            // The loader would not find this one: it sits only in an RPATH directory of a
-            // parent, and this object has RUNPATH. So the program cannot start on this host,
-            // and the image runs only because the staged ld.so.cache finds the file.
+            // The loader does not search here for this object: the file sits only in an RPATH
+            // directory of a parent, and this object has RUNPATH. Whether the program starts
+            // on the host depends on the host's ld.so.cache, which is not read here, so the
+            // warning states the search rule and no more.
             let found = faithful.or_else(|| {
                 let found = find_lib(soname, tolerated, obj_dir, &sysroot.root)?;
-                resolution.warnings.push(format!(
-                    "{} needs `{}`, and it was found only at {} through an RPATH inherited \
-                     from a parent. {0} has RUNPATH, so the loader ignores inherited RPATH \
-                     for it and cannot load that library on this host.",
-                    printable(&obj_path),
-                    soname.escape_debug(),
-                    printable(&found)
-                ));
+                // A parent can list a soname twice; say it once.
+                push_unique(
+                    &mut resolution.warnings,
+                    format!(
+                        "{} needs `{}`, and it was found only at {} through an RPATH \
+                         inherited from a parent. {0} has RUNPATH, so the loader does not \
+                         search an inherited RPATH for it, and that copy is not the one \
+                         the loader uses.",
+                        printable(&obj_path),
+                        soname.escape_debug(),
+                        printable(&found)
+                    ),
+                );
                 Some(found)
             });
             let Some(found) = found else {
