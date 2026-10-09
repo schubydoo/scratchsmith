@@ -157,8 +157,9 @@ the certificate file is still there. The directory then holds more than the flag
 an SBOM or a scan of it includes the old file.
 
 One case goes the other way. Pack once with `--packages image`, and the package records are in
-the directory. Pack again with `--packages sbom`, and scratchsmith removes those records after
-the SBOM run, because that output never leaves them in the tree.
+the directory. Pack again with `--packages sbom --sbom`, and scratchsmith removes those records
+after the SBOM run, because that output never leaves them in the tree. `--packages sbom` on its
+own stages no records and removes none, because nothing reads the tree.
 
 Two flags stop a second pack. `--add-file` and `--locale` do not replace a file that is already
 in the directory, so the pack ends with an error.
