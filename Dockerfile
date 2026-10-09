@@ -6,9 +6,10 @@
 # Built with buildx, NOT by scratchsmith: bootstrapping its own release image with
 # itself is a milestone it has not taken, though `scratchsmith index` does assemble a
 # multi-arch index daemonlessly. The rule for what runs here: every subcommand that
-# needs no external tool and no certificate store. `pack` needs docker, ldconfig,
-# syft, and strip, and `index` needs a CA bundle for HTTPS, so neither works here.
-# Everything else does, `doctor` included — it probes for each tool and reports
+# needs no external tool. `pack` needs docker, ldconfig, syft, and strip, so it does
+# not work here. `index` does: with no certificate store in the image, it falls back
+# to the Mozilla roots compiled into the binary.
+# Everything else does too, `doctor` included — it probes for each tool and reports
 # them all missing, which is the right answer. To run `pack` in a container, use the
 # `:toolbox` image instead (Dockerfile.toolbox, a Wolfi base with the
 # toolchain) — see docs/usage.md, which lists the subcommands.

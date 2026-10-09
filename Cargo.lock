@@ -1619,6 +1619,7 @@ name = "scratchsmith"
 version = "1.5.1"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "clap_complete",
  "docker_credential",
@@ -1626,6 +1627,7 @@ dependencies = [
  "goblin",
  "oci-client",
  "reqwest",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
@@ -1634,6 +1636,7 @@ dependencies = [
  "tokio",
  "toml",
  "walkdir",
+ "webpki-root-certs",
  "wiremock",
 ]
 
