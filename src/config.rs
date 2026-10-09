@@ -82,6 +82,10 @@ pub struct Config {
     /// Name-service (NSS) modules to stage (`files`, `dns`, or `none`); empty = files + dns.
     #[serde(default)]
     pub nss: Vec<crate::stager::NssModule>,
+    /// Where the owning-package data goes (`report`, `sbom`, `image`, or `none`); empty =
+    /// report.
+    #[serde(default)]
+    pub packages: Vec<crate::packages::PackagesOutput>,
     /// Fail the pack if any of these libraries (by soname) is staged (`--deny`).
     #[serde(default)]
     pub deny: Vec<String>,
@@ -194,6 +198,11 @@ impl Config {
             } else {
                 over.nss
             },
+            packages: if over.packages.is_empty() {
+                self.packages
+            } else {
+                over.packages
+            },
             deny: vec_or(self.deny, over.deny),
             require: vec_or(self.require, over.require),
             sign: self.sign || over.sign,
@@ -237,6 +246,7 @@ mod tests {
             symlinks = "preserve"
             include = ["libfoo.so"]
             nss = ["files", "dns"]
+            packages = ["report", "sbom", "image"]
             deny = ["libssl.so.3"]
             require = ["libc.so.6"]
             sign = true
@@ -253,6 +263,7 @@ mod tests {
         assert_eq!(cfg.sbom_format, Some(SbomFormat::SpdxJson));
         assert_eq!(cfg.scan_fail_on, Some(Severity::High));
         assert!(cfg.ca_certs && cfg.tz && cfg.init);
+        assert_eq!(cfg.packages.len(), 3);
         assert_eq!(
             cfg.add_file,
             vec![
@@ -337,6 +348,32 @@ mod tests {
         .unwrap();
         let min = base.select_profile("min").unwrap();
         assert_eq!(min.nss, vec![crate::stager::NssModule::Files]);
+    }
+
+    #[test]
+    fn a_profile_overrides_packages_and_an_empty_one_keeps_the_base() {
+        use crate::packages::PackagesOutput;
+        let base: Config = toml::from_str(
+            r#"
+            binary = "/usr/bin/app"
+            packages = ["report", "sbom"]
+            [profile.baked]
+            packages = ["image"]
+            [profile.plain]
+            strip = true
+        "#,
+        )
+        .unwrap();
+        let baked = base.clone().select_profile("baked").unwrap();
+        assert_eq!(baked.packages, vec![PackagesOutput::Image]);
+        // A profile that does not mention the key leaves the base's value in place.
+        let plain = base.select_profile("plain").unwrap();
+        assert_eq!(
+            plain.packages,
+            vec![PackagesOutput::Report, PackagesOutput::Sbom]
+        );
+        // An unknown output is a typo, and fails the parse like any other bad value.
+        assert!(toml::from_str::<Config>(r#"packages = ["everywhere"]"#).is_err());
     }
 
     #[test]

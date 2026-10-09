@@ -923,3 +923,192 @@ fn the_json_report_times_the_phases_that_ran() {
     );
     assert!(!stdout.contains("_ms"), "{stdout}");
 }
+
+// True when this host can name package owners: a dpkg database and the tool that reads it.
+fn dpkg_host() -> bool {
+    std::path::Path::new("/var/lib/dpkg/status").exists() && common::tool_available("dpkg-query")
+}
+
+#[test]
+fn the_report_names_the_packages_that_own_the_bundled_files() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    if !dpkg_host() {
+        common::skip_optional("no dpkg database on this host");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let pack = |name: &str, extra: &[&str]| -> (serde_json::Value, std::path::PathBuf) {
+        let rootfs = tmp.path().join(name);
+        let mut args = vec![
+            "pack",
+            "--format",
+            "json",
+            "-n",
+            "-o",
+            rootfs.to_str().unwrap(),
+        ];
+        args.extend_from_slice(extra);
+        args.push(bin);
+        let out = run(&args);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{args:?}: {stderr}");
+        (serde_json::from_slice(&out.stdout).unwrap(), rootfs)
+    };
+
+    // Default: the report output is on. libc is bundled into every dynamic image, and on a
+    // dpkg host exactly one package owns it.
+    let (report, rootfs) = pack("default", &[]);
+    let packages = report["packages"].as_array().expect("packages is a list");
+    let libc = packages
+        .iter()
+        .find(|p| {
+            p["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f.as_str().unwrap().ends_with("/libc.so.6"))
+        })
+        .unwrap_or_else(|| panic!("no package owns libc.so.6: {packages:?}"));
+    assert_eq!(libc["type"], "deb");
+    for field in ["name", "version", "arch", "source"] {
+        assert!(
+            libc[field].as_str().is_some_and(|s| !s.is_empty()),
+            "{field} must be a non-empty string: {libc}"
+        );
+    }
+    // `files` are image paths, so they join with the rest of the report. The loader shows
+    // it: dpkg is asked about its real file, and the report names where the image has it.
+    let loader = report["interpreter"].as_str().expect("id is dynamic");
+    assert!(
+        packages
+            .iter()
+            .flat_map(|p| p["files"].as_array().unwrap())
+            .any(|f| f == loader),
+        "the loader {loader} must appear under its image path: {packages:?}"
+    );
+    for file in packages.iter().flat_map(|p| p["files"].as_array().unwrap()) {
+        assert!(
+            rootfs
+                .join(file.as_str().unwrap().trim_start_matches('/'))
+                .exists(),
+            "{file} is named in the report and must be in the image"
+        );
+    }
+    // The default records nothing in the tree: the report is its only output.
+    assert!(!rootfs.join("var/lib/dpkg").exists());
+    assert!(!rootfs.join("etc/os-release").exists());
+
+    // `image` alone: the records and the distribution name stay in the image, and the
+    // report output is off, which reads as null and not as an empty list.
+    let (report, rootfs) = pack("image", &["--packages", "image"]);
+    assert!(report["packages"].is_null(), "{}", report["packages"]);
+    let name = libc["name"].as_str().unwrap();
+    let record = std::fs::read_to_string(rootfs.join("var/lib/dpkg/status.d").join(name))
+        .unwrap_or_else(|e| panic!("no record for {name}: {e}"));
+    assert!(
+        record.starts_with(&format!("Package: {name}\n")),
+        "{record}"
+    );
+    assert!(rootfs.join("etc/os-release").is_file());
+
+    // `none`: nothing is looked up and nothing is written.
+    let (report, rootfs) = pack("none", &["--packages", "none"]);
+    assert!(report["packages"].is_null());
+    assert!(!rootfs.join("var/lib/dpkg").exists());
+
+    // `none` must stand alone.
+    let out = run(&["pack", "--packages", "none,sbom", "-n", "-o", "/tmp/x", bin]);
+    assert_eq!(out.status.code(), Some(1));
+
+    // A second pack into the same directory, the shape `--no-build` invites, must not trip
+    // over the records the first one kept.
+    let (_, rootfs) = pack("image", &["--packages", "image"]);
+    assert!(rootfs.join("var/lib/dpkg/status.d").join(name).is_file());
+}
+
+#[test]
+fn the_sbom_names_the_owning_packages_and_the_image_does_not_keep_the_records() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    if !dpkg_host() {
+        common::skip_optional("no dpkg database on this host");
+        return;
+    }
+    if !common::syft_available() {
+        skip_required("no syft to generate the SBOM");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    // Count the Debian packages an SBOM names. A component only counts with a `pkg:deb/`
+    // package URL that carries a distribution: without one a scanner cannot match it.
+    let deb_packages = |name: &str, extra: &[&str]| -> (usize, std::path::PathBuf) {
+        let rootfs = tmp.path().join(name);
+        let sbom = tmp.path().join(format!("{name}.json"));
+        let mut args = vec!["pack", "-n", "-o", rootfs.to_str().unwrap(), "--sbom"];
+        args.extend_from_slice(&["--sbom-file", sbom.to_str().unwrap()]);
+        args.extend_from_slice(extra);
+        args.push(bin);
+        let out = run(&args);
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let doc: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&sbom).unwrap()).unwrap();
+        // An SBOM of a tree syft recognizes nothing in has no `components` key at all.
+        let count = doc["components"].as_array().map_or(0, |components| {
+            components
+                .iter()
+                .filter(|c| {
+                    c["purl"]
+                        .as_str()
+                        .is_some_and(|p| p.starts_with("pkg:deb/") && p.contains("distro="))
+                })
+                .count()
+        });
+        (count, rootfs)
+    };
+
+    // The default leaves the SBOM as it always was: syft sees a bare tree with no package
+    // database. That is the gap, and closing it is the user's switch to throw, because it
+    // changes what a scan gate sees.
+    let (without, _) = deb_packages("default", &[]);
+    let (off, _) = deb_packages("off", &["--packages", "none"]);
+    assert_eq!(without, off, "the default must not change the SBOM");
+    // With `sbom`: the records are in the tree while syft runs...
+    let (with, rootfs) = deb_packages("on", &["--packages", "report,sbom"]);
+    assert!(
+        with > without,
+        "the SBOM must name more Debian packages with the records ({with}) than without ({without})"
+    );
+    // ...and gone again afterwards, because `image` was not asked for.
+    assert!(
+        !rootfs.join("var/lib/dpkg").exists(),
+        "the records must not stay"
+    );
+    assert!(
+        !rootfs.join("etc/os-release").exists(),
+        "os-release must not stay"
+    );
+
+    // The same promise when an earlier `image` pack left its records in this directory:
+    // an `sbom` pack replaces them for the scan and must then take them away.
+    let (_, rootfs) = deb_packages("reused", &["--packages", "image"]);
+    let records = rootfs.join("var/lib/dpkg/status.d");
+    assert!(
+        std::fs::read_dir(&records).unwrap().count() > 0,
+        "image keeps them"
+    );
+    deb_packages("reused", &["--packages", "report,sbom"]);
+    assert_eq!(
+        std::fs::read_dir(&records).map_or(0, |d| d.count()),
+        0,
+        "an sbom pack must not leave an earlier pack's records in the image"
+    );
+}
