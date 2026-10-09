@@ -19,6 +19,7 @@ cargo +nightly fuzz run <target>
 | `unpack_structured` | `unpack::run` | Layer application, whiteout deletion and its symlink containment, digest checks, media dispatch. Structured input. |
 | `registry_parse` | `registry::parse_child_manifest`, `parse_child_config`, `select_token` | Registry manifest, config blob, and token-response JSON parse. |
 | `rpm_headers` | `rpm::header_names` | The rpm header-list reader behind `--packages` on an rpm host: the split into headers and the field reads. |
+| `dpkg_output` | `packages::parse_dpkg_output` | The readers of `dpkg-query` output behind `--packages` on a dpkg host: owner rows and diversions, package rows, and status stanzas. Asserts that every package name and record file name is one safe path component. |
 
 The `unpack` target feeds raw bytes, which rarely form a valid archive, so it covers the
 outer parse. The `unpack_structured` target assembles a real OCI-layout archive from
@@ -45,6 +46,8 @@ they are not committed:
 - `unpack`: a real OCI-layout archive whose blob digests match.
 - `registry_parse`: a valid child manifest, config blob, and token response.
 - `rpm_headers`: one small valid header with a name, a version, a release and an architecture.
+- `dpkg_output`: one text for each `dpkg-query` mode: owner rows with a diversion, package
+  rows, and two status stanzas.
 
 `fuzz/corpus/` is gitignored, and ClusterFuzzLite persists the accumulated corpus in the
 `scratchsmith-fuzz-corpus` repo. To seed a local run, copy inputs into the target's corpus

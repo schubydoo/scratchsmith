@@ -324,6 +324,39 @@ fn search(host_paths: &[PathBuf]) -> Result<Vec<(String, String)>> {
     Ok(found)
 }
 
+/// What the readers of `dpkg-query` output hand on from one text.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct DpkgParse {
+    /// The `(package, path)` owners from `-S`.
+    pub owners: Vec<(String, String)>,
+    /// The names from `-W`: each package row's name and architecture, and each name whose
+    /// status is `installed`.
+    pub names: Vec<String>,
+    /// The record file names from `-s`.
+    pub record_files: Vec<String>,
+}
+
+/// Run every reader of `dpkg-query` output over one text. A text-level entry point for
+/// fuzzing. The text comes from a tool on the build host, so it is not hostile in the usual
+/// case, but a package name from it becomes a file name in the image and a line of the report.
+pub fn parse_dpkg_output(text: &str) -> DpkgParse {
+    let owners = parse_search(text);
+    let mut files: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (package, path) in &owners {
+        files.entry(package.clone()).or_default().push(path.clone());
+    }
+    let mut names: Vec<String> = installed_packages(text).map(str::to_string).collect();
+    for package in parse_show(text, &mut files) {
+        names.extend([package.name, package.arch]);
+    }
+    let records = parse_records(text).unwrap_or_default();
+    DpkgParse {
+        owners,
+        names,
+        record_files: records.into_iter().map(|(file, _)| file).collect(),
+    }
+}
+
 // The qualified names in `-W` rows (`binary:Package`, `db:Status-Status`) whose status is
 // exactly `installed`.
 fn installed_packages(rows: &str) -> impl Iterator<Item = &str> {
@@ -431,6 +464,12 @@ fn parse_show(stdout: &str, files: &mut BTreeMap<String, Vec<String>>) -> Vec<Pa
         let [qualified, name, version, arch, source] = fields[..] else {
             continue;
         };
+        // The name and the architecture go into the report as they are, so each must be one
+        // bare name. dpkg prints nothing else there; a row that differs is not a package row.
+        let bare = |field: &str| !field.contains(':') && is_package_name(field);
+        if !bare(name) || !bare(arch) {
+            continue;
+        }
         // `-S` qualifies a name with its architecture only for a multi-arch package, and
         // `binary:Package` follows the same rule, so one of these two is the key.
         let Some(mut owned) = files
@@ -474,14 +513,16 @@ fn parse_records(stdout: &str) -> Result<Vec<(String, String)>> {
         let Some(name) = field("Package") else {
             continue;
         };
-        if !is_package_name(name) {
+        // A stanza names the package bare. A qualified name here would take a second
+        // qualifier below (`name:arch:arch`), so only one part is a name in this field.
+        if name.contains(':') || !is_package_name(name) {
             bail!("dpkg reported a package name that is not one: {name:?}");
         }
         // The second architecture of a name is qualified. The architecture goes into the
         // file name too, so it gets the same character check as the name.
         let file = if records.iter().any(|(f, _)| f == name) {
             let arch = field("Architecture").unwrap_or("unknown");
-            if !is_package_name(arch) {
+            if arch.contains(':') || !is_package_name(arch) {
                 bail!("dpkg reported an architecture that is not one: {arch:?}");
             }
             format!("{name}:{arch}")
@@ -803,6 +844,11 @@ mod tests {
         // So does the architecture of a second stanza with the same name.
         let two = "Package: a\nArchitecture: amd64\n\nPackage: a\nArchitecture: ../x\n";
         assert!(parse_records(two).is_err());
+        // A stanza names its package bare. A qualified name would be qualified a second
+        // time when the name repeats (`a:amd64:unknown`). Found by the dpkg_output fuzz target.
+        assert!(parse_records("Package: a:amd64\n\nPackage: a:amd64\n").is_err());
+        let arch = "Package: a\nArchitecture: amd64\n\nPackage: a\nArchitecture: i386:x\n";
+        assert!(parse_records(arch).is_err());
         // The same package twice is kept one time, not written twice.
         let twice = "Package: a\nArchitecture: i386\n\nPackage: a\nArchitecture: i386\n\n\
                      Package: a\nArchitecture: i386\n";
@@ -817,6 +863,27 @@ mod tests {
             assert!(is_pattern(pattern), "{pattern}");
         }
         assert!(!is_pattern("/usr/lib/x86_64-linux-gnu/libstdc++.so.6"));
+    }
+
+    #[test]
+    fn every_reader_runs_over_one_text_and_hands_on_only_safe_names() {
+        let text = "diversion by dash from: /bin/sh\ndash: /bin/sh\nlibc6:amd64: /lib/libc.so.6\n\
+                    libc6:amd64\tlibc6\t2.41-12\tamd64\tglibc\nlibc6:amd64\tinstalled\n\
+                    dash\t../x\t1\tamd64\tdash\ndash\tdash\t1\t\tdash\n\n\
+                    Package: libc6\nArchitecture: amd64\n";
+        let parsed = parse_dpkg_output(text);
+        let owner = |package: &str, path: &str| (package.to_string(), path.to_string());
+        assert_eq!(
+            parsed.owners,
+            [
+                owner("dash", "/bin/sh"),
+                owner("libc6:amd64", "/lib/libc.so.6")
+            ]
+        );
+        // The two `dash` rows are not package rows: one has a path for a name, and the other
+        // has no architecture. Found by the dpkg_output fuzz target.
+        assert_eq!(parsed.names, ["libc6:amd64", "libc6", "amd64"]);
+        assert_eq!(parsed.record_files, ["libc6"]);
     }
 
     #[test]

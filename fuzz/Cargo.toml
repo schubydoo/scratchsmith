@@ -74,3 +74,10 @@ path = "fuzz_targets/rpm_headers.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "dpkg_output"
+path = "fuzz_targets/dpkg_output.rs"
+test = false
+doc = false
+bench = false

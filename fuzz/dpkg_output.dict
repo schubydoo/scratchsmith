@@ -1,0 +1,18 @@
+# libFuzzer dictionary for dpkg_output: the fixed strings that the `dpkg-query` readers branch
+# on. `-S` rows are "pkg, pkg: /path" plus the diversion lines, `-W` rows are tab-separated
+# with the status word, and `-s` output is "Key: value" stanzas with a blank line between.
+"diversion by "
+"local diversion from: /"
+" from: /"
+" to: /"
+"diversion "
+": /"
+", "
+"\x09"
+"installed"
+"\x09installed"
+"Package: "
+"Architecture: "
+"\x0a\x0a"
+":amd64"
+".."
