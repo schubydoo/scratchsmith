@@ -1300,7 +1300,14 @@ The scan did not see them.</p>
 <li><code>source</code> is the source package, which is the name that security advisories use.</li>
 <li><code>files</code> are paths in the image. One host file can be in the image two times, as the loader
   is in this example.</li>
-<li>The lookup covers the binary, the libraries that it needs, the loader, and the NSS modules.</li>
+<li>The lookup covers the binary, the libraries that it needs, the loader, and the NSS modules.
+  It also covers the files from <code>--tz</code>, <code>--init</code> and <code>--add-file</code>.</li>
+<li>If <code>--symlinks</code> staged an <code>--add-file</code> entry as a link, that entry is not in the list. A link
+  carries none of the package's content.</li>
+<li>The <code>--ca-certs</code> bundle is a special case. The host generates that file, so no package owns
+  its path. Scratchsmith names the <code>ca-certificates</code> package for it, because the bundle is
+  built from that package. This one entry is a convention and not a lookup.</li>
+<li>A locale from <code>--locale</code> is not in the list.</li>
 <li>A file that no package owns, such as a binary that you built, is not in the list.</li>
 <li>Scratchsmith asks which package owns the path. It does not compare the file's contents with
   the package's. If a file on the host was replaced by hand, the report still names the package.</li>
