@@ -1,0 +1,113 @@
+name: RustSec lockfile autofix
+
+# Daily: audit Cargo.lock and fuzz/Cargo.lock against RustSec, and open an auto-merging PR
+# that bumps each vulnerable crate within its semver range (scripts/rustsec_autofix.py).
+#
+# Renovate cannot cover this. Its OSV alerts see direct deps only, so a crate pinned only in
+# a lockfile (rustls via reqwest, RUSTSEC-2026-0346..0349) waits for the Monday
+# lockFileMaintenance, with `audit · deny` red on every PR until then. Dependabot security
+# updates are a second line for the same gap; whichever PR lands first makes the other moot.
+#
+# An advisory that needs a Cargo.toml change is never forced. The run fails instead, so the
+# scheduled-run failure notice reaches a person.
+on:
+  schedule:
+    - cron: "23 14 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rustsec-autofix
+  cancel-in-progress: false
+
+jobs:
+  autofix:
+    name: Fix RustSec advisories in the lockfiles
+    # workflow_dispatch from another ref must not run this write-capable job.
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      # App token (NOT GITHUB_TOKEN): a PR opened by the default token would not trigger
+      # its CI, and the default token can't push a branch under branch protection.
+      - name: Mint scratchsmith-ci App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.SCRATCHSMITH_CI_CLIENT_ID }}
+          private-key: ${{ secrets.SCRATCHSMITH_CI_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Verify App token was minted
+        if: ${{ steps.app-token.outputs.token == '' }}
+        run: |
+          echo "::error::scratchsmith-ci App token mint produced an empty token; check SCRATCHSMITH_CI_CLIENT_ID / SCRATCHSMITH_CI_APP_PRIVATE_KEY and the App installation."
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-audit
+      - name: Audit and update the lockfiles
+        run: python3 scripts/rustsec_autofix.py "$RUNNER_TEMP/rustsec"
+      - name: Open, update or close the autofix PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          branch="rustsec-autofix"
+          summary="$RUNNER_TEMP/rustsec/summary.json"
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --head "$branch" --json number --jq '.[0].number // empty')"
+          if git diff --quiet -- Cargo.lock fuzz/Cargo.lock; then
+            echo "Lockfiles already clean of fixable advisories."
+            # A stale PR means main got the fix another way (Dependabot, a manual bump).
+            if [ -n "$existing" ]; then
+              gh pr close --repo "$GITHUB_REPOSITORY" "$existing" --delete-branch \
+                --comment "Closed by rustsec-autofix.yml: \`main\` no longer has a fixable advisory."
+            fi
+            exit 0
+          fi
+          if [ "$(jq -r .main_changed "$summary")" = "true" ]; then
+            title="fix(deps): update crates for RustSec advisories"
+          else
+            # fuzz/ never ships, so its lockfile fix is internal-only.
+            title="chore(deps): update the fuzz lockfile for RustSec advisories"
+          fi
+          git config user.name "scratchsmith-ci[bot]"
+          git config user.email "scratchsmith-ci[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add Cargo.lock fuzz/Cargo.lock
+          # The script's fragment, if any, is the only new file under .changeset/.
+          git add .changeset/ 2>/dev/null || true
+          git commit -m "$title"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${branch}"
+          if [ -z "$existing" ]; then
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+              --title "$title" --body-file "$RUNNER_TEMP/rustsec/body.md"
+          else
+            gh pr edit --repo "$GITHUB_REPOSITORY" "$existing" \
+              --title "$title" --body-file "$RUNNER_TEMP/rustsec/body.md"
+          fi
+          if [ "$(jq -r .main_changed "$summary")" = "true" ]; then
+            gh pr edit --repo "$GITHUB_REPOSITORY" "$branch" --remove-label no-changelog || true
+          else
+            gh pr edit --repo "$GITHUB_REPOSITORY" "$branch" --add-label no-changelog
+          fi
+          # Same as packaging-bump: lockfile-only and semver-compatible, so it lands once
+          # every required check passes. Best-effort: a failure leaves a manual merge.
+          if ! gh pr merge --repo "$GITHUB_REPOSITORY" --auto --squash "$branch"; then
+            echo "::warning::could not enable auto-merge on $branch — merge it manually."
+          fi
+      - name: Fail on advisories that need a manifest change
+        run: |
+          set -euo pipefail
+          remaining="$(jq -r '.remaining | join(", ")' "$RUNNER_TEMP/rustsec/summary.json")"
+          if [ -n "$remaining" ]; then
+            echo "::error::not fixable from the lockfile, needs a Cargo.toml change: $remaining"
+            exit 1
+          fi
