@@ -8,8 +8,9 @@ name: RustSec lockfile autofix
 # lockFileMaintenance, with `audit · deny` red on every PR until then. Dependabot security
 # updates are a second line for the same gap; whichever PR lands first makes the other moot.
 #
-# An advisory that needs a Cargo.toml change is never forced. The run fails instead, so the
-# scheduled-run failure notice reaches a person.
+# An advisory still present after the update (it needs a Cargo.toml change, or the update
+# brought it in) is never forced. The run fails instead, so the scheduled-run failure notice
+# reaches a person.
 on:
   schedule:
     - cron: "23 14 * * *"
@@ -49,6 +50,8 @@ jobs:
           exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Full history: the ownership check walks the autofix branch back to main.
+          fetch-depth: 0
           persist-credentials: false
       - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
@@ -61,31 +64,44 @@ jobs:
         run: |
           set -euo pipefail
           branch="rustsec-autofix"
-          summary="$RUNNER_TEMP/rustsec/summary.json"
+          bot="scratchsmith-ci[bot]@users.noreply.github.com"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --head "$branch" --json number --jq '.[0].number // empty')"
+          # The branch is rebuilt from main each run, so a force-push or a close would
+          # discard a commit that a person added, such as the manifest fix that a failed
+          # run asks for. Leave the branch alone unless every non-merge commit is the bot's.
+          owned=true
+          if git fetch -q "$remote" "$branch" 2>/dev/null; then
+            if git log --no-merges --format=%ae "HEAD..FETCH_HEAD" | grep -qvxF "$bot"; then
+              owned=false
+              echo "::warning::$branch has commits that rustsec-autofix.yml did not write; leaving it alone."
+            fi
+          fi
           if git diff --quiet -- Cargo.lock fuzz/Cargo.lock; then
             echo "Lockfiles already clean of fixable advisories."
             # A stale PR means main got the fix another way (Dependabot, a manual bump).
-            if [ -n "$existing" ]; then
+            if [ -n "$existing" ] && [ "$owned" = true ]; then
               gh pr close --repo "$GITHUB_REPOSITORY" "$existing" --delete-branch \
                 --comment "Closed by rustsec-autofix.yml: \`main\` no longer has a fixable advisory."
             fi
             exit 0
           fi
-          if [ "$(jq -r .main_changed "$summary")" = "true" ]; then
-            title="fix(deps): update crates for RustSec advisories"
-          else
+          if [ "$owned" = false ]; then exit 0; fi
+          if git diff --quiet -- Cargo.lock; then
             # fuzz/ never ships, so its lockfile fix is internal-only.
             title="chore(deps): update the fuzz lockfile for RustSec advisories"
+          else
+            title="fix(deps): update crates for RustSec advisories"
           fi
           git config user.name "scratchsmith-ci[bot]"
-          git config user.email "scratchsmith-ci[bot]@users.noreply.github.com"
+          git config user.email "$bot"
           git checkout -B "$branch"
           git add Cargo.lock fuzz/Cargo.lock
           # The script's fragment, if any, is the only new file under .changeset/.
           git add .changeset/ 2>/dev/null || true
+          fragment="$(git diff --cached --name-only -- .changeset/)"
           git commit -m "$title"
-          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${branch}"
+          git push --force "$remote" "HEAD:${branch}"
           if [ -z "$existing" ]; then
             gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
               --title "$title" --body-file "$RUNNER_TEMP/rustsec/body.md"
@@ -93,21 +109,25 @@ jobs:
             gh pr edit --repo "$GITHUB_REPOSITORY" "$existing" \
               --title "$title" --body-file "$RUNNER_TEMP/rustsec/body.md"
           fi
-          if [ "$(jq -r .main_changed "$summary")" = "true" ]; then
+          # The changeset check wants a fragment or the label. Label failures must not stop
+          # the step: the advisory report below still has to run.
+          if [ -n "$fragment" ]; then
             gh pr edit --repo "$GITHUB_REPOSITORY" "$branch" --remove-label no-changelog || true
           else
-            gh pr edit --repo "$GITHUB_REPOSITORY" "$branch" --add-label no-changelog
+            gh pr edit --repo "$GITHUB_REPOSITORY" "$branch" --add-label no-changelog || true
           fi
           # Same as packaging-bump: lockfile-only and semver-compatible, so it lands once
           # every required check passes. Best-effort: a failure leaves a manual merge.
           if ! gh pr merge --repo "$GITHUB_REPOSITORY" --auto --squash "$branch"; then
             echo "::warning::could not enable auto-merge on $branch — merge it manually."
           fi
-      - name: Fail on advisories that need a manifest change
+      - name: Fail on advisories still in the lockfiles
+        # Report even if the PR step failed: this list is the signal a person must see.
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           remaining="$(jq -r '.remaining | join(", ")' "$RUNNER_TEMP/rustsec/summary.json")"
           if [ -n "$remaining" ]; then
-            echo "::error::not fixable from the lockfile, needs a Cargo.toml change: $remaining"
+            echo "::error::still in the lockfiles after cargo update (needs a Cargo.toml change, or the update brought it in): $remaining"
             exit 1
           fi
