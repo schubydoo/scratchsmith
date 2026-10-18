@@ -5,6 +5,16 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 1.7.1 (2026-10-18)
+
+### Security
+
+#### rustls 0.23.46 for registry TLS ([#315](https://github.com/schubydoo/scratchsmith/pull/315))
+
+The TLS library that `--push` uses to talk to a registry moves from rustls 0.23.45 to 0.23.46.
+That release fixes RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348 and
+RUSTSEC-2026-0349. The worst of them is rated medium.
+
 ## 1.7.0 (2026-10-09)
 
 ### Features
