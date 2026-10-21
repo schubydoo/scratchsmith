@@ -5,6 +5,14 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 1.7.2 (2026-10-21)
+
+### Security
+
+#### Dependency update for RUSTSEC-2026-0382, RUSTSEC-2026-0383 ([#327](https://github.com/schubydoo/scratchsmith/pull/327))
+
+The lockfile moves to rustls-webpki 0.103.16, webpki-root-certs 1.0.10, which fixes RUSTSEC-2026-0382, RUSTSEC-2026-0383.
+
 ## 1.7.1 (2026-10-18)
 
 ### Security
