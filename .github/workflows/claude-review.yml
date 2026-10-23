@@ -357,6 +357,9 @@ jobs:
           # allowlisted: it posts a STANDALONE review comment that GitHub wraps in a review of
           # its own, splitting one review into one-per-finding. The grouped POST is the only
           # anchor path; the guard step below detects a split by the submitted-review delta.
+          # The exact `reply` rule can post that same standalone comment when `reply.json` omits
+          # `in_reply_to`, so this exclusion keeps the default path clean rather than closing
+          # the capability; the `ADDED -gt 1` check is what catches such a split afterwards.
           #
           # --max-turns is a review-QUALITY setting (reading a multi-file diff + anchoring
           # findings + one grouped review costs many turns); 150 keeps headroom inside the
@@ -417,7 +420,12 @@ jobs:
             if [ "$ADDED" -lt 0 ]; then
               echo "::warning::Claude's submitted-review count went DOWN during the run ($REVIEWS_BEFORE -> $R): a review was deleted mid-run, so the grouping check cannot be trusted this time"
             elif [ "$ADDED" -eq 0 ]; then
-              echo "::warning::no review was SUBMITTED. Either the grouped POST was never attempted (findings, if any, went out as plain comments with no anchors or resolvable threads), it was REJECTED (a 422 on one anchor outside the diff loses the whole review), or the Write tool was unavailable for review.json."
+              # A clean review still submits one (its tally reads `0 important, 0 nits`), so this
+              # never happens on a good run. Fail, after the denial report below: with exact-match
+              # `gh api` rules, a submit command typed one character off is refused, and the
+              # tracking comment alone would pass the AFTER > BEFORE check.
+              echo "::error::no review was SUBMITTED. Either the grouped POST was never attempted (findings, if any, went out as plain comments with no anchors or resolvable threads), it was REJECTED (a 422 on one anchor outside the diff loses the whole review), it was REFUSED (the command did not match the exact submit rule), or the Write tool was unavailable for review.json."
+              NO_REVIEW=true
             elif [ "$ADDED" -gt 1 ]; then
               echo "::warning::the review SPLIT into $ADDED submitted reviews (thread replies are not counted). Cause is one of: standalone inline comments (each becomes its own review; the MCP inline-comment tool is not allowlisted for this reason), or falling back from the 'Write review.json + gh api --input' recipe."
             else
@@ -491,6 +499,9 @@ jobs:
                 *) echo "::warning::$D tool call(s) were denied. Denials are routine on a GOOD run too (redirects, compound commands, tools outside --allowedTools: 2-7 per run measured), so this is not by itself a split review — the submitted-review delta above is the tell for that. Re-run with '@claude review debug' to see the denied commands." ;;
               esac
             fi
+          fi
+          if [ "${NO_REVIEW:-}" = "true" ]; then
+            exit 1
           fi
           if [ "$AFTER" -le "$BEFORE" ]; then
             echo "::error::the review published nothing — the pull request gained no Claude comment. Do NOT trust a green check here; re-run with '@claude review debug' to capture the execution log."
