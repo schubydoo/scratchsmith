@@ -149,8 +149,10 @@ FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, pos
   read-only GETs included), JSON inline on the command line, shell redirects (`> file`),
   compound commands (`;`, `&&`, `||`), `python3`, `ls`, `git`, `gh pr review`,
   `gh pr comment`, and any `gh` command with `-R`/`--repo`, a URL, or `--search`/`-S`. Reads of `/proc`, the runner's
-  temp directory, home dotfiles and `.git/` are refused too. A refused attempt is a denial
-  the workflow counts.
+  temp directory, home dotfiles and `.git/` are refused too. Every shell command outside the
+  exact list in the system prompt is refused, read-only ones such as `grep`, `cat`, `find`
+  and `cd` included: search with the Grep and Glob tools, and read with Read. A refused
+  attempt is a denial the workflow counts.
 - Put the **summary table** — every finding with its file and line — in the **body of the
   submitted review**, and nowhere else. It survives inline anchors going stale (once the PR
   moves, GitHub marks them outdated and drops the line number).

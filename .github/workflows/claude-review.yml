@@ -129,10 +129,42 @@ jobs:
           VIEW_JSON="gh pr view ${PR} --json number,title,body,author,state,isDraft,baseRefName,headRefName,headRefOid,files,commits,labels"
           READ_RULES="Bash(gh pr diff ${PR}),Bash(gh pr diff ${PR} --name-only),Bash(gh pr view ${PR}),Bash(gh pr view ${PR} --comments),Bash(${VIEW_JSON})"
           READ_LIST="\`gh pr diff ${PR}\`, \`gh pr diff ${PR} --name-only\`, \`gh pr view ${PR}\`, \`gh pr view ${PR} --comments\`, \`${VIEW_JSON}\`"
+          # ⚠️ The Bash guard. Claude Code runs a built-in set of read-only commands (`ls`,
+          # `cat`, `grep`, `find`, `cd`, read-only `git`, …) with no allow rule at all, and
+          # that set is not configurable. A Read deny stops only a path named outright, so
+          # `grep -rn x-access-token .` walked into `.git/config` and printed the App token.
+          # A PreToolUse hook runs before that check: it lets a Bash call through only when
+          # its command is one of these eight lines, character for character, and refuses
+          # everything else. Exit 2 is the hook's "block"; every failure path in the script
+          # ends there, so it fails closed. The directory sits outside every checkout and
+          # every `--add-dir`, so Claude can neither read nor edit it.
+          GUARD="$(dirname "$RUNNER_TEMP")/claude-review-guard"
+          mkdir -p "$GUARD"
+          printf '%s\n' "gh pr diff ${PR}" "gh pr diff ${PR} --name-only" "gh pr view ${PR}" \
+            "gh pr view ${PR} --comments" "$VIEW_JSON" "$SUBMIT" "$COMMENTS" "$REPLY" > "$GUARD/allowed.txt"
+          cat > "$GUARD/bash-guard.sh" <<'GUARD_EOF'
+          #!/usr/bin/env bash
+          set -u
+          cmd=$(jq -r '.tool_input.command // empty' 2>/dev/null) || cmd=""
+          if [ -n "$cmd" ] && grep -Fxq -- "$cmd" "$1"; then exit 0; fi
+          echo "refused: only the exact review commands in the system prompt may run" >&2
+          exit 2
+          GUARD_EOF
+          chmod 0555 "$GUARD/bash-guard.sh"
+          chmod 0444 "$GUARD/allowed.txt"
+          # A hook that cannot run is a NON-blocking error, which lets the command through, so
+          # prove the guard both refuses and allows before Claude starts.
+          probe() { jq -cn --arg c "$1" '{tool_input: {command: $c}}' | "$GUARD/bash-guard.sh" "$GUARD/allowed.txt" 2>/dev/null; }
+          if probe "grep -rn x ."; then echo "::error::the Bash guard let a stray command through"; exit 1; fi
+          if ! probe "$SUBMIT"; then echo "::error::the Bash guard refused the submit command"; exit 1; fi
+          # The settings JSON carries the output style too: the `settings:` input takes one
+          # object, and the action writes it to ~/.claude/settings.json.
+          SETTINGS=$(jq -cn --arg style "$REVIEW_OUTPUT_STYLE" --arg hook "$GUARD/bash-guard.sh $GUARD/allowed.txt" \
+            '{outputStyle: $style, hooks: {PreToolUse: [{matcher: "Bash", hooks: [{type: "command", command: $hook}]}]}}')
           # "@claude review debug" additionally uploads the raw execution log.
           DEBUG=false
           case "$COMMENT_BODY" in *"@claude review debug"*) DEBUG=true ;; esac
-          { echo "pr=$PR"; echo "debug=$DEBUG"; echo "submit=$SUBMIT"; echo "comments=$COMMENTS"; echo "reply=$REPLY"; echo "read_rules=$READ_RULES"; echo "read_list=$READ_LIST"; } >> "$GITHUB_OUTPUT"
+          { echo "pr=$PR"; echo "debug=$DEBUG"; echo "submit=$SUBMIT"; echo "comments=$COMMENTS"; echo "reply=$REPLY"; echo "read_rules=$READ_RULES"; echo "read_list=$READ_LIST"; echo "settings=$SETTINGS"; } >> "$GITHUB_OUTPUT"
           echo "::notice::Reviewing PR #$PR (debug artifact: $DEBUG)"
 
       - name: Count what Claude has already posted
@@ -329,7 +361,8 @@ jobs:
           # DEFAULT-BRANCH copy of a workflow for `issue_comment`), and a style name that
           # does not resolve DEGRADES SILENTLY to the default. The review instructions keep
           # an honest "may" on an uncertain finding, overriding the style's no-hedging rule.
-          settings: '{"outputStyle": "${{ env.REVIEW_OUTPUT_STYLE }}"}'
+          # The resolve step builds this JSON: the output style plus the Bash guard hook.
+          settings: ${{ steps.resolve.outputs.settings }}
           # NO `prompt:` — see the banner. Guidance goes through the system prompt.
           # Keep codecov's coverage comments out of Claude's context (the CI floor owns that).
           exclude_comments_by_actor: "greptile-apps[bot],codecov[bot]"
