@@ -7,6 +7,8 @@
 # Env overrides:
 #   VERSION   release tag to install (default: latest), e.g. VERSION=v1.0.0
 #   BIN_DIR   install directory (default: /usr/local/bin as root, else ~/.local/bin)
+#   INSECURE_ALLOW_MISSING_SIGNATURE=1  install even if the cosign signature bundle cannot
+#             be fetched (SHA-256 only; a failed signature check still aborts)
 #
 # Scratchsmith is LINUX-ONLY: it stages a Linux glibc rootfs (Unix symlinks + mode bits,
 # host NSS/ld.so.cache, `ldconfig`), so it does not run on macOS or native Windows. On
@@ -38,6 +40,7 @@ Scratchsmith installer.
   --help          show this message
 
 Env: VERSION=vX.Y.Z (tag to install), BIN_DIR=/path (install / lookup directory).
+     INSECURE_ALLOW_MISSING_SIGNATURE=1 (install without the cosign signature bundle; SHA-256 only).
 
   install:   curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash
   uninstall: curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash -s -- --uninstall
@@ -137,12 +140,15 @@ ok "checksum verified"
 # Verify the checksums file is itself cosign-signed by the release workflow. A SHA-256
 # match alone is no protection against a tampered mirror — an attacker who swaps the
 # tarball swaps checksums.txt to match — so the cosign signature is the real check, and a
-# verification FAILURE aborts (it is not a warning). A genuinely absent cosign or an
-# unavailable signature bundle is a documented degradation to checksum-only.
+# verification FAILURE aborts (it is not a warning). A genuinely absent cosign is a
+# documented degradation to checksum-only. A missing bundle also aborts: the attacker who
+# swaps the tarball can just as well withhold it. INSECURE_ALLOW_MISSING_SIGNATURE=1 opts out.
 if ! have cosign; then
   warn "cosign not installed — verified the SHA-256 only. Install cosign for full signature + provenance checks (see the README 'Verifying releases')."
 elif ! download "${base}/checksums.txt.sigstore.json" "${tmp}/checksums.txt.sigstore.json" 2>/dev/null; then
-  warn "could not fetch the cosign signature bundle (checksums.txt.sigstore.json) — verified the SHA-256 only."
+  [ "${INSECURE_ALLOW_MISSING_SIGNATURE:-}" = "1" ] \
+    || die "could not fetch the cosign signature bundle (checksums.txt.sigstore.json) — refusing to install an unverified binary. Re-download, or (at your own risk) set INSECURE_ALLOW_MISSING_SIGNATURE=1 to fall back to checksum-only."
+  warn "could not fetch the cosign signature bundle (checksums.txt.sigstore.json) — INSECURE_ALLOW_MISSING_SIGNATURE=1 is set, so verified the SHA-256 only."
 elif ( cd "$tmp" && cosign verify-blob checksums.txt \
         --bundle checksums.txt.sigstore.json \
         --certificate-identity-regexp "^https://github\.com/${REPO}/\.github/workflows/knope-release\.yml@" \
