@@ -147,8 +147,10 @@ FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, pos
   `in_reply_to`: without it that endpoint posts a standalone review comment, which splits
   the review. These are refused, so do not reach for them: any other `gh api` call (other
   read-only GETs included), JSON inline on the command line, shell redirects (`> file`),
-  compound commands (`;`, `&&`, `||`), `python3`, `ls`, `git`. `gh pr review` cannot attach
-  inline comments. A refused attempt is a denial the workflow counts.
+  compound commands (`;`, `&&`, `||`), `python3`, `ls`, `git`, `gh pr review`,
+  `gh pr comment`, and any `gh` command with `-R`/`--repo`. Reads of `/proc`, the runner's
+  temp directory, home dotfiles and `.git/` are refused too. A refused attempt is a denial
+  the workflow counts.
 - Put the **summary table** — every finding with its file and line — in the **body of the
   submitted review**, and nowhere else. It survives inline anchors going stale (once the PR
   moves, GitHub marks them outdated and drops the line number).
