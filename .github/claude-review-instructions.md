@@ -118,8 +118,8 @@ FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, pos
 - **How to submit it, exactly.** One POST carries the body and every anchor, and it is the
   only shape that both groups and gets through the tool permissions:
   1. Use the `Write` tool to create `review.json` at the exact path the submit command in
-     the system prompt names, outside every checkout, with the payload: `commit_id` (the
-     pinned head SHA the system prompt names, which `./pr-head` is checked out at),
+     the system prompt names. That path is outside every checkout. The payload holds
+     `commit_id` (the pinned head SHA from the system prompt),
      `event: "COMMENT"`, `body` (the summary), and a `comments` array of
      `{path, line, side: "RIGHT", body}` entries, one per finding (`side: "LEFT"` only for
      a line the diff removes).
@@ -138,10 +138,9 @@ FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, pos
   (`POST .../pulls/<n>/comments` without `in_reply_to`, or an inline-comment tool) in a
   submitted review of its own, so every one of them splits the review. Every anchor rides in
   the `comments` array of the single POST above; a clarification after the fact is a reply
-  on the thread, not a new comment. To reply, `Write` `reply.json`, at the path the reply
-  command names, as
+  on the thread, not a new comment. To reply, `Write` `reply.json` as
   `{"body": "...", "in_reply_to": <id>}`, where `<id>` is the numeric id of the review
-  comment that opens the thread. Get it from
+  comment that opens the thread. Write it at the path the reply command names. Get the id from
   `gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate --jq '.[] | {id, in_reply_to_id,
   path, line, original_line, original_start_line, user: .user.login}'`, the only source of
   review-comment ids. The system prompt carries it verbatim. It is read-only, and it prints
