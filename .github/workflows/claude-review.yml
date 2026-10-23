@@ -377,8 +377,13 @@ jobs:
           #     writes the App token into the remote). Grep and Glob honor these too;
           #   - `gh` aimed at another repo (`-R`, `--repo`, `GH_REPO`, `GH_HOST`, a PR URL, or a
           #     `--search`/`-S` query with its own `repo:`): the App token reads every repo it
-          #     is installed on, private ones included. Symlinks need no rule: the CLI checks
-          #     a Read deny against the resolved target.
+          #     is installed on, private ones included.
+          #   Symlinks need no rule of their own: the CLI checks Read, Grep and Glob denies
+          #   against the resolved target. Stripping links from pr-head would not do it,
+          #   because the action checks the PR head out again at the workspace root, inside
+          #   its own step. Tested on 2.1.301, the CLI this action pins: a link to /proc,
+          #   $RUNNER_TEMP or .git/config, and a linked directory, were all refused.
+          #   Re-run that test when Renovate bumps claude-code-action.
           #
           # --max-turns is a review-QUALITY setting (reading a multi-file diff + anchoring
           # findings + one grouped review costs many turns); 150 keeps headroom inside the
