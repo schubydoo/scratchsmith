@@ -272,10 +272,11 @@ impl LinkInfoSource for GoblinSource {
 const DEVICE_READ_CAP: u64 = 256 << 20;
 
 // Read a whole file, as `std::fs::read` does, with the stop chosen by fstat on the open handle.
-// A device stops one byte past `device_cap` and fails. Anything else reads to EOF as before.
-// A regular file's length is only the reserve: a procfs file reports 0 and still has content.
-// A FIFO or pipe ends when its writer closes, and an operator can pipe in a real library
-// (`--include <(cat lib.so)`).
+// A device stops one byte past `device_cap` and fails. A regular file may read past the length
+// it reported, because a procfs file reports 0 and still has content, but not past
+// `device_cap` too: a tracefs pipe is a regular file of length 0 that never ends. A FIFO or
+// pipe reads to EOF as before: it ends when its writer closes, and an operator can pipe in a
+// real library (`--include <(cat lib.so)`).
 fn read_bounded(path: &Path, device_cap: u64) -> Result<Vec<u8>> {
     use std::io::Read;
     use std::os::unix::fs::FileTypeExt;
@@ -292,7 +293,17 @@ fn read_bounded(path: &Path, device_cap: u64) -> Result<Vec<u8>> {
             .try_reserve_exact(usize::try_from(len).unwrap_or(usize::MAX))
             .map_err(std::io::Error::from)
             .with_context(reading)?;
-        file.read_to_end(&mut bytes).with_context(reading)?;
+        let cap = len.max(device_cap);
+        file.take(cap.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .with_context(reading)?;
+        if bytes.len() as u64 > cap {
+            bail!(
+                "{} yields more than {cap} bytes, more than its own length, so it is not \
+                 read as an ELF",
+                printable(path)
+            );
+        }
     } else if kind.is_char_device() || kind.is_block_device() {
         // Its size is no length to reserve: grow as bytes arrive.
         file.take(device_cap.saturating_add(1))
@@ -975,6 +986,21 @@ mod tests {
         assert_eq!(fs::metadata(path).unwrap().len(), 0);
         let bytes = read_bounded(path, DEVICE_READ_CAP).unwrap();
         assert!(bytes.starts_with(b"Name:"), "{bytes:?}");
+    }
+
+    #[test]
+    fn a_regular_file_past_its_length_and_the_cap_fails() {
+        // A small cap stands in for a file that grows without end, like a tracefs pipe.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("grows");
+        fs::write(&path, [0u8; 64]).unwrap();
+        assert_eq!(
+            read_bounded(&path, 16).unwrap().len(),
+            64,
+            "its own length is fine"
+        );
+        let err = read_bounded(Path::new("/proc/self/status"), 16).unwrap_err();
+        assert!(err.to_string().contains("more than 16 bytes"), "{err}");
     }
 
     #[test]
