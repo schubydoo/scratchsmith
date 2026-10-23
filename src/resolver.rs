@@ -261,9 +261,55 @@ impl LinkInfoSource for GoblinSource {
         // the stager's copy, the hardening lint returns Option, and only `--strip` rejects it.
         // That is "tighten validation", so it waits for 2.0, and `resolve_with` warns until
         // then.
-        let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        let bytes = read_bounded(path, DEVICE_READ_CAP)?;
         Ok(parse_elf_info(&bytes).ok())
     }
+}
+
+// The most read from a character or block device. No real library is one, but the packed ELF
+// picks the path (a DT_NEEDED with a slash, or a search dir plus a soname), and `/dev/zero`
+// never ends.
+const DEVICE_READ_CAP: u64 = 256 << 20;
+
+// Read a whole file, as `std::fs::read` does, with the stop chosen by fstat on the open handle.
+// A regular file stops at the length it reported. A device stops one byte past `device_cap`
+// and fails. Anything else reads to EOF as before: a FIFO or pipe ends when its writer closes,
+// and an operator can pipe in a real library (`--include <(cat lib.so)`).
+fn read_bounded(path: &Path, device_cap: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
+    use std::os::unix::fs::FileTypeExt;
+
+    let reading = || format!("reading {}", path.display());
+    // A blocking open, as before: a FIFO's open waits for a writer that starts late.
+    let mut file = std::fs::File::open(path).with_context(reading)?;
+    let meta = file.metadata().with_context(reading)?;
+    let kind = meta.file_type();
+    let mut bytes = Vec::new();
+    if kind.is_file() {
+        let len = meta.len();
+        bytes
+            .try_reserve_exact(usize::try_from(len).unwrap_or(usize::MAX))
+            .map_err(std::io::Error::from)
+            .with_context(reading)?;
+        file.take(len)
+            .read_to_end(&mut bytes)
+            .with_context(reading)?;
+    } else if kind.is_char_device() || kind.is_block_device() {
+        // Its size is no length to reserve: grow as bytes arrive.
+        file.take(device_cap.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .with_context(reading)?;
+        if bytes.len() as u64 > device_cap {
+            bail!(
+                "{} is a device that yields more than {device_cap} bytes, so it is not read \
+                 as an ELF",
+                printable(path)
+            );
+        }
+    } else {
+        file.read_to_end(&mut bytes).with_context(reading)?;
+    }
+    Ok(bytes)
 }
 
 /// Resolve a binary's transitive dependencies against a sysroot, using goblin.
@@ -845,6 +891,190 @@ mod tests {
         let absent = tmp.path().join("absent.so");
         assert!(GoblinSource.read(&absent).is_err());
         assert!(!has_elf_magic(&absent));
+    }
+
+    // A small device cap, so a test that reads an endless device to it allocates little.
+    const TEST_CAP: u64 = 64 << 10;
+
+    // Scripted facts for the binary, real reads for everything it resolves to.
+    struct ScriptedRoot {
+        root: PathBuf,
+        info: ElfInfo,
+    }
+
+    impl LinkInfoSource for ScriptedRoot {
+        fn read(&self, path: &Path) -> Result<Option<ElfInfo>> {
+            if canonical(path) == canonical(&self.root) {
+                return Ok(Some(self.info.clone()));
+            }
+            GoblinSource.read(path)
+        }
+    }
+
+    fn mkfifo(path: &Path) {
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            path,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            0,
+        )
+        .unwrap();
+    }
+
+    // Run `f` on a thread, and fail rather than hang the suite if it never returns.
+    fn returns<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(30))
+            .expect("the read blocked")
+    }
+
+    #[test]
+    fn an_endless_device_fails_at_the_cap() {
+        for dev in ["/dev/zero", "/dev/urandom"] {
+            let err = read_bounded(Path::new(dev), TEST_CAP).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("is a device that yields more than 65536 bytes"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_elf_that_names_dev_zero_fails_instead_of_exhausting_memory() {
+        // The read of /dev/zero used to grow one buffer until the host ran out of memory.
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("exe");
+        touch(&exe);
+        // A DT_NEEDED path, and a search dir plus a bare soname: both reach /dev/zero.
+        for info in [
+            elf(&["/dev/zero"], &[], &[], None),
+            elf(&["zero"], &["/dev"], &[], None),
+        ] {
+            let src = ScriptedRoot {
+                root: exe.clone(),
+                info,
+            };
+            let err = resolve_with(&exe, &Sysroot::new("/"), &[], &src).unwrap_err();
+            assert!(
+                format!("{err:#}").contains(&format!(
+                    "/dev/zero is a device that yields more than {DEVICE_READ_CAP} bytes"
+                )),
+                "{err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_finite_device_and_a_directory_read_as_before() {
+        // /dev/null reads empty, as a plain read made it: a leaf, not an error.
+        assert_eq!(
+            read_bounded(Path::new("/dev/null"), 0).unwrap(),
+            Vec::<u8>::new()
+        );
+        assert_eq!(GoblinSource.read(Path::new("/dev/null")).unwrap(), None);
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(GoblinSource.read(tmp.path()).is_err());
+    }
+
+    #[test]
+    fn a_fifo_whose_writer_starts_late_is_read_whole() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let fifo = tmp.path().join("liblate.so");
+        mkfifo(&fifo);
+        // An ELF (this test binary), bigger than the pipe buffer and than any device cap here.
+        let exe = fs::read(std::env::current_exe().unwrap()).unwrap();
+        let want = parse_elf_info(&exe).unwrap();
+        let writer_fifo = fifo.clone();
+        // The writer opens only after the read has begun, and pauses mid-stream. If the read
+        // returned first, this thread waits forever in its open, and the test still fails.
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let mut w = fs::OpenOptions::new()
+                .write(true)
+                .open(&writer_fifo)
+                .unwrap();
+            let (head, tail) = exe.split_at(exe.len() / 2);
+            let _ = w.write_all(head);
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let _ = w.write_all(tail);
+        });
+        let got = returns(move || GoblinSource.read(&fifo).map_err(|e| e.to_string()));
+        assert_eq!(got, Ok(Some(want)));
+    }
+
+    #[test]
+    fn a_fifo_fed_then_closed_reads_byte_identical() {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let fifo = tmp.path().join("libfed.so");
+        mkfifo(&fifo);
+        let exe = fs::read(std::env::current_exe().unwrap()).unwrap();
+        // A reader that never reads, so the writer opens at once and is mid-write (the data is
+        // bigger than the pipe buffer) when the real read opens.
+        let _hold = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+            .open(&fifo)
+            .unwrap();
+        let mut w = fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+        let data = exe.clone();
+        std::thread::spawn(move || {
+            let _ = w.write_all(&data);
+        });
+        // The device cap does not apply to a FIFO.
+        let got = returns(move || read_bounded(&fifo, TEST_CAP).map_err(|e| e.to_string()));
+        let got = got.unwrap();
+        assert!(got == exe, "read {} of {} bytes", got.len(), exe.len());
+    }
+
+    #[test]
+    fn a_regular_file_is_read_whole() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Bigger than any one read, so stopping at a chunk boundary would show.
+        let big = tmp.path().join("big");
+        let data: Vec<u8> = (0..3 * 1024 * 1024 + 7u32)
+            .map(|i| (i % 251) as u8)
+            .collect();
+        fs::write(&big, &data).unwrap();
+        // The device cap does not apply to a regular file.
+        assert!(read_bounded(&big, 0).unwrap() == fs::read(&big).unwrap());
+        let empty = tmp.path().join("empty");
+        fs::write(&empty, b"").unwrap();
+        assert_eq!(read_bounded(&empty, 0).unwrap(), Vec::<u8>::new());
+
+        // A real ELF (this test binary) yields the facts a plain read yields.
+        let exe = std::env::current_exe().unwrap();
+        let plain = fs::read(&exe).unwrap();
+        assert!(read_bounded(&exe, 0).unwrap() == plain);
+        assert_eq!(
+            GoblinSource.read(&exe).unwrap(),
+            Some(parse_elf_info(&plain).unwrap())
+        );
+    }
+
+    #[test]
+    fn a_regular_file_too_big_to_hold_fails_as_a_plain_read_does() {
+        // Sparse, and bigger than any 64-bit address space maps, so the reserve always fails.
+        // tmpfs holds that length, while ext4 caps a file far below it, so skip without tmpfs.
+        let Ok(tmp) = tempfile::tempdir_in("/dev/shm") else {
+            return;
+        };
+        let huge = tmp.path().join("huge");
+        if fs::File::create(&huge).unwrap().set_len(1 << 62).is_err() {
+            return;
+        }
+        let err = read_bounded(&huge, 0).unwrap_err();
+        assert_eq!(
+            format!("{err:#}"),
+            format!("reading {}: out of memory", huge.display())
+        );
     }
 
     #[test]
