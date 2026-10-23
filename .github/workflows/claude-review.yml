@@ -121,7 +121,12 @@ jobs:
           # only source of a reply's `in_reply_to` id), and reply on an existing thread. Built
           # after the numeric check so they can name nothing but this repo and this PR.
           SUBMIT="gh api repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews --input review.json"
-          COMMENTS="gh api repos/${GITHUB_REPOSITORY}/pulls/${PR}/comments --paginate"
+          # The `--jq` projection keeps only what a reply needs: other reviewers' comment
+          # bodies stay out of context (the instructions ask for an independent review), and a
+          # long thread history no longer costs tens of thousands of tokens. The filter is part
+          # of the exact string, so the agent cannot swap in one of its own (jq's `env` reads
+          # GH_TOKEN).
+          COMMENTS="gh api repos/${GITHUB_REPOSITORY}/pulls/${PR}/comments --paginate --jq '.[] | {id, in_reply_to_id, path, line, user: .user.login}'"
           REPLY="gh api repos/${GITHUB_REPOSITORY}/pulls/${PR}/comments --input reply.json"
           # The ONLY read commands, exact too: an open `gh pr view:*` rule took any flag, and
           # three of them (-R, a URL positional, then --jq with jq's `env`) each leaked
