@@ -557,6 +557,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#an-elf-that-the-loader-cannot-load-named-by-the-binary-or-a-library" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An ELF that the loader cannot load, named by the binary or a library
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -881,6 +892,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#an-elf-that-the-loader-cannot-load-named-by-the-binary-or-a-library" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An ELF that the loader cannot load, named by the binary or a library
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1057,6 +1079,18 @@ it did not check that the file was an ELF. The name can point at any file on the
 <p>Now <code>pack</code> and <code>graph</code> refuse such a file and exit <code>1</code>. The loader cannot start a binary that
 needs it, so no working image depends on it. A data file that you name with <code>--include</code> still
 stages. A library deeper in the tree that names the same file then resolves to that staged copy.</p>
+<h3 id="an-elf-that-the-loader-cannot-load-named-by-the-binary-or-a-library">An ELF that the loader cannot load, named by the binary or a library<a class="headerlink" href="#an-elf-that-the-loader-cannot-load-named-by-the-binary-or-a-library" title="Permanent link">&para;</a></h3>
+<p>The same names can point at a host file that is an ELF but not a library, such as a core dump.
+Through 1.7.2, scratchsmith staged that file. A core dump holds the memory of a crashed
+process, which can include secrets.</p>
+<p>Now <code>pack</code> and <code>graph</code> refuse such a file and exit <code>1</code>. A library must be a shared object
+(<code>ET_DYN</code>). glibc refuses any other type with "cannot dynamically load executable", so no
+working image depends on one. A program interpreter must be <code>ET_DYN</code> or <code>ET_EXEC</code>, because the
+kernel loads both.</p>
+<p>This check reads the ELF type only. A PIE executable is <code>ET_DYN</code> too, so a name that points at
+one still stages it. A core dump, an object file (<code>ET_REL</code>), and an executable built without
+PIE do not. A file that you name with <code>--include</code> stages as before. If the binary itself also
+names that file, the refusal comes first.</p>
 <h2 id="tolerances-ending-in-20">Tolerances ending in 2.0<a class="headerlink" href="#tolerances-ending-in-20" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1071,6 +1105,12 @@ stages. A library deeper in the tree that names the same file then resolves to t
 <tr>
 <td>A library that starts like an ELF and cannot be parsed</td>
 <td>1.6.0</td>
+<td>2.0.0</td>
+<td>Replace the damaged file</td>
+</tr>
+<tr>
+<td>A program interpreter that starts like an ELF and cannot be parsed</td>
+<td>1.8.0</td>
 <td>2.0.0</td>
 <td>Replace the damaged file</td>
 </tr>
@@ -1094,7 +1134,7 @@ stages. A library deeper in the tree that names the same file then resolves to t
 </tr>
 </tbody>
 </table>
-<p>The first three warnings come from <code>pack</code> and from <code>graph</code>, because both resolve the same
+<p>The first four warnings come from <code>pack</code> and from <code>graph</code>, because both resolve the same
 dependency tree. The last one comes from <code>pack</code> only.</p>
 <h3 id="a-library-that-cannot-be-parsed">A library that cannot be parsed<a class="headerlink" href="#a-library-that-cannot-be-parsed" title="Permanent link">&para;</a></h3>
 <p>Scratchsmith reads each library that the binary needs, and then resolves the libraries that
