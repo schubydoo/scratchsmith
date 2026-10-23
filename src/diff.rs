@@ -7,6 +7,7 @@ use crate::report::{DiffFile, DiffReport};
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::Path;
 
 // One file's identity for comparison: its size and a content fingerprint (sha256 for a
@@ -42,18 +43,35 @@ fn scan(root: &Path) -> Result<BTreeMap<String, Entry>> {
                 },
             );
         } else if meta.is_file() {
-            let bytes = std::fs::read(entry.path())
+            let fingerprint = sha256_file(entry.path())
                 .with_context(|| format!("reading {}", entry.path().display()))?;
             map.insert(
                 rel,
                 Entry {
                     size: meta.len(),
-                    fingerprint: hex(Sha256::digest(&bytes)),
+                    fingerprint,
                 },
             );
         }
     }
     Ok(map)
+}
+
+// Hash a file without holding it in memory: a sparse file from an unpacked hostile layer can
+// claim far more bytes than there is RAM.
+fn sha256_file(path: &Path) -> std::io::Result<String> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => hasher.update(&buf[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(hex(hasher.finalize()))
 }
 
 /// Compare two staged rootfs directories, reporting the files added in `b`, removed from
@@ -150,5 +168,25 @@ mod tests {
         let report = build(&a, &b).unwrap();
         assert!(!report.has_changes());
         assert_eq!(report.size_before, report.size_after);
+    }
+
+    #[test]
+    fn a_sparse_file_hashes_like_its_full_content() {
+        use std::io::{Seek, SeekFrom, Write};
+        const SIZE: u64 = 64 << 20;
+        let tmp = tempfile::tempdir().unwrap();
+        // Mostly hole, as `unpack` writes a sparse layer entry: it is hashed, not loaded.
+        let mut f = fs::File::create(tmp.path().join("big")).unwrap();
+        f.write_all(b"head").unwrap();
+        f.seek(SeekFrom::Start(SIZE - 4)).unwrap();
+        f.write_all(b"tail").unwrap();
+        drop(f);
+        let mut full = vec![0u8; SIZE as usize];
+        full[..4].copy_from_slice(b"head");
+        full[SIZE as usize - 4..].copy_from_slice(b"tail");
+
+        let entry = &scan(tmp.path()).unwrap()["big"];
+        assert_eq!(entry.size, SIZE);
+        assert_eq!(entry.fingerprint, hex(Sha256::digest(&full)));
     }
 }
