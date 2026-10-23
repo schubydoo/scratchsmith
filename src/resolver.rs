@@ -46,6 +46,9 @@ pub struct ElfInfo {
     /// References `dlopen` or `dlmopen` — its runtime plugins are NOT in the dependency
     /// graph, so resolution can be incomplete (the user may need `--include`).
     pub uses_dlopen: bool,
+    /// ELF object type (`e_type`): `ET_DYN` for a shared object or a PIE, `ET_EXEC` for a
+    /// fixed-address executable, `ET_CORE` for a core dump.
+    pub e_type: u16,
 }
 
 impl ElfInfo {
@@ -110,6 +113,7 @@ pub fn parse_elf_info(bytes: &[u8]) -> Result<ElfInfo> {
         is_64: elf.is_64,
         machine: elf.header.e_machine,
         uses_dlopen: references_dlopen(&elf),
+        e_type: elf.header.e_type,
     })
 }
 
@@ -362,23 +366,46 @@ pub fn resolve_with(
     // The loader is named by PT_INTERP, not DT_NEEDED, so resolve it separately.
     // Keep the verbatim PT_INTERP path (where it must live) alongside the real file.
     if let Some(interp) = &root_info.interpreter {
-        let source = reroot(&sysroot.root, Path::new(interp));
-        if source.exists() {
+        let loader = reroot(&sysroot.root, Path::new(interp));
+        if loader.exists() {
             // PT_INTERP is a string out of the packed binary and can name any host file, which
             // would then ship in the image. Stage only a regular file that starts like an ELF.
             // `is_file` goes first, so a FIFO is never opened and cannot block the read.
-            if !source.is_file() || !has_elf_magic(&source) {
+            if !loader.is_file() || !has_elf_magic(&loader) {
                 bail!(
                     "the program interpreter (PT_INTERP) `{}` is not an ELF file: {}. Refusing \
                      it, because that path can name any host file. Rebuild the binary with a \
                      real loader path.",
                     escape_for_display(interp),
-                    printable(&canonical(&source))
+                    printable(&canonical(&loader))
                 );
+            }
+            // The kernel loads an ET_DYN or an ET_EXEC interpreter. An ELF of another type (a
+            // core dump holds a process's memory) is a host file the binary picked.
+            match source.read(&loader)? {
+                Some(info)
+                    if info.e_type != goblin::elf::header::ET_DYN
+                        && info.e_type != goblin::elf::header::ET_EXEC =>
+                {
+                    bail!(
+                        "the program interpreter (PT_INTERP) `{}` is {}, which the kernel cannot \
+                         load as an interpreter: {}. Refusing it, because that path can name \
+                         any host file. Rebuild the binary with a real loader path.",
+                        escape_for_display(interp),
+                        elf_type_name(info.e_type),
+                        printable(&canonical(&loader))
+                    );
+                }
+                Some(_) => {}
+                None => resolution.warnings.push(format!(
+                    "the program interpreter (PT_INTERP) {} starts like an ELF and cannot be \
+                     parsed (truncated or corrupt), so the image cannot start.",
+                    printable(&canonical(&loader))
+                )),
             }
             resolution.interpreter = Some(ResolvedInterp {
                 image_path: PathBuf::from(interp),
-                source: canonical(&source),
+                source: canonical(&loader),
             });
         } else {
             resolution.missing.push(interp.clone());
@@ -525,6 +552,21 @@ pub fn resolve_with(
             // error named a copy. `check_lib_policy` runs after `stager::stage`, so the
             // --require/--deny gate was never reached rather than blind.
             match source.read(&real)? {
+                // A library the ELF named must be a shared object: glibc (2.17 to 2.41 at
+                // least) fails any other type with "cannot dynamically load executable". So it
+                // is a host file the name happened to reach, a core dump with a process's
+                // memory for one, and it is not staged. --include stays the operator's.
+                Some(child) if i < declared && child.e_type != goblin::elf::header::ET_DYN => {
+                    bail!(
+                        "{} needs `{}`, which resolved to {}, and that file is {}, not a shared \
+                         object. Refusing it, because that name can point at any host file. \
+                         Rebuild the binary so it names a real library.",
+                        printable(&obj_path),
+                        escape_for_display(soname),
+                        printable(&real),
+                        elf_type_name(child.e_type)
+                    )
+                }
                 Some(child) => {
                     let declared = child.needed.len();
                     queue.push_back((real, child, child_rpaths.clone(), declared));
@@ -656,6 +698,17 @@ pub(crate) fn escape_if_line_breaking(text: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+// A readable name for an ELF `e_type`, for the refusal messages above.
+fn elf_type_name(e_type: u16) -> String {
+    use goblin::elf::header::{ET_CORE, ET_EXEC, ET_REL};
+    match e_type {
+        ET_EXEC => "an executable (ET_EXEC)".into(),
+        ET_CORE => "a core dump (ET_CORE)".into(),
+        ET_REL => "an object file (ET_REL)".into(),
+        other => format!("an ELF of type {other}"),
+    }
+}
+
 // True when the file opens and begins with the ELF magic. Any IO failure reads as "no",
 // which loses the corrupt-ELF warning and fails closed where a missing magic is an error. A
 // 2.0 rejection of a file that HAS the magic must not gate on this: it would fail open.
@@ -712,6 +765,7 @@ mod tests {
             is_64: true,
             machine: goblin::elf::header::EM_X86_64,
             uses_dlopen: false,
+            e_type: goblin::elf::header::ET_DYN,
         }
     }
 
@@ -745,6 +799,7 @@ mod tests {
             is_64: true,
             machine: goblin::elf::header::EM_X86_64,
             uses_dlopen: false,
+            e_type: goblin::elf::header::ET_DYN,
         };
         assert_eq!(elf.rpaths, vec!["/opt/rpath".to_string()]);
         assert_eq!(elf.runpaths, vec!["/opt/runpath".to_string()]);
@@ -859,6 +914,7 @@ mod tests {
             is_64: true,
             machine: goblin::elf::header::EM_X86_64,
             uses_dlopen: false,
+            e_type: goblin::elf::header::ET_DYN,
         }
     }
 
@@ -909,6 +965,7 @@ mod tests {
         );
         infos.insert(canonical(&mid), elf(&["libleaf.so"], &[], &[], None));
         infos.insert(canonical(&leaf), elf(&[], &[], &[], None));
+        infos.insert(canonical(&loader), elf(&[], &[], &[], None));
         (exe, mid, leaf, infos)
     }
 
@@ -1101,6 +1158,96 @@ mod tests {
     }
 
     #[test]
+    fn a_needed_elf_that_is_not_a_shared_object_fails_but_an_include_stays() {
+        use goblin::elf::header::{ET_CORE, ET_EXEC};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (exe, mid, _leaf, base) = chain_fixture(root);
+        for (e_type, what) in [
+            (ET_CORE, "a core dump (ET_CORE)"),
+            (ET_EXEC, "an executable (ET_EXEC)"),
+        ] {
+            // libmid parses as an ELF, but not as a shared object: the binary's DT_NEEDED
+            // reached a host file such as a core dump.
+            let mut infos = base.clone();
+            infos.get_mut(&canonical(&mid)).unwrap().e_type = e_type;
+            let err = resolve_with(
+                &exe,
+                &Sysroot::new(root),
+                &[],
+                &MapSource {
+                    infos: infos.clone(),
+                },
+            )
+            .expect_err("a non-shared-object library is refused");
+            let msg = format!("{err:#}");
+            assert!(msg.contains(what) && msg.contains("not a shared"), "{msg}");
+
+            // The same file named with --include is the operator's choice and stages.
+            let mut infos = base.clone();
+            infos.get_mut(&canonical(&exe)).unwrap().needed.clear();
+            infos.get_mut(&canonical(&mid)).unwrap().e_type = e_type;
+            let include = mid.display().to_string();
+            let res = resolve_with(
+                &exe,
+                &Sysroot::new(root),
+                std::slice::from_ref(&include),
+                &MapSource { infos },
+            )
+            .expect("an --include of any ELF stages");
+            assert!(has(&res, &include), "{:?}", res.libs);
+        }
+    }
+
+    #[test]
+    fn a_pt_interp_the_kernel_cannot_load_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (exe, _mid, _leaf, mut infos) = chain_fixture(root);
+        let loader = canonical(&root.join("lib64/ld-linux-x86-64.so.2"));
+        let mut core = elf(&[], &[], &[], None);
+        core.e_type = goblin::elf::header::ET_CORE;
+        infos.insert(loader.clone(), core);
+        let err = resolve_with(
+            &exe,
+            &Sysroot::new(root),
+            &[],
+            &MapSource {
+                infos: infos.clone(),
+            },
+        )
+        .expect_err("a core dump as PT_INTERP is refused");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("PT_INTERP") && msg.contains("a core dump (ET_CORE)"),
+            "{msg}"
+        );
+
+        // The kernel loads an ET_EXEC interpreter, so a static non-PIE loader still stages.
+        let mut exec = elf(&[], &[], &[], None);
+        exec.e_type = goblin::elf::header::ET_EXEC;
+        infos.insert(loader.clone(), exec);
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert_eq!(res.interpreter.map(|i| i.source), Some(loader));
+    }
+
+    #[test]
+    fn a_pt_interp_that_does_not_parse_warns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (exe, _mid, _leaf, mut infos) = chain_fixture(root);
+        infos.remove(&canonical(&root.join("lib64/ld-linux-x86-64.so.2")));
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert!(
+            res.warnings
+                .iter()
+                .any(|w| w.contains("PT_INTERP") && w.contains("cannot be parsed")),
+            "{:?}",
+            res.warnings
+        );
+    }
+
+    #[test]
     fn an_include_of_a_data_file_stays_a_quiet_leaf() {
         // --include is the operator's own choice, and it is how a non-ELF plugin asset ships.
         let tmp = tempfile::tempdir().unwrap();
@@ -1203,6 +1350,7 @@ mod tests {
                 elf(&["../lib/libfoo.so"], &[], &[], Some(interp)),
             ),
             (canonical(&lib), elf(&[], &[], &[], None)),
+            (canonical(&loader), elf(&[], &[], &[], None)),
         ]);
         let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
         let resolved = res
