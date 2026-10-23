@@ -77,28 +77,44 @@ pub fn run(archive: &Path, dest: &Path) -> Result<UnpackReport> {
 fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json::Value)> {
     let file =
         std::fs::File::open(archive).with_context(|| format!("opening {}", archive.display()))?;
+    // The entries read can never hold more bytes than the archive file itself. A pipe reports
+    // no length, so it gets no budget; the sparse refusal below still bounds it.
+    let meta = file
+        .metadata()
+        .with_context(|| format!("reading {}", archive.display()))?;
+    let mut budget = if meta.is_file() { meta.len() } else { u64::MAX };
     let mut ar = tar::Archive::new(file);
     let mut blobs = HashMap::new();
     let mut index_bytes = None;
     for entry in ar.entries().context("reading OCI archive")? {
         let mut e = entry.map_err(escape_tar_err)?;
         let path = e.path()?.to_string_lossy().into_owned();
-        let mut buf = Vec::new();
-        e.read_to_end(&mut buf)?;
-        if path == "index.json" {
-            index_bytes = Some(buf);
-        } else if let Some(digest) = path.strip_prefix("blobs/sha256/") {
-            // The `blobs/` and `blobs/sha256/` directory entries carry a trailing slash and
-            // an empty body (a skopeo/buildah export tars the layout directory), so only
-            // digest-verify real blob files — not the directory entry itself.
-            if digest.is_empty() || !e.header().entry_type().is_file() {
-                continue;
-            }
+        // The `blobs/` and `blobs/sha256/` directory entries carry a trailing slash and
+        // an empty body (a skopeo/buildah export tars the layout directory), so only
+        // digest-verify real blob files — not the directory entry itself.
+        let digest = path
+            .strip_prefix("blobs/sha256/")
+            .filter(|d| !d.is_empty() && e.header().entry_type().is_file());
+        if digest.is_none() && path != "index.json" {
+            continue; // unused, so never read
+        }
+        // tar fills a GNU sparse entry's holes with zeros on read, so a few header bytes can
+        // claim any size. No OCI layout writer emits one.
+        if e.header().entry_type().is_gnu_sparse() {
+            bail!(
+                "refusing GNU sparse entry {} in the OCI archive",
+                crate::resolver::escape_for_display(&path)
+            );
+        }
+        let buf = read_bounded(&mut e, &mut budget, &path)?;
+        if let Some(digest) = digest {
             let actual = hex(Sha256::digest(&buf));
             if actual != digest {
                 bail!("blob sha256:{} does not match its content (got sha256:{actual}) — tampered archive", shown(digest, SHOWN_MAX));
             }
             blobs.insert(digest.to_string(), buf);
+        } else {
+            index_bytes = Some(buf);
         }
     }
     let index = serde_json::from_slice(
@@ -106,6 +122,22 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
     )
     .context("parsing index.json")?;
     Ok((blobs, index))
+}
+
+// Read one archive entry, charging it to `budget` (what the archive can still hold). Bytes
+// past that were never stored in the file, only synthesized by the reader.
+fn read_bounded(entry: impl Read, budget: &mut u64, name: &str) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    entry.take(budget.saturating_add(1)).read_to_end(&mut buf)?;
+    let len = buf.len() as u64;
+    if len > *budget {
+        bail!(
+            "OCI archive entry {} holds more bytes than the archive itself; refusing",
+            crate::resolver::escape_for_display(name)
+        );
+    }
+    *budget -= len;
+    Ok(buf)
 }
 
 // Apply one layer's tar into `dest`: first honor its whiteouts (deletions of lower layers),
@@ -134,6 +166,10 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path) -> Result<usize> {
     let mut count = 0usize;
     let mut ar = tar::Archive::new(tar_bytes);
     ar.set_preserve_permissions(true);
+    // Never apply setuid/setgid from the archive: extracted files belong to whoever runs
+    // unpack, so a kept bit plants a setuid binary owned by that user (root, run as root).
+    // The mask is applied after preserve, so the sticky bit and 0o777 stay as authored.
+    ar.set_mask(0o6000);
     ar.set_overwrite(true);
     for entry in ar.entries()? {
         let mut e = entry.map_err(escape_tar_err)?;
@@ -312,6 +348,59 @@ mod tests {
         ar.into_inner().unwrap()
     }
 
+    // Build a small uncompressed tar of empty (path, entry type, mode) entries.
+    fn tar_with_modes(entries: &[(&str, tar::EntryType, u32)]) -> Vec<u8> {
+        let mut ar = tar::Builder::new(Vec::new());
+        for (name, kind, mode) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(*kind);
+            header.set_size(0);
+            header.set_mode(*mode);
+            header.set_cksum();
+            ar.append_data(&mut header, name, &b""[..]).unwrap();
+        }
+        ar.into_inner().unwrap()
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777
+    }
+
+    #[test]
+    fn apply_layer_strips_setuid_and_setgid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let layer = tar_with_modes(&[
+            ("bin/suid", tar::EntryType::Regular, 0o4755),
+            ("bin/sgid", tar::EntryType::Regular, 0o2755),
+            ("shared/", tar::EntryType::Directory, 0o6755),
+        ]);
+        apply_layer(&layer, &dest).unwrap();
+        assert_eq!(mode_of(&dest.join("bin/suid")), 0o755);
+        assert_eq!(mode_of(&dest.join("bin/sgid")), 0o755);
+        assert_eq!(mode_of(&dest.join("shared")), 0o755);
+    }
+
+    #[test]
+    fn apply_layer_keeps_sticky_and_plain_modes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let layer = tar_with_modes(&[
+            ("tmp/", tar::EntryType::Directory, 0o1777),
+            ("etc/conf", tar::EntryType::Regular, 0o644),
+        ]);
+        apply_layer(&layer, &dest).unwrap();
+        assert_eq!(mode_of(&dest.join("tmp")), 0o1777);
+        assert_eq!(mode_of(&dest.join("etc/conf")), 0o644);
+    }
+
     #[test]
     fn apply_layer_extracts_files() {
         let tmp = tempfile::tempdir().unwrap();
@@ -421,6 +510,103 @@ mod tests {
         let (blobs, _index) =
             read_archive(&path).expect("a directory entry must not fail the archive");
         assert!(blobs.contains_key(&digest), "the real blob is still read");
+    }
+
+    // A GNU sparse entry with no stored data: one hole of `real_size` bytes, which tar
+    // expands into zeros on read. `append_data` cannot build one, so set the fields by hand.
+    fn append_sparse(ar: &mut tar::Builder<Vec<u8>>, name: &str, real_size: u64) {
+        let mut h = tar::Header::new_gnu();
+        h.set_entry_type(tar::EntryType::GNUSparse);
+        h.set_path(name).unwrap();
+        h.set_size(0);
+        h.set_mode(0o644);
+        let gnu = h.as_gnu_mut().unwrap();
+        gnu.set_real_size(real_size);
+        gnu.sparse[0].set_offset(real_size);
+        gnu.sparse[0].set_length(0);
+        h.set_cksum();
+        ar.append(&h, &b""[..]).unwrap();
+    }
+
+    #[test]
+    fn read_archive_refuses_a_sparse_index_json_without_reading_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("sparse.tar");
+        let mut ar = tar::Builder::new(Vec::new());
+        append_sparse(&mut ar, "index.json", 64 << 30);
+        std::fs::write(&path, ar.into_inner().unwrap()).unwrap();
+        let err = read_archive(&path).unwrap_err();
+        assert!(err.to_string().contains("GNU sparse entry"), "{err}");
+    }
+
+    #[test]
+    fn read_archive_skips_unused_sparse_entries_unread() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("sparse.tar");
+        let body = b"layerbytes";
+        let digest = hex(Sha256::digest(body));
+        let sparse_blob = "0".repeat(64);
+        let mut ar = tar::Builder::new(Vec::new());
+        append_sparse(&mut ar, "oci-layout", 64 << 30);
+        // Not a regular file, so it was never taken as a blob; reading it expands 64 GiB.
+        append_sparse(&mut ar, &format!("blobs/sha256/{sparse_blob}"), 64 << 30);
+        let mut rest = tar_of(&[
+            (&format!("blobs/sha256/{digest}"), &body[..]),
+            ("index.json", b"{}"),
+        ]);
+        ar.get_mut().append(&mut rest);
+        std::fs::write(&path, ar.into_inner().unwrap()).unwrap();
+
+        let (blobs, _index) = read_archive(&path).expect("unused entries are skipped");
+        assert!(blobs.contains_key(&digest));
+        assert!(!blobs.contains_key(&sparse_blob));
+    }
+
+    #[test]
+    fn an_entry_reading_past_the_archive_size_fails() {
+        let mut budget = 16;
+        let buf = read_bounded(&b"0123456789abcdef"[..], &mut budget, "index.json").unwrap();
+        assert_eq!(
+            (buf.len(), budget),
+            (16, 0),
+            "exactly the archive size is fine"
+        );
+
+        let mut budget = 16;
+        let err = read_bounded(std::io::repeat(0), &mut budget, "index.json\u{1b}[2J").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("more bytes than the archive itself"), "{msg}");
+        assert!(
+            !msg.contains('\u{1b}'),
+            "the entry name must be escaped: {msg}"
+        );
+    }
+
+    #[test]
+    fn an_archive_from_write_oci_archive_still_unpacks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::fs::write(root.join("usr/lib/libx.so.1.2"), b"x").unwrap();
+        std::os::unix::fs::symlink("libx.so.1.2", root.join("usr/lib/libx.so.1")).unwrap();
+        let archive = tmp.path().join("img.tar");
+        let staged = crate::stager::StagedTree {
+            root,
+            entrypoint: "/app".into(),
+        };
+        crate::image::write_oci_archive(&staged, "t:1", &Default::default(), &archive).unwrap();
+
+        let dest = tmp.path().join("out");
+        let report = run(&archive, &dest).unwrap();
+        assert_eq!((report.layers, report.files), (1, 4));
+        assert_eq!(
+            std::fs::read(dest.join("usr/lib/libx.so.1.2")).unwrap(),
+            b"x"
+        );
+        assert_eq!(
+            std::fs::read_link(dest.join("usr/lib/libx.so.1")).unwrap(),
+            Path::new("libx.so.1.2")
+        );
     }
 
     // Archive text in an error still shows, escaped, but never as a raw line break or escape.
