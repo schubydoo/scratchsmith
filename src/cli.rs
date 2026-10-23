@@ -569,7 +569,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             for path in &report.stripped_setid {
                 eprintln!(
                     "warning: cleared the setuid/setgid bit on {}",
-                    crate::resolver::escape_for_display(path)
+                    crate::unpack::shown_archive_text(path)
                 );
             }
             match format {

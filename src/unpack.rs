@@ -148,13 +148,25 @@ fn read_bounded(entry: impl Read, budget: &mut u64, name: &str) -> Result<Vec<u8
 // Apply one layer's tar into `dest`: first honor its whiteouts (deletions of lower layers),
 // then extract its real files. Both paths refuse anything that escapes `dest`.
 // An entry path as the image path it names: `./usr/bin/x` and `usr/bin/x` are both `/usr/bin/x`.
+// `..` pops, as the extractor resolves it, so `usr/../etc/su` is `/etc/su`.
 fn image_path(entry: &Path) -> PathBuf {
     let mut out = PathBuf::from("/");
-    out.extend(entry.components().filter_map(|c| match c {
-        std::path::Component::Normal(n) => Some(n),
-        _ => None,
-    }));
+    for c in entry.components() {
+        match c {
+            std::path::Component::Normal(n) => out.push(n),
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            _ => {}
+        }
+    }
     out
+}
+
+/// Archive text for a line `unpack`'s caller prints: escaped, bounded and quoted, as this
+/// module's own errors show it.
+pub(crate) fn shown_archive_text(text: &str) -> String {
+    shown(text, SHOWN_MAX)
 }
 
 // Drop everything under `path` from the setuid/setgid record, and `path` itself unless
@@ -191,18 +203,12 @@ fn apply_layer(
             continue;
         };
         if let Some(stripped) = name.strip_prefix(".wh.") {
-            let parent = image_path(path.parent().unwrap_or(Path::new("")));
-            if stripped == ".wh..opq" {
-                // An opaque marker clears the directory's contents, not the directory.
-                forget_under(setid, &parent, true);
-            } else {
-                forget_under(setid, &parent.join(stripped), false);
-            }
             apply_whiteout(
                 &dest_canon,
                 dest,
                 path.parent().unwrap_or(Path::new("")),
                 stripped,
+                setid,
             )?;
         }
     }
@@ -250,7 +256,15 @@ fn apply_layer(
 // opaque marker (`.wh..wh..opq`) arrives as `.wh..opq`. Containment is a filesystem check,
 // not a string one: the parent directory is resolved (following symlinks) and must stay
 // inside `dest`, so a symlink planted by a lower layer cannot redirect a deletion outside.
-fn apply_whiteout(dest_canon: &Path, dest: &Path, parent: &Path, stripped: &str) -> Result<()> {
+// The setuid/setgid record is updated only where something is deleted, after every early
+// return, so a marker the extractor refuses (`.wh.` alone names the root) cannot erase it.
+fn apply_whiteout(
+    dest_canon: &Path,
+    dest: &Path,
+    parent: &Path,
+    stripped: &str,
+    setid: &mut std::collections::BTreeSet<PathBuf>,
+) -> Result<()> {
     // `.wh.` alone, or a marker naming `.`/`..`/a path, is not a single-file deletion.
     if stripped.is_empty() || stripped == "." || stripped == ".." || stripped.contains('/') {
         return Ok(());
@@ -258,14 +272,18 @@ fn apply_whiteout(dest_canon: &Path, dest: &Path, parent: &Path, stripped: &str)
     let Some(dir) = resolved_dir_within(dest_canon, dest, parent) else {
         return Ok(()); // absent, or resolves outside dest — nothing safe to delete
     };
+    let image = image_path(parent);
     if stripped == ".wh..opq" {
         if dir.is_dir() {
             for entry in std::fs::read_dir(&dir)? {
                 remove_any(&entry?.path())?;
             }
+            // An opaque marker clears the directory's contents, not the directory.
+            forget_under(setid, &image, true);
         }
     } else {
         remove_any(&dir.join(stripped))?;
+        forget_under(setid, &image.join(stripped), false);
     }
     Ok(())
 }
@@ -497,6 +515,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(names(&setid), ["/opt/a-b/sgid", "/var/mail"]);
+    }
+
+    #[test]
+    fn a_whiteout_that_deletes_nothing_keeps_the_setid_record() {
+        use std::collections::BTreeSet;
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let mut setid = BTreeSet::new();
+        apply_layer(
+            &tar_with_modes(&[
+                ("etc/su", tar::EntryType::Regular, 0o4755),
+                ("bin/ping", tar::EntryType::Regular, 0o4755),
+            ]),
+            &dest,
+            &mut setid,
+        )
+        .unwrap();
+        // `..` is folded the way the extractor resolves it (tar's builder refuses to write one).
+        assert_eq!(image_path(Path::new("usr/../etc/su")), Path::new("/etc/su"));
+        assert_eq!(image_path(Path::new("./a/../../b")), Path::new("/b"));
+
+        // A bare marker names the root, and an opaque marker on a missing directory has
+        // nothing to clear: the extractor deletes nothing, so the record keeps both paths.
+        apply_layer(
+            &tar_with_modes(&[
+                (".wh.", tar::EntryType::Regular, 0o644),
+                ("gone/.wh..wh..opq", tar::EntryType::Regular, 0o644),
+            ]),
+            &dest,
+            &mut setid,
+        )
+        .unwrap();
+        let names: Vec<_> = setid.iter().map(|p| p.display().to_string()).collect();
+        assert_eq!(names, ["/bin/ping", "/etc/su"]);
     }
 
     #[test]
