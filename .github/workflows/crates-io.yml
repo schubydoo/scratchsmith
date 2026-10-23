@@ -10,8 +10,9 @@ name: Publish to crates.io
 # short-lived token from a GitHub OIDC identity via rust-lang/crates-io-auth-action, matching the
 # repo's keyless posture (cosign, App client-id). ONE-TIME BOOTSTRAP: crates.io only allows adding
 # a Trusted Publisher AFTER a crate's first publish, so the initial `scratchsmith` publish is done
-# manually with a throwaway token; then the Trusted Publisher is linked (repo + this workflow file)
-# in the crates.io UI and every release after flows through here with no stored secret.
+# manually with a throwaway token; then the Trusted Publisher is linked (repo + this workflow file
+# + the `crates-io` environment) in the crates.io UI and every release after flows through here
+# with no stored secret.
 #
 # Separate from knope-release.yml (builds+signs the tarballs, pre-tag) and release.yml (the GHCR
 # image, post-tag) — crates.io is a third, independent distribution channel keyed off the same tag.
@@ -35,14 +36,16 @@ concurrency:
 jobs:
   publish:
     name: cargo publish
-    # A branch dispatch has no released version to publish; the guard fails it loud rather than
-    # silently green (this project's fail-loud invariant).
+    # A branch dispatch has no released version to publish. The environment's `v*` tag policy
+    # refuses it first; the guard step below still fails it loud if that policy is ever relaxed
+    # (this project's fail-loud invariant).
     if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # The `crates-io` environment admits only `v*` tags and waits for the maintainer's approval,
-    # so each publish needs one click after the tag. The crates.io Trusted Publisher names this
-    # environment too, so an OIDC token minted outside it is refused.
+    # so each publish needs one click after the tag. The crates.io Trusted Publisher must name
+    # this environment too (see the bootstrap note above), so that an OIDC token minted outside
+    # it is refused.
     environment: crates-io
     permissions:
       contents: read # checkout
