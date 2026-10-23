@@ -188,9 +188,7 @@ fuzz_target!(|scn: Scenario| {
     //
     // `is_control` is the Cc category only. The line and paragraph separators and the
     // bidirectional overrides are not in it, and each one also breaks or reverses a line.
-    let breaks_a_line = |c: char| {
-        c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}')
-    };
+    use scratchsmith::resolver::breaks_a_line;
     for warning in &resolution.warnings {
         assert!(
             !warning.chars().any(breaks_a_line),

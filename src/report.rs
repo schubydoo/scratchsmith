@@ -565,16 +565,7 @@ mod tests {
         assert!(report.to_text().contains("no changes"));
     }
 
-    // A character that breaks or reorders a line: the Cc controls, plus the line and
-    // paragraph separators and the bidi embeddings, overrides and isolates, which
-    // `is_control` leaves out.
-    fn breaks_a_line(c: char) -> bool {
-        c.is_control()
-            || matches!(
-                c,
-                '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
-            )
-    }
+    use crate::resolver::breaks_a_line;
 
     #[test]
     fn diff_report_text_escapes_crafted_file_names() {

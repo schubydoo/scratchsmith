@@ -12,13 +12,7 @@ fuzz_target!(|data: &[u8]| {
         // may not carry a character that breaks or reorders a line: a Cc control, a line or
         // paragraph separator, a bidi embedding, override or isolate. The set the escape uses.
         if let Err(err) = scratchsmith::resolver::ensure_glibc(&info) {
-            let breaks_a_line = |c: char| {
-                c.is_control()
-                    || matches!(
-                        c,
-                        '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
-                    )
-            };
+            use scratchsmith::resolver::breaks_a_line;
             let text = format!("{err:#}");
             assert!(
                 !text.chars().any(breaks_a_line),

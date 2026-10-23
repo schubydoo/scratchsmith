@@ -530,10 +530,21 @@ fn printable(path: &Path) -> String {
 }
 
 /// A string from the packed binary, an image's file names, or a registry, made safe to print:
-/// control characters are escaped, so it cannot break or forge a line. The one escape policy
-/// for untrusted text this crate prints.
+/// control characters are escaped, so it cannot break or forge a line. Warnings and errors
+/// escape this way on every call; a report line uses `escape_if_line_breaking`, which leaves
+/// an honest name as it is.
 pub fn escape_for_display(text: &str) -> String {
     text.escape_debug().to_string()
+}
+
+/// True for a character that breaks or reorders a printed line: the set
+/// `escape_if_line_breaking` escapes. Public so the tests and fuzz targets share one copy.
+pub fn breaks_a_line(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        )
 }
 
 /// An untrusted name for a report line: as it is, unless it holds a character that breaks
@@ -545,13 +556,6 @@ pub fn escape_for_display(text: &str) -> String {
 /// the line. LRM/RLM are left out: each acts as one invisible strong letter, no more than
 /// a Latin or Hebrew letter an honest name prints raw.
 pub(crate) fn escape_if_line_breaking(text: &str) -> std::borrow::Cow<'_, str> {
-    let breaks_a_line = |c: char| {
-        c.is_control()
-            || matches!(
-                c,
-                '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
-            )
-    };
     if text.chars().any(breaks_a_line) {
         escape_for_display(text).into()
     } else {
@@ -685,13 +689,6 @@ mod tests {
             &[],
         );
         let err = format!("{:#}", ensure_glibc(&forged).unwrap_err());
-        let breaks_a_line = |c: char| {
-            c.is_control()
-                || matches!(
-                    c,
-                    '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
-                )
-        };
         assert!(!err.chars().any(breaks_a_line), "{err:?}");
         assert!(
             err.ends_with(
