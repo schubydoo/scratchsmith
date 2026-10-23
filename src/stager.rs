@@ -732,19 +732,28 @@ pub fn strip_and_measure(
     // The ELF files we placed: the binary, the loader, and every resolved library. UPX
     // compresses the executable ONLY — compressing the loader or a shared library would
     // break startup — so it is applied to the binary (the first target) alone.
+    // Each target is (file to measure, path the report shows).
+    let shown = |p: PathBuf| {
+        let label = display_image_path(dest, &p);
+        (p, label)
+    };
     let binary = under(dest, &tree.entrypoint);
-    let mut targets: Vec<PathBuf> = vec![binary.clone()];
+    let mut targets: Vec<(PathBuf, String)> = vec![shown(binary.clone())];
+    // Measure the loader where stage_files put it (strip rewrites in place, so never the
+    // raw join), but keep reporting it by its PT_INTERP string, as `interpreter` does.
     if let Some(interp) = &resolution.interpreter {
-        targets.push(under(dest, &interp.image_path));
+        let staged = under(dest, &interp_target(dest, &interp.image_path)?);
+        let label = display_image_path(dest, &under(dest, &interp.image_path));
+        targets.push((staged, label));
     }
-    targets.extend(resolution.libs.iter().map(|l| under(dest, &l.path)));
+    targets.extend(resolution.libs.iter().map(|l| shown(under(dest, &l.path))));
 
     let mut report = SizeReport {
         stripped: strip,
         upx,
         ..Default::default()
     };
-    for path in targets {
+    for (path, label) in targets {
         let before = std::fs::metadata(&path)?.len();
         if strip {
             run_strip(&path)?;
@@ -757,7 +766,7 @@ pub fn strip_and_measure(
         report.total_before += before;
         report.total_after += after;
         report.entries.push(SizeEntry {
-            path: display_image_path(dest, &path),
+            path: label,
             before,
             after,
         });
@@ -853,9 +862,10 @@ fn stage_files(
         }
     }
 
-    // The kernel execs PT_INTERP verbatim, so the loader must live at that exact path.
+    // The kernel execs PT_INTERP verbatim, so the loader must live where that path resolves.
     if let Some(interp) = &resolution.interpreter {
-        copy_into(&interp.source, dest, &interp.image_path)?;
+        let target = interp_target(dest, &interp.image_path)?;
+        copy_into(&interp.source, dest, &target)?;
     }
 
     // Each library: place the real file, then recreate the soname symlink the loader
@@ -871,6 +881,95 @@ fn stage_files(
         root: dest.to_path_buf(),
         entrypoint: binary_real,
     })
+}
+
+// Where the loader goes: PT_INTERP resolved inside the image (see `image_dir`). Joining the raw
+// string under `dest` left the walk to the HOST, so `/../../tmp/x` landed outside the staging
+// root. The directories on the way are created, as that join's `create_dir_all` did, because
+// the image still carries the unchanged string: `/lib/../lib64/ld.so` needs `/lib` too.
+fn interp_target(dest: &Path, pt_interp: &Path) -> Result<PathBuf> {
+    use std::path::Component;
+    let shown = || crate::resolver::escape_for_display(&pt_interp.to_string_lossy());
+    let Some(Component::Normal(name)) = pt_interp.components().next_back() else {
+        bail!("PT_INTERP {} does not name a file", shown());
+    };
+    let dir = pt_interp.parent().unwrap_or(Path::new("/"));
+    let dir = image_dir(dest, dir, true).with_context(|| format!("PT_INTERP {}", shown()))?;
+    Ok(dir.join(name))
+}
+
+// A directory path resolved the way the kernel resolves it once the tree is the root: `.`
+// drops, `..` pops and stays at the root, and each staged link on the way is followed by the
+// value it carries, read inside the image as `link_target_in_image` reads one (its walk,
+// `lexical_image_path`, is the twin of this one for a path with no link on it). The HOST must
+// never follow a staged link: an absolute value, or `..` out of a link, would then name a host
+// path. The result holds no link, so a host call under it stays inside `dest`. `create` makes
+// each missing directory; without it, `..` out of a missing one fails, as the host's walk did.
+fn image_dir(dest: &Path, dir: &Path, create: bool) -> Result<PathBuf> {
+    use std::path::Component;
+    // The kernel's own limit before ELOOP.
+    const MAX_LINKS: usize = 40;
+    enum Step {
+        Root,
+        Up,
+        Name(std::ffi::OsString),
+    }
+    // Pending steps, last one first, so a link's value can be pushed in front of the rest.
+    let push = |todo: &mut Vec<Step>, p: &Path| {
+        todo.extend(p.components().rev().filter_map(|c| match c {
+            Component::Prefix(_) | Component::RootDir => Some(Step::Root),
+            Component::CurDir => None,
+            Component::ParentDir => Some(Step::Up),
+            Component::Normal(n) => Some(Step::Name(n.to_owned())),
+        }))
+    };
+    let shown = |p: &Path| crate::resolver::escape_for_display(&p.to_string_lossy());
+    let mut todo = Vec::new();
+    push(&mut todo, dir);
+    let mut at = PathBuf::from("/");
+    let (mut links, mut missing) = (0, false);
+    while let Some(step) = todo.pop() {
+        match step {
+            Step::Root => (at, missing) = (PathBuf::from("/"), false),
+            Step::Up if missing => bail!("{} is not a directory in the image", shown(&at)),
+            Step::Up => {
+                at.pop();
+            }
+            Step::Name(name) => {
+                let next = at.join(name);
+                let host = under(dest, &next);
+                if missing {
+                    at = next;
+                    continue;
+                }
+                match host.symlink_metadata() {
+                    Ok(m) if m.file_type().is_symlink() => {
+                        links += 1;
+                        if links > MAX_LINKS {
+                            bail!("{}: too many levels of links", shown(&next));
+                        }
+                        let value = std::fs::read_link(&host)
+                            .with_context(|| format!("reading the link {}", host.display()))?;
+                        // A relative value resolves against `at`, the link's own directory.
+                        push(&mut todo, &value);
+                    }
+                    Ok(m) if m.is_dir() => at = next,
+                    Ok(_) => bail!("{} is not a directory in the image", shown(&next)),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        if create {
+                            std::fs::create_dir(&host)
+                                .with_context(|| format!("creating {}", host.display()))?;
+                        } else {
+                            missing = true;
+                        }
+                        at = next;
+                    }
+                    Err(e) => return Err(e).with_context(|| format!("reading {}", host.display())),
+                }
+            }
+        }
+    }
+    Ok(at)
 }
 
 // Regenerate /etc/ld.so.cache inside the staged root. A fresh root has no
@@ -934,14 +1033,35 @@ fn copy_into(src: &Path, root: &Path, abs_target: &Path) -> Result<()> {
 // relative link, so it stays valid once the tree becomes the image root).
 fn symlink_soname(root: &Path, real_abs: &Path, soname: &str) -> Result<()> {
     let dir = real_abs.parent().context("library has no parent dir")?;
-    let link = under(root, &dir.join(soname));
+    let link = under(root, &soname_link_path(root, &dir.join(soname), soname)?);
     let target = real_abs.file_name().context("library has no file name")?;
     if link.symlink_metadata().is_ok() {
         return Ok(()); // idempotent
     }
-    std::os::unix::fs::symlink(target, &link)
-        .with_context(|| format!("linking {} -> {:?}", link.display(), target))?;
+    std::os::unix::fs::symlink(target, &link).with_context(|| {
+        format!(
+            "soname {}: linking {} -> {:?}",
+            crate::resolver::escape_for_display(soname),
+            link.display(),
+            target
+        )
+    })?;
     Ok(())
+}
+
+// Where a soname link goes: `dir.join(soname)` resolved inside the image (see `image_dir`). A
+// soname is a raw DT_NEEDED string, and joined raw under `root` its `..` was walked by the
+// HOST, so `../../../../etc/x` linked outside the staging root. Nothing is created on the way,
+// as the raw join created nothing, so a `..` out of a directory that is not there still fails.
+fn soname_link_path(root: &Path, raw: &Path, soname: &str) -> Result<PathBuf> {
+    use std::path::Component;
+    let shown = || crate::resolver::escape_for_display(soname);
+    let Some(Component::Normal(name)) = raw.components().next_back() else {
+        bail!("soname {} does not name a file", shown());
+    };
+    let dir = raw.parent().unwrap_or(Path::new("/"));
+    let dir = image_dir(root, dir, false).with_context(|| format!("soname {}", shown()))?;
+    Ok(dir.join(name))
 }
 
 // Run ldconfig against `root`. ldconfig lives in a system sbin that is not always
@@ -1002,6 +1122,200 @@ mod tests {
         assert_eq!(fs::read(&staged_loader).unwrap(), b"LOADER");
     }
 
+    fn with_interp(pt_interp: &str, source: &Path) -> Resolution {
+        Resolution {
+            interpreter: Some(ResolvedInterp {
+                image_path: PathBuf::from(pt_interp),
+                source: source.to_path_buf(),
+            }),
+            ..Resolution::default()
+        }
+    }
+
+    #[test]
+    fn interp_target_reads_pt_interp_inside_the_image() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (pt, want) in [
+            ("/lib64/ld-linux-x86-64.so.2", "/lib64/ld-linux-x86-64.so.2"),
+            ("/usr/lib/../lib64/ld.so", "/usr/lib64/ld.so"),
+            ("/../../../../tmp/x", "/tmp/x"),
+            ("/a/../../b/x", "/b/x"),
+            ("lib/ld.so", "/lib/ld.so"),
+        ] {
+            assert_eq!(
+                interp_target(tmp.path(), Path::new(pt)).unwrap(),
+                Path::new(want)
+            );
+            // With no staged link on the way, the walk is the lexical one.
+            assert_eq!(
+                lexical_image_path(Path::new("/"), Path::new(pt)),
+                Path::new(want)
+            );
+        }
+        // No file name left: refused, never mapped onto the staging root itself.
+        for pt in ["", "/", "/..", "/lib64/.."] {
+            assert!(interp_target(tmp.path(), Path::new(pt)).is_err(), "{pt:?}");
+        }
+    }
+
+    #[test]
+    fn a_pt_interp_that_climbs_above_the_root_stages_inside_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("stage/root");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let loader = make_file(&tmp.path().join("src/real-ld.so"), b"LOADER");
+
+        // Joined raw under dest, each of these is tmp/escaped/ld.so.
+        for (pt, label) in [
+            ("/../../escaped/ld.so", "/../../escaped/ld.so"),
+            ("/lib/../../../escaped/ld.so", "/lib/../../../escaped/ld.so"),
+            ("../../escaped/ld.so", "/../../escaped/ld.so"),
+        ] {
+            let res = with_interp(pt, &loader);
+            let tree = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+            let staged = dest.join("escaped/ld.so");
+            assert_eq!(fs::read(&staged).unwrap(), b"LOADER");
+            // strip_and_measure must measure the loader where staging put it, yet report it
+            // under the same label as before.
+            let report = strip_and_measure(&dest, &tree, &res, false, false).unwrap();
+            let entry = report.entries.iter().find(|e| e.path == label);
+            let entry = entry.unwrap_or_else(|| panic!("{pt}: {:?}", report.entries));
+            assert_eq!(entry.after, fs::metadata(&staged).unwrap().len(), "{pt}");
+        }
+        assert!(!tmp.path().join("escaped").exists(), "wrote above the root");
+        assert!(!tmp.path().join("stage/escaped").exists());
+    }
+
+    #[test]
+    fn the_size_report_names_the_loader_by_its_raw_pt_interp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let loader = make_file(&tmp.path().join("src/real-ld.so"), b"LOADER");
+
+        for (pt, staged) in [
+            ("/usr/lib/../lib64/ld.so", "usr/lib64/ld.so"),
+            ("/lib64/./ld.so", "lib64/ld.so"),
+        ] {
+            let res = with_interp(pt, &loader);
+            let tree = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+            let report = strip_and_measure(&dest, &tree, &res, false, false).unwrap();
+            // Entries run binary, loader, libs. The label is the unnormalised string.
+            let entry = &report.entries[1];
+            assert_eq!(entry.path, pt);
+            let len = fs::metadata(dest.join(staged)).unwrap().len();
+            assert_eq!(entry.after, len, "{pt}");
+        }
+    }
+
+    #[test]
+    fn an_in_tree_dotdot_pt_interp_stages_where_the_raw_path_resolves() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let loader = make_file(&tmp.path().join("src/real-ld.so"), b"LOADER");
+
+        let pt = "/usr/lib/../lib64/ld-linux-x86-64.so.2";
+        stage_files(
+            &binary,
+            &with_interp(pt, &loader),
+            &dest,
+            SymlinkMode::CopyAll,
+        )
+        .unwrap();
+        let staged = dest.join("usr/lib64/ld-linux-x86-64.so.2");
+        assert_eq!(fs::read(&staged).unwrap(), b"LOADER");
+        // The image keeps the raw string, and the kernel walks /usr/lib to get there.
+        assert!(dest.join("usr/lib").is_dir());
+        assert_eq!(fs::read(under(&dest, Path::new(pt))).unwrap(), b"LOADER");
+    }
+
+    #[test]
+    fn a_staged_link_left_by_dotdot_is_followed_inside_the_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let loader = make_file(&tmp.path().join("src/real-ld.so"), b"LOADER");
+        // An output directory reused from an earlier pack, with a merged-usr style link.
+        fs::create_dir_all(dest.join("usr/lib")).unwrap();
+        std::os::unix::fs::symlink("usr/lib", dest.join("lib")).unwrap();
+
+        let res = with_interp("/lib/../lib64/ld.so", &loader);
+        stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+        // `/lib/..` is `/usr` through the link, in the image as on the host.
+        assert_eq!(fs::read(dest.join("usr/lib64/ld.so")).unwrap(), b"LOADER");
+        assert!(!dest.join("lib64").exists());
+    }
+
+    #[test]
+    fn a_staged_absolute_link_is_read_inside_the_image() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let outside = tmp.path().join("outside");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let loader = make_file(&tmp.path().join("src/real-ld.so"), b"LOADER");
+        fs::create_dir_all(outside.join("usr/lib")).unwrap();
+        fs::create_dir_all(dest.join("usr/lib")).unwrap();
+        // The merged-usr form an image really carries. On the host it names the host's /usr/lib.
+        std::os::unix::fs::symlink("/usr/lib", dest.join("lib")).unwrap();
+        // A link whose value is a host path: in the image it is just a path under the root.
+        std::os::unix::fs::symlink(&outside, dest.join("out")).unwrap();
+
+        for (pt, staged) in [
+            ("/lib/../x/ld.so", "usr/x/ld.so"),
+            ("/lib/ld.so", "usr/lib/ld.so"),
+            ("/out/usr/lib/ld.so", "outside-in-image/usr/lib/ld.so"),
+        ] {
+            let staged = match staged.strip_prefix("outside-in-image/") {
+                Some(rest) => under(&dest, &outside).join(rest),
+                None => dest.join(staged),
+            };
+            let res = with_interp(pt, &loader);
+            stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+            assert_eq!(fs::read(&staged).unwrap(), b"LOADER", "{pt}");
+        }
+        assert!(
+            !outside.join("usr/lib/ld.so").exists(),
+            "wrote through the link"
+        );
+    }
+
+    #[test]
+    fn a_staged_link_loop_or_a_file_on_the_way_fails_with_its_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        std::os::unix::fs::symlink("b", dest.join("a")).unwrap();
+        std::os::unix::fs::symlink("a", dest.join("b")).unwrap();
+        fs::write(dest.join("file"), b"x").unwrap();
+
+        let err = interp_target(&dest, Path::new("/a/ld.so")).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("too many levels of links"),
+            "{err:#}"
+        );
+        let err = interp_target(&dest, Path::new("/file/ld.so")).unwrap_err();
+        let err = format!("{err:#}");
+        assert!(
+            err.contains("/file is not a directory in the image"),
+            "{err}"
+        );
+        assert!(err.contains("PT_INTERP /file/ld.so"), "{err}");
+    }
+
+    #[test]
+    fn image_dir_without_create_makes_nothing_and_fails_on_dotdot_out_of_a_gap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path();
+        assert_eq!(
+            image_dir(dest, Path::new("/gap/x"), false).unwrap(),
+            Path::new("/gap/x")
+        );
+        assert!(!dest.join("gap").exists(), "created a directory");
+        let err = image_dir(dest, Path::new("/gap/../x"), false).unwrap_err();
+        assert!(err.to_string().contains("/gap is not a directory"), "{err}");
+    }
+
     #[test]
     fn versioned_soname_gets_real_file_plus_symlink() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1031,6 +1345,186 @@ mod tests {
             fs::read_link(&soname_link).unwrap(),
             PathBuf::from("libfoo.so.1.2.3"),
             "soname symlink must point at the real file's basename"
+        );
+    }
+
+    fn with_lib(soname: &str, path: &Path) -> Resolution {
+        Resolution {
+            libs: vec![ResolvedLib {
+                soname: soname.into(),
+                path: path.to_path_buf(),
+            }],
+            ..Resolution::default()
+        }
+    }
+
+    #[test]
+    fn soname_link_path_reads_the_soname_inside_the_image() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("app/lib")).unwrap();
+        for (raw, want) in [
+            ("/app/lib/libfoo.so.1", "/app/lib/libfoo.so.1"),
+            ("/app/lib/../lib/libfoo.so.1", "/app/lib/libfoo.so.1"),
+            ("/app/lib/./libfoo.so.1", "/app/lib/libfoo.so.1"),
+            ("/app/lib/../../../../../escaped/x", "/escaped/x"),
+            ("/../../escaped/x", "/escaped/x"),
+        ] {
+            let got = soname_link_path(tmp.path(), Path::new(raw), "s").unwrap();
+            assert_eq!(got, Path::new(want), "{raw}");
+            // With no staged link on the way, the walk is the lexical one.
+            assert_eq!(lexical_image_path(Path::new("/"), Path::new(raw)), got);
+        }
+        // A plain soname links exactly where the raw join did.
+        let plain = soname_link_path(tmp.path(), Path::new("/app/lib/libfoo.so.1"), "s");
+        assert_eq!(
+            under(tmp.path(), &plain.unwrap()),
+            under(tmp.path(), Path::new("/app/lib/libfoo.so.1"))
+        );
+        // `..` out of a directory the image lacks fails, as the raw join's symlink did, and
+        // a walk that ends on no file name never maps onto a directory.
+        for raw in ["/app/missing/../lib/x", "/app/lib/..", "/"] {
+            assert!(
+                soname_link_path(tmp.path(), Path::new(raw), "s").is_err(),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_soname_that_climbs_above_the_root_links_inside_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let real = make_file(&tmp.path().join("src/lib/libfoo.so.1.2.3"), b"FOO");
+        // Joined raw under dest, both of these link at tmp/escaped/libfoo.so.1.
+        let up = real.parent().unwrap().components().count();
+        let relative = format!("{}escaped/libfoo.so.1", "../".repeat(up));
+        fs::create_dir_all(tmp.path().join("escaped")).unwrap();
+
+        for (i, soname) in [relative.as_str(), "/../escaped/libfoo.so.1"]
+            .into_iter()
+            .enumerate()
+        {
+            let dest = tmp.path().join(format!("dest{i}"));
+            // The image directory the soname names once `..` stops at the root.
+            fs::create_dir_all(dest.join("escaped")).unwrap();
+            stage_files(
+                &binary,
+                &with_lib(soname, &real),
+                &dest,
+                SymlinkMode::CopyAll,
+            )
+            .unwrap();
+            let link = dest.join("escaped/libfoo.so.1");
+            assert_eq!(fs::read_link(&link).unwrap(), Path::new("libfoo.so.1.2.3"));
+        }
+        let above = tmp.path().join("escaped/libfoo.so.1");
+        assert!(above.symlink_metadata().is_err(), "linked above the root");
+    }
+
+    #[test]
+    fn an_in_tree_dotdot_soname_links_where_the_raw_path_resolves() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&tmp.path().join("app/bin/run"), b"binary");
+        let real = make_file(&tmp.path().join("app/lib/libfoo.so.1.2.3"), b"FOO");
+
+        for soname in ["../lib/libfoo.so.1", "./libfoo.so.1"] {
+            let res = with_lib(soname, &real);
+            stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+            let link = under(&dest, &real.parent().unwrap().join("libfoo.so.1"));
+            assert_eq!(fs::read_link(&link).unwrap(), Path::new("libfoo.so.1.2.3"));
+            // The raw join, which stays inside the root, reaches that same link.
+            let raw = under(&dest, &real.parent().unwrap().join(soname));
+            assert_eq!(fs::read_link(&raw).unwrap(), Path::new("libfoo.so.1.2.3"));
+            fs::remove_file(&link).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_soname_dotdot_out_of_a_missing_directory_still_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let real = make_file(&tmp.path().join("src/lib/libfoo.so.1.2.3"), b"FOO");
+
+        let res = with_lib("missing/../libfoo.so.1", &real);
+        assert!(stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).is_err());
+        let staged_dir = under(&dest, real.parent().unwrap());
+        assert!(!staged_dir.join("missing").exists(), "created a directory");
+        assert!(staged_dir.join("libfoo.so.1").symlink_metadata().is_err());
+    }
+
+    #[test]
+    fn a_staged_link_left_by_a_soname_dotdot_is_followed_inside_the_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let real = make_file(&tmp.path().join("src/lib/libfoo.so.1.2.3"), b"FOO");
+        // An output directory reused from an earlier pack, with a merged-usr style link.
+        fs::create_dir_all(dest.join("usr/lib")).unwrap();
+        fs::create_dir_all(dest.join("usr/x")).unwrap();
+        std::os::unix::fs::symlink("usr/lib", dest.join("lib")).unwrap();
+
+        let res = with_lib("/lib/../x/libfoo.so.1", &real);
+        stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+        // `/lib/..` is `/usr` through the link, in the image as on the host.
+        let link = dest.join("usr/x/libfoo.so.1");
+        assert_eq!(fs::read_link(&link).unwrap(), Path::new("libfoo.so.1.2.3"));
+        assert!(!dest.join("x").exists());
+    }
+
+    #[test]
+    fn a_staged_absolute_link_on_a_soname_path_is_read_inside_the_image() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let outside = tmp.path().join("outside");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let real = make_file(&tmp.path().join("src/lib/libfoo.so.1.2.3"), b"FOO");
+        fs::create_dir_all(outside.join("x")).unwrap();
+        fs::create_dir_all(dest.join("usr/lib")).unwrap();
+        fs::create_dir_all(dest.join("usr/x")).unwrap();
+        // The merged-usr form an image really carries. On the host it names the host's /usr/lib.
+        std::os::unix::fs::symlink("/usr/lib", dest.join("lib")).unwrap();
+        // A link whose value is a host path, on an ordinary component of the soname.
+        std::os::unix::fs::symlink(&outside, dest.join("out")).unwrap();
+        fs::create_dir_all(under(&dest, &outside).join("x")).unwrap();
+
+        for (soname, link) in [
+            ("/lib/../x/libfoo.so.1", dest.join("usr/x/libfoo.so.1")),
+            (
+                "/out/x/libfoo.so.1",
+                under(&dest, &outside).join("x/libfoo.so.1"),
+            ),
+        ] {
+            let res = with_lib(soname, &real);
+            stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+            assert_eq!(
+                fs::read_link(&link).unwrap(),
+                Path::new("libfoo.so.1.2.3"),
+                "{soname}"
+            );
+        }
+        let through = outside.join("x/libfoo.so.1");
+        assert!(
+            through.symlink_metadata().is_err(),
+            "linked through the link"
+        );
+    }
+
+    #[test]
+    fn a_soname_link_into_a_missing_directory_names_the_soname() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let real = make_file(&tmp.path().join("src/lib/libfoo.so.1.2.3"), b"FOO");
+        let res = with_lib("/../../gone/libfoo.so.1", &real);
+        let err = format!(
+            "{:#}",
+            stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap_err()
+        );
+        assert!(
+            err.contains("soname /../../gone/libfoo.so.1: linking"),
+            "{err}"
         );
     }
 
