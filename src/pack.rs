@@ -842,8 +842,8 @@ fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackR
 }
 
 /// Pack `binary` and push it straight to a registry reference — no Docker daemon.
-/// Credentials come from the local Docker config; blobs the registry already has are
-/// skipped.
+/// Credentials come from the local Docker config; every blob is uploaded (oci-client 0.18
+/// makes no HEAD check first).
 fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackReport> {
     if opts.smoke {
         bail!("--smoke needs a running image, so it isn't supported with --push; pull the pushed image and run it separately, or drop --smoke");
@@ -860,6 +860,11 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackRep
         s.clock.timings.sign_ms = Some(ms);
         Some(signed)
     } else {
+        // Nothing reads the digest without --sign, but a registry that names a manifest other
+        // than the one just pushed must not pass in silence.
+        if let Err(e) = &digest_ref {
+            s.warnings.push(format!("{e:#}"));
+        }
         None
     };
     Ok(PackReport {
