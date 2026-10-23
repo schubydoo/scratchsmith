@@ -93,8 +93,14 @@ dependency tree. The last one comes from `pack` only.
 ### A library that cannot be parsed
 
 Scratchsmith reads each library that the binary needs, and then resolves the libraries that
-library needs in turn. A file that is not an ELF at all has no dependencies, so scratchsmith
-stages it and continues. That stays true in 2.0.
+library needs in turn. A file that you name with `--include` and that is not an ELF at all has
+no dependencies, so scratchsmith stages it and continues. That stays true in 2.0.
+
+The binary or a library can name a file as a `DT_NEEDED` entry or as the program interpreter.
+If that file is not an ELF, scratchsmith refuses it, and `pack` and `graph` exit `1`. The name
+can point at any file on the host, and that file then ships in the image. This is a security
+exception to the deprecation cycle in COMPATIBILITY.md. The loader cannot start such a binary,
+so no working image depends on it.
 
 A truncated or corrupt library is a different case. The file starts with the ELF signature, and
 scratchsmith cannot read its list of dependencies. Today scratchsmith stages the damaged file
