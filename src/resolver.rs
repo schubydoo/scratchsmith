@@ -272,9 +272,10 @@ impl LinkInfoSource for GoblinSource {
 const DEVICE_READ_CAP: u64 = 256 << 20;
 
 // Read a whole file, as `std::fs::read` does, with the stop chosen by fstat on the open handle.
-// A regular file stops at the length it reported. A device stops one byte past `device_cap`
-// and fails. Anything else reads to EOF as before: a FIFO or pipe ends when its writer closes,
-// and an operator can pipe in a real library (`--include <(cat lib.so)`).
+// A device stops one byte past `device_cap` and fails. Anything else reads to EOF as before.
+// A regular file's length is only the reserve: a procfs file reports 0 and still has content.
+// A FIFO or pipe ends when its writer closes, and an operator can pipe in a real library
+// (`--include <(cat lib.so)`).
 fn read_bounded(path: &Path, device_cap: u64) -> Result<Vec<u8>> {
     use std::io::Read;
     use std::os::unix::fs::FileTypeExt;
@@ -291,9 +292,7 @@ fn read_bounded(path: &Path, device_cap: u64) -> Result<Vec<u8>> {
             .try_reserve_exact(usize::try_from(len).unwrap_or(usize::MAX))
             .map_err(std::io::Error::from)
             .with_context(reading)?;
-        file.take(len)
-            .read_to_end(&mut bytes)
-            .with_context(reading)?;
+        file.read_to_end(&mut bytes).with_context(reading)?;
     } else if kind.is_char_device() || kind.is_block_device() {
         // Its size is no length to reserve: grow as bytes arrive.
         file.take(device_cap.saturating_add(1))
@@ -967,6 +966,15 @@ mod tests {
                 "{err:#}"
             );
         }
+    }
+
+    #[test]
+    fn a_procfs_file_reads_past_its_reported_length() {
+        // A regular file that reports a length of 0, as every procfs file does.
+        let path = Path::new("/proc/self/status");
+        assert_eq!(fs::metadata(path).unwrap().len(), 0);
+        let bytes = read_bounded(path, DEVICE_READ_CAP).unwrap();
+        assert!(bytes.starts_with(b"Name:"), "{bytes:?}");
     }
 
     #[test]
