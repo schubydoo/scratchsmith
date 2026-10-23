@@ -257,7 +257,7 @@ pub fn stage_added_files(dest: &Path, files: &[AddFile], mode: SymlinkMode) -> R
 // and on a soname symlink it writes THROUGH the link and corrupts the real library.
 // symlink_metadata sees the link itself, so both cases are caught here.
 fn ensure_not_staged(dest: &Path, image_path: &Path) -> Result<()> {
-    if under(dest, image_path).symlink_metadata().is_ok() {
+    if is_staged(dest, image_path) {
         bail!(
             "--add-file: {} is already in the image; --add-file will not replace a staged \
              file, and each image path can be given only once",
@@ -276,9 +276,7 @@ fn link_target_in_image(dest: &Path, image_link: &Path, value: &Path) -> bool {
     let Some(dir) = image_link.parent() else {
         return false;
     };
-    under(dest, &lexical_image_path(dir, value))
-        .symlink_metadata()
-        .is_ok()
+    is_staged(dest, &lexical_image_path(dir, value))
 }
 
 // Resolve a link value the way the image will read it, LEXICALLY: `.` drops and `..` pops,
@@ -331,10 +329,7 @@ fn relative_link_value(from_dir: &Path, target: &Path) -> PathBuf {
 // Create a symlink at an image path, carrying the value verbatim so a relative link stays
 // relative (an absolute one would break the moment the image root moves).
 fn place_symlink(dest: &Path, image_path: &Path, value: &Path) -> Result<()> {
-    let link = under(dest, image_path);
-    if let Some(parent) = link.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let link = staged_path(dest, image_path, true)?;
     std::os::unix::fs::symlink(value, &link)
         .with_context(|| format!("linking {} -> {}", image_path.display(), value.display()))?;
     Ok(())
@@ -354,10 +349,11 @@ const LOCALE_ROOT: &str = "/usr/lib/locale";
 pub fn stage_locales(dest: &Path, locales: &[String]) -> Result<()> {
     for name in locales {
         let name = validate_locale_name(name)?;
-        let target = under(dest, &Path::new(LOCALE_ROOT).join(name));
-        if target.symlink_metadata().is_ok() {
+        let image = Path::new(LOCALE_ROOT).join(name);
+        if is_staged(dest, &image) {
             bail!("--locale: {name} is already in the image; each locale can be given only once");
         }
+        let target = staged_path(dest, &image, true)?;
         let host_dir = Path::new(LOCALE_ROOT).join(name);
         if host_dir.is_dir() {
             copy_dir_into(&host_dir, &target)
@@ -627,9 +623,7 @@ pub fn stage_default_includes(
     let mut report = IncludeReport::default();
 
     if let Some(body) = nss.nsswitch() {
-        let nsswitch = under(dest, Path::new("/etc/nsswitch.conf"));
-        std::fs::create_dir_all(nsswitch.parent().unwrap())?;
-        std::fs::write(&nsswitch, body)?;
+        write_into(dest, Path::new("/etc/nsswitch.conf"), body.as_bytes())?;
         report.staged.push(PathBuf::from("/etc/nsswitch.conf"));
     }
 
@@ -666,9 +660,7 @@ pub fn stage_default_includes(
             ("/etc/passwd", MINIMAL_PASSWD),
             ("/etc/group", MINIMAL_GROUP),
         ] {
-            let target = under(dest, Path::new(path));
-            std::fs::create_dir_all(target.parent().unwrap())?;
-            std::fs::write(&target, body)?;
+            write_into(dest, Path::new(path), body.as_bytes())?;
             report.staged.push(PathBuf::from(path));
         }
     }
@@ -737,7 +729,7 @@ pub fn strip_and_measure(
         let label = display_image_path(dest, &p);
         (p, label)
     };
-    let binary = under(dest, &tree.entrypoint);
+    let binary = staged_path(dest, &tree.entrypoint, false)?;
     let mut targets: Vec<(PathBuf, String)> = vec![shown(binary.clone())];
     // Measure the loader where stage_files put it (strip rewrites in place, so never the
     // raw join), but keep reporting it by its PT_INTERP string, as `interpreter` does.
@@ -746,7 +738,9 @@ pub fn strip_and_measure(
         let label = display_image_path(dest, &under(dest, &interp.image_path));
         targets.push((staged, label));
     }
-    targets.extend(resolution.libs.iter().map(|l| shown(under(dest, &l.path))));
+    for lib in &resolution.libs {
+        targets.push(shown(staged_path(dest, &lib.path, false)?));
+    }
 
     let mut report = SizeReport {
         stripped: strip,
@@ -856,7 +850,7 @@ fn stage_files(
     if symlinks != SymlinkMode::CopyAll {
         let named = std::path::absolute(binary)
             .with_context(|| format!("resolving {}", binary.display()))?;
-        if named != binary_real && under(dest, &named).symlink_metadata().is_err() {
+        if named != binary_real && !is_staged(dest, &named) {
             let dir = named.parent().unwrap_or(Path::new("/"));
             place_symlink(dest, &named, &relative_link_value(dir, &binary_real))?;
         }
@@ -924,6 +918,10 @@ fn image_dir(dest: &Path, dir: &Path, create: bool) -> Result<PathBuf> {
         }))
     };
     let shown = |p: &Path| crate::resolver::escape_for_display(&p.to_string_lossy());
+    // The walk creates one directory at a time under the root, so the root comes first.
+    if create {
+        std::fs::create_dir_all(dest).with_context(|| format!("creating {}", dest.display()))?;
+    }
     let mut todo = Vec::new();
     push(&mut todo, dir);
     let mut at = PathBuf::from("/");
@@ -988,30 +986,68 @@ fn generate_ld_cache(dest: &Path, resolution: &Resolution) -> Result<()> {
         }
     }
 
-    let conf = under(dest, Path::new("/etc/ld.so.conf"));
-    std::fs::create_dir_all(conf.parent().unwrap())?;
     let body: String = dirs.iter().map(|d| format!("{}\n", d.display())).collect();
-    std::fs::write(&conf, body).with_context(|| format!("writing {}", conf.display()))?;
+    write_into(dest, Path::new("/etc/ld.so.conf"), body.as_bytes())?;
 
     run_ldconfig(dest)?;
 
-    let cache = under(dest, Path::new("/etc/ld.so.cache"));
+    let cache = staged_path(dest, Path::new("/etc/ld.so.cache"), false)?;
     if !cache.exists() {
         bail!("ldconfig produced no cache at {}", cache.display());
     }
     Ok(())
 }
 
-// Map an absolute image path to its location under the staging root.
+// Map an absolute image path to its location under the staging root. The HOST walks the
+// result, so it is right only where no staged link can be on the way; anything that touches
+// the tree goes through `staged_path`.
 fn under(root: &Path, abs: &Path) -> PathBuf {
     root.join(abs.strip_prefix("/").unwrap_or(abs))
 }
 
+/// The host path of `image` inside the staging root `dest`, with every staged link on the way
+/// read inside the image (`image_dir`). A reused `--no-build --output DIR` can hold a link such
+/// as `lib -> /usr/lib`, and a plain join would let the host follow it to its own `/usr/lib`.
+/// `create` makes the missing directories. The final name is not resolved: a caller that
+/// writes replaces it by a rename (`copy_into`, `write_into`), never writes through it.
+pub fn staged_path(dest: &Path, image: &Path, create: bool) -> Result<PathBuf> {
+    let Some(name) = image.file_name() else {
+        return Ok(under(dest, &image_dir(dest, image, create)?));
+    };
+    let dir = image_dir(dest, image.parent().unwrap_or(Path::new("/")), create)?;
+    Ok(under(dest, &dir.join(name)))
+}
+
+// Whether anything (a link included) is at `image` in the staged tree. A path through a
+// missing directory is simply not there.
+fn is_staged(dest: &Path, image: &Path) -> bool {
+    staged_path(dest, image, false).is_ok_and(|p| p.symlink_metadata().is_ok())
+}
+
+// Write a generated file at an image path, replacing whatever is there by a rename, as
+// `copy_into` does, so a link at that name is swapped out rather than written through.
+fn write_into(dest: &Path, image: &Path, body: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let target = staged_path(dest, image, true)?;
+    let dir = target.parent().context("a staged file has no directory")?;
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".scratchsmith-")
+        .tempfile_in(dir)
+        .with_context(|| format!("creating a file in {}", dir.display()))?;
+    tmp.write_all(body)
+        .with_context(|| format!("writing {}", target.display()))?;
+    // A generated file is world-readable, as `std::fs::write` left it under the usual umask.
+    use std::os::unix::fs::PermissionsExt;
+    tmp.as_file()
+        .set_permissions(std::fs::Permissions::from_mode(0o644))
+        .with_context(|| format!("writing {}", target.display()))?;
+    tmp.persist(&target)
+        .with_context(|| format!("replacing {}", target.display()))?;
+    Ok(())
+}
+
 fn copy_into(src: &Path, root: &Path, abs_target: &Path) -> Result<()> {
-    let target = under(root, abs_target);
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let target = staged_path(root, abs_target, true)?;
     // Copy to a sibling and rename it over the name, as `packages::write_record` does. A
     // file that an earlier pack into this directory left is replaced, never written into:
     // `fs::copy` opens its target for writing, so a read-only copy (a 0444 CA bundle) fails
@@ -1525,6 +1561,73 @@ mod tests {
         assert!(
             err.contains("soname /../../gone/libfoo.so.1: linking"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn a_reused_output_dir_with_an_absolute_link_keeps_every_write_inside_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let real = make_file(&tmp.path().join("src/lib/libfoo.so.1.2.3"), b"FOO");
+        // A directory the library's image path passes through is a link to a HOST path, as
+        // an earlier run or a hostile tree can leave in a reused `--no-build --output DIR`.
+        let src_dir = real.parent().unwrap().parent().unwrap();
+        let link = under(&dest, src_dir);
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let res = with_lib("libfoo.so.1", &real);
+        let tree = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+        let report = strip_and_measure(&dest, &tree, &res, false, false).unwrap();
+
+        // In the image, the link names `outside` under the root, so the library lands there.
+        let staged = under(&dest, &outside).join("lib/libfoo.so.1.2.3");
+        assert_eq!(fs::read(&staged).unwrap(), b"FOO");
+        assert_eq!(
+            fs::read_link(staged.with_file_name("libfoo.so.1")).unwrap(),
+            Path::new("libfoo.so.1.2.3")
+        );
+        assert!(
+            report.entries.iter().any(|e| e.after == 3),
+            "{:?}",
+            report.entries
+        );
+        assert_eq!(
+            fs::read_dir(&outside).unwrap().count(),
+            0,
+            "wrote through the link"
+        );
+    }
+
+    #[test]
+    fn generated_files_never_go_through_a_staged_link() {
+        let (tmp, res, dest) = nss_fixture();
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(outside.join("etc")).unwrap();
+        fs::write(outside.join("passwd"), b"HOST").unwrap();
+        fs::create_dir_all(&dest).unwrap();
+        // `/etc` is an absolute link to a host directory, and `/etc/group` would be a link
+        // to a host file once `/etc` is read in the image.
+        std::os::unix::fs::symlink(outside.join("etc"), dest.join("etc")).unwrap();
+        let etc = under(&dest, &outside.join("etc"));
+        fs::create_dir_all(&etc).unwrap();
+        std::os::unix::fs::symlink(outside.join("passwd"), etc.join("passwd")).unwrap();
+
+        stage_default_includes(&res, &dest, &NssSelection::default()).unwrap();
+        generate_ld_cache(&dest, &res).ok();
+
+        assert!(etc.join("nsswitch.conf").is_file());
+        assert!(etc.join("ld.so.conf").is_file());
+        // The link at the final name was replaced, not written through.
+        assert!(etc.join("passwd").symlink_metadata().unwrap().is_file());
+        assert_eq!(fs::read(outside.join("passwd")).unwrap(), b"HOST");
+        assert_eq!(
+            fs::read_dir(outside.join("etc")).unwrap().count(),
+            0,
+            "wrote through the link"
         );
     }
 
