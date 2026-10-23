@@ -250,8 +250,10 @@ pub fn parse_child_manifest(raw: &[u8], source: &str) -> Result<(String, String)
         .to_string();
     if is_multi_arch_media_type(&media_type) {
         bail!(
-            "source {source} is itself a multi-arch index ({media_type}); pass the \
-             single-arch images, not an index"
+            "source {source} is itself a multi-arch index ({}); pass the single-arch images, \
+             not an index",
+            // A registry-served string, matched only by a substring test above.
+            crate::resolver::escape_for_display(&media_type)
         );
     }
     let config_digest = manifest
@@ -1526,6 +1528,14 @@ mod tests {
         let raw = br#"{"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}"#;
         let err = parse_child_manifest(raw, "src").unwrap_err().to_string();
         assert!(err.contains("multi-arch index"), "{err}");
+    }
+
+    #[test]
+    fn the_multi_arch_rejection_escapes_the_media_type() {
+        let raw = br#"{"mediaType":"application/vnd.oci.image.index.v1+json\nerror: forged\u001b[2J","manifests":[]}"#;
+        let err = parse_child_manifest(raw, "src").unwrap_err().to_string();
+        assert!(!err.contains('\n') && !err.contains('\x1b'), "{err:?}");
+        assert!(err.contains("json\\nerror: forged"), "{err}");
     }
 
     #[test]

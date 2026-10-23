@@ -245,9 +245,6 @@ impl DepGraphReport {
 
         let mut out = String::new();
         if let Some(root) = by_id.get(self.root.as_str()) {
-            // Names, ids and the interpreter come out of the packed binary and its search
-            // paths, so a line break in one would forge a line of this tree.
-            let shown = |t: &str| crate::resolver::escape_if_line_breaking(t).into_owned();
             out.push_str(&format!("{} ({})\n", shown(&root.name), shown(&root.id)));
             let mut seen = std::collections::HashSet::new();
             seen.insert(root.id.as_str());
@@ -266,6 +263,12 @@ impl DepGraphReport {
 // Render `node`'s children as an indented subtree: resolved `needs` first, then the
 // unresolved `missing` sonames. `seen` guards repeats: an object shown before is printed
 // as `(*)` and not expanded, so diamonds and cycles terminate.
+// Names, ids and the interpreter in the graph tree come out of the packed binary and its
+// search paths, so a line break in one would forge a line of the tree.
+fn shown(text: &str) -> std::borrow::Cow<'_, str> {
+    crate::resolver::escape_if_line_breaking(text)
+}
+
 fn render_children<'a>(
     node: &'a DepNode,
     by_id: &std::collections::HashMap<&'a str, &'a DepNode>,
@@ -273,7 +276,6 @@ fn render_children<'a>(
     prefix: &str,
     out: &mut String,
 ) {
-    let shown = |t: &str| crate::resolver::escape_if_line_breaking(t).into_owned();
     let total = node.needs.len() + node.missing.len();
     let mut idx = 0usize;
     for child_id in &node.needs {
