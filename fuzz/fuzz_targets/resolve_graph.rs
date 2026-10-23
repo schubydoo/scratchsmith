@@ -22,6 +22,9 @@ struct Facts {
     soname: Option<String>,
     is_64: bool,
     machine: u16,
+    // Not a shared object, so the refusal of an ET_EXEC library is reachable. A raw u16
+    // would almost never be ET_DYN and would cut every graph short.
+    not_shared: bool,
 }
 
 impl Facts {
@@ -37,6 +40,8 @@ impl Facts {
             is_64: self.is_64,
             machine: self.machine,
             uses_dlopen: false,
+            // ET_EXEC (2) or ET_DYN (3); goblin is not a dependency of this workspace.
+            e_type: if self.not_shared { 2 } else { 3 },
         }
     }
 }

@@ -94,6 +94,17 @@ Now `pack` and `graph` refuse such a file and exit `1`. The loader cannot start 
 needs it, so no working image depends on it. A data file that you name with `--include` still
 stages. A library deeper in the tree that names the same file then resolves to that staged copy.
 
+### An ELF that is not a shared object, named by the binary or a library
+
+The same names can point at a host file that is an ELF but not a library, such as a core dump
+or an executable. Through 1.7.2, scratchsmith staged that file. A core dump holds the memory of
+a crashed process, which can include secrets.
+
+Now `pack` and `graph` refuse a library or an interpreter whose ELF type is not a shared
+object (`ET_DYN`), and exit `1`. The loader maps only shared objects, so no working image
+depends on such a file. The binary itself and a file that you name with `--include` stage as
+before.
+
 ## Tolerances ending in 2.0
 
 | Input | Warns since | Error in | What to do |
