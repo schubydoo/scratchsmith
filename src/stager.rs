@@ -1038,65 +1038,30 @@ fn symlink_soname(root: &Path, real_abs: &Path, soname: &str) -> Result<()> {
     if link.symlink_metadata().is_ok() {
         return Ok(()); // idempotent
     }
-    std::os::unix::fs::symlink(target, &link)
-        .with_context(|| format!("linking {} -> {:?}", link.display(), target))?;
+    std::os::unix::fs::symlink(target, &link).with_context(|| {
+        format!(
+            "soname {}: linking {} -> {:?}",
+            crate::resolver::escape_for_display(soname),
+            link.display(),
+            target
+        )
+    })?;
     Ok(())
 }
 
-// Where a soname link goes: `dir.join(soname)` walked the way the kernel walks it inside the
-// image, where `..` at the root stays at the root. A soname is a raw DT_NEEDED string, and
-// joined raw under `root` its `..` was walked by the HOST, so `../../../../etc/x` linked
-// outside the staging root. Nothing is created on the way, as the raw join created nothing,
-// so a `..` out of a directory that is not there still fails. A staged link that `..` leaves
-// is followed as the host did, and refused if it leads out of the root.
+// Where a soname link goes: `dir.join(soname)` resolved inside the image (see `image_dir`). A
+// soname is a raw DT_NEEDED string, and joined raw under `root` its `..` was walked by the
+// HOST, so `../../../../etc/x` linked outside the staging root. Nothing is created on the way,
+// as the raw join created nothing, so a `..` out of a directory that is not there still fails.
 fn soname_link_path(root: &Path, raw: &Path, soname: &str) -> Result<PathBuf> {
     use std::path::Component;
-    let shown = |p: &Path| crate::resolver::escape_for_display(&p.to_string_lossy());
-    let mut at = PathBuf::from("/");
-    let mut walk = raw.components().peekable();
-    while let Some(c) = walk.next() {
-        if walk.peek().is_none() {
-            if let Component::Normal(name) = c {
-                return Ok(at.join(name));
-            }
-            break;
-        }
-        match c {
-            Component::Prefix(_) | Component::RootDir => at = PathBuf::from("/"),
-            Component::CurDir => {}
-            Component::ParentDir if at.parent().is_none() => {}
-            Component::ParentDir => {
-                let here = under(root, &at);
-                if here
-                    .symlink_metadata()
-                    .is_ok_and(|m| m.file_type().is_symlink())
-                {
-                    let real_root = std::fs::canonicalize(root)
-                        .with_context(|| format!("resolving {}", root.display()))?;
-                    let real = std::fs::canonicalize(&here)
-                        .with_context(|| format!("resolving {}", shown(&here)))?;
-                    let Ok(rel) = real.strip_prefix(&real_root) else {
-                        bail!(
-                            "soname {}: {} is a link out of the staging root",
-                            shown(Path::new(soname)),
-                            shown(&at)
-                        );
-                    };
-                    at = Path::new("/").join(rel);
-                }
-                if !under(root, &at).is_dir() {
-                    bail!(
-                        "soname {}: {} is not a directory in the image",
-                        shown(Path::new(soname)),
-                        shown(&at)
-                    );
-                }
-                at.pop();
-            }
-            Component::Normal(p) => at.push(p),
-        }
-    }
-    bail!("soname {} does not name a file", shown(Path::new(soname)))
+    let shown = || crate::resolver::escape_for_display(soname);
+    let Some(Component::Normal(name)) = raw.components().next_back() else {
+        bail!("soname {} does not name a file", shown());
+    };
+    let dir = raw.parent().unwrap_or(Path::new("/"));
+    let dir = image_dir(root, dir, false).with_context(|| format!("soname {}", shown()))?;
+    Ok(dir.join(name))
 }
 
 // Run ldconfig against `root`. ldconfig lives in a system sbin that is not always
@@ -1509,25 +1474,57 @@ mod tests {
     }
 
     #[test]
-    fn a_staged_link_out_of_the_root_is_refused_before_a_soname_dotdot() {
+    fn a_staged_absolute_link_on_a_soname_path_is_read_inside_the_image() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("dest");
         let outside = tmp.path().join("outside");
         let binary = make_file(&tmp.path().join("src/app"), b"binary");
         let real = make_file(&tmp.path().join("src/lib/libfoo.so.1.2.3"), b"FOO");
-        // Joined raw under dest, `/lib/..` is `outside` and the link lands in outside/x.
-        fs::create_dir_all(outside.join("sub")).unwrap();
         fs::create_dir_all(outside.join("x")).unwrap();
-        fs::create_dir_all(&dest).unwrap();
-        std::os::unix::fs::symlink(outside.join("sub"), dest.join("lib")).unwrap();
+        fs::create_dir_all(dest.join("usr/lib")).unwrap();
+        fs::create_dir_all(dest.join("usr/x")).unwrap();
+        // The merged-usr form an image really carries. On the host it names the host's /usr/lib.
+        std::os::unix::fs::symlink("/usr/lib", dest.join("lib")).unwrap();
+        // A link whose value is a host path, on an ordinary component of the soname.
+        std::os::unix::fs::symlink(&outside, dest.join("out")).unwrap();
+        fs::create_dir_all(under(&dest, &outside).join("x")).unwrap();
 
-        let res = with_lib("/lib/../x/libfoo.so.1", &real);
-        let err = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap_err();
-        assert!(err.to_string().contains("out of the staging root"), "{err}");
+        for (soname, link) in [
+            ("/lib/../x/libfoo.so.1", dest.join("usr/x/libfoo.so.1")),
+            (
+                "/out/x/libfoo.so.1",
+                under(&dest, &outside).join("x/libfoo.so.1"),
+            ),
+        ] {
+            let res = with_lib(soname, &real);
+            stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+            assert_eq!(
+                fs::read_link(&link).unwrap(),
+                Path::new("libfoo.so.1.2.3"),
+                "{soname}"
+            );
+        }
         let through = outside.join("x/libfoo.so.1");
         assert!(
             through.symlink_metadata().is_err(),
             "linked through the link"
+        );
+    }
+
+    #[test]
+    fn a_soname_link_into_a_missing_directory_names_the_soname() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let real = make_file(&tmp.path().join("src/lib/libfoo.so.1.2.3"), b"FOO");
+        let res = with_lib("/../../gone/libfoo.so.1", &real);
+        let err = format!(
+            "{:#}",
+            stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap_err()
+        );
+        assert!(
+            err.contains("soname /../../gone/libfoo.so.1: linking"),
+            "{err}"
         );
     }
 
