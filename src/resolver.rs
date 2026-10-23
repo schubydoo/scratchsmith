@@ -380,19 +380,28 @@ pub fn resolve_with(
                     printable(&canonical(&loader))
                 );
             }
-            // A real loader is a shared object. An ELF of another type (a core dump holds a
-            // process's memory) is a host file the binary picked, so it is not staged.
-            if let Some(info) = source.read(&loader)? {
-                if info.e_type != goblin::elf::header::ET_DYN {
+            // The kernel loads an ET_DYN or an ET_EXEC interpreter. An ELF of another type (a
+            // core dump holds a process's memory) is a host file the binary picked.
+            match source.read(&loader)? {
+                Some(info)
+                    if info.e_type != goblin::elf::header::ET_DYN
+                        && info.e_type != goblin::elf::header::ET_EXEC =>
+                {
                     bail!(
-                        "the program interpreter (PT_INTERP) `{}` is {}, not a shared object: \
-                         {}. Refusing it, because that path can name any host file. Rebuild \
-                         the binary with a real loader path.",
+                        "the program interpreter (PT_INTERP) `{}` is {}, which the kernel cannot \
+                         load as an interpreter: {}. Refusing it, because that path can name \
+                         any host file. Rebuild the binary with a real loader path.",
                         escape_for_display(interp),
                         elf_type_name(info.e_type),
                         printable(&canonical(&loader))
                     );
                 }
+                Some(_) => {}
+                None => resolution.warnings.push(format!(
+                    "the program interpreter (PT_INTERP) {} starts like an ELF and cannot be \
+                     parsed (truncated or corrupt), so the image cannot start.",
+                    printable(&canonical(&loader))
+                )),
             }
             resolution.interpreter = Some(ResolvedInterp {
                 image_path: PathBuf::from(interp),
@@ -543,9 +552,10 @@ pub fn resolve_with(
             // error named a copy. `check_lib_policy` runs after `stager::stage`, so the
             // --require/--deny gate was never reached rather than blind.
             match source.read(&real)? {
-                // A library the ELF named must be a shared object. Any other ELF (a core dump
-                // holds a process's memory, an ET_EXEC can carry anything) is a host file the
-                // name happened to reach, so it is not staged. --include stays the operator's.
+                // A library the ELF named must be a shared object: glibc (2.17 to 2.41 at
+                // least) fails any other type with "cannot dynamically load executable". So it
+                // is a host file the name happened to reach, a core dump with a process's
+                // memory for one, and it is not staged. --include stays the operator's.
                 Some(child) if i < declared && child.e_type != goblin::elf::header::ET_DYN => {
                     bail!(
                         "{} needs `{}`, which resolved to {}, and that file is {}, not a shared \
@@ -955,6 +965,7 @@ mod tests {
         );
         infos.insert(canonical(&mid), elf(&["libleaf.so"], &[], &[], None));
         infos.insert(canonical(&leaf), elf(&[], &[], &[], None));
+        infos.insert(canonical(&loader), elf(&[], &[], &[], None));
         (exe, mid, leaf, infos)
     }
 
@@ -1189,20 +1200,50 @@ mod tests {
     }
 
     #[test]
-    fn a_pt_interp_that_is_not_a_shared_object_fails() {
+    fn a_pt_interp_the_kernel_cannot_load_fails() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let (exe, _mid, _leaf, mut infos) = chain_fixture(root);
-        let loader = root.join("lib64/ld-linux-x86-64.so.2");
+        let loader = canonical(&root.join("lib64/ld-linux-x86-64.so.2"));
         let mut core = elf(&[], &[], &[], None);
         core.e_type = goblin::elf::header::ET_CORE;
-        infos.insert(canonical(&loader), core);
-        let err = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos })
-            .expect_err("a core dump as PT_INTERP is refused");
+        infos.insert(loader.clone(), core);
+        let err = resolve_with(
+            &exe,
+            &Sysroot::new(root),
+            &[],
+            &MapSource {
+                infos: infos.clone(),
+            },
+        )
+        .expect_err("a core dump as PT_INTERP is refused");
         let msg = format!("{err:#}");
         assert!(
             msg.contains("PT_INTERP") && msg.contains("a core dump (ET_CORE)"),
             "{msg}"
+        );
+
+        // The kernel loads an ET_EXEC interpreter, so a static non-PIE loader still stages.
+        let mut exec = elf(&[], &[], &[], None);
+        exec.e_type = goblin::elf::header::ET_EXEC;
+        infos.insert(loader.clone(), exec);
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert_eq!(res.interpreter.map(|i| i.source), Some(loader));
+    }
+
+    #[test]
+    fn a_pt_interp_that_does_not_parse_warns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (exe, _mid, _leaf, mut infos) = chain_fixture(root);
+        infos.remove(&canonical(&root.join("lib64/ld-linux-x86-64.so.2")));
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert!(
+            res.warnings
+                .iter()
+                .any(|w| w.contains("PT_INTERP") && w.contains("cannot be parsed")),
+            "{:?}",
+            res.warnings
         );
     }
 
@@ -1309,6 +1350,7 @@ mod tests {
                 elf(&["../lib/libfoo.so"], &[], &[], Some(interp)),
             ),
             (canonical(&lib), elf(&[], &[], &[], None)),
+            (canonical(&loader), elf(&[], &[], &[], None)),
         ]);
         let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
         let resolved = res

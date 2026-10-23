@@ -80,6 +80,9 @@ struct Scenario {
     place_interp: bool,
     // Make that loader a data file, to drive the PT_INTERP refusal.
     interp_non_elf: bool,
+    // The loader's parsed facts: none (it does not parse, and warns), a core dump (refused), or
+    // a shared object.
+    interp_core: Option<bool>,
 }
 
 // A fixed, safe interpreter path used when `place_interp` is set — resolution reroots it under the
@@ -160,6 +163,21 @@ fuzz_target!(|scn: Scenario| {
     let mut infos: HashMap<PathBuf, ElfInfo> = HashMap::new();
     let mut unreadable: HashSet<PathBuf> = HashSet::new();
     infos.insert(canonical(&exe), root_facts.into_elf());
+    if let Some(core) = scn.interp_core {
+        let loader = ElfInfo {
+            interpreter: None,
+            needed: Vec::new(),
+            rpaths: Vec::new(),
+            runpaths: Vec::new(),
+            soname: None,
+            is_64: true,
+            machine: 0,
+            uses_dlopen: false,
+            // ET_CORE (4) or ET_DYN (3).
+            e_type: if core { 4 } else { 3 },
+        };
+        infos.insert(canonical(&root.join(INTERP.trim_start_matches('/'))), loader);
+    }
 
     // Materialise a bounded number of libraries as real files, each mapped to its facts.
     for lib in scn.libs.into_iter().take(24) {
