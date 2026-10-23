@@ -333,6 +333,17 @@ fn unpack_round_trips_an_oci_archive() {
         "libc missing from unpacked rootfs"
     );
     assert!(String::from_utf8_lossy(&out.stdout).contains("unpacked"));
+    // A packed image carries no setuid/setgid bit, so nothing is reported as cleared.
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("setuid"));
+    let json = run(&[
+        "unpack",
+        "--format",
+        "json",
+        archive.to_str().unwrap(),
+        tmp.path().join("again").to_str().unwrap(),
+    ]);
+    let report: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(report["stripped_setid"], serde_json::json!([]));
 }
 
 #[test]

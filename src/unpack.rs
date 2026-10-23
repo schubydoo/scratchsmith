@@ -46,6 +46,7 @@ pub fn run(archive: &Path, dest: &Path) -> Result<UnpackReport> {
 
     std::fs::create_dir_all(dest).with_context(|| format!("creating {}", dest.display()))?;
     let mut files = 0usize;
+    let mut setid = std::collections::BTreeSet::new();
     for layer in layers {
         let digest = strip_sha256(
             layer["digest"]
@@ -55,10 +56,10 @@ pub fn run(archive: &Path, dest: &Path) -> Result<UnpackReport> {
         let media = layer["mediaType"].as_str().unwrap_or_default();
         let bytes = blob(&blobs, digest)?;
         if media.ends_with("gzip") {
-            files += apply_layer(&gunzip(bytes)?, dest)?;
+            files += apply_layer(&gunzip(bytes)?, dest, &mut setid)?;
         } else if media.ends_with("tar") {
             // Uncompressed: hand the blob straight through, no second copy.
-            files += apply_layer(bytes, dest)?;
+            files += apply_layer(bytes, dest, &mut setid)?;
         } else {
             bail!("unsupported layer media type: {}", shown(media, SHOWN_MAX));
         }
@@ -69,6 +70,10 @@ pub fn run(archive: &Path, dest: &Path) -> Result<UnpackReport> {
         dir: dest.display().to_string(),
         layers: layers.len(),
         files,
+        stripped_setid: setid
+            .iter()
+            .map(|p: &PathBuf| p.display().to_string())
+            .collect(),
     })
 }
 
@@ -142,7 +147,29 @@ fn read_bounded(entry: impl Read, budget: &mut u64, name: &str) -> Result<Vec<u8
 
 // Apply one layer's tar into `dest`: first honor its whiteouts (deletions of lower layers),
 // then extract its real files. Both paths refuse anything that escapes `dest`.
-fn apply_layer(tar_bytes: &[u8], dest: &Path) -> Result<usize> {
+// An entry path as the image path it names: `./usr/bin/x` and `usr/bin/x` are both `/usr/bin/x`.
+fn image_path(entry: &Path) -> PathBuf {
+    let mut out = PathBuf::from("/");
+    out.extend(entry.components().filter_map(|c| match c {
+        std::path::Component::Normal(n) => Some(n),
+        _ => None,
+    }));
+    out
+}
+
+// Drop `path` and everything under it from the setuid/setgid record: a whiteout removed them.
+fn forget_under(setid: &mut std::collections::BTreeSet<PathBuf>, path: &Path) {
+    setid.retain(|p| !p.starts_with(path));
+}
+
+// `setid` collects the image paths whose setuid or setgid bit this extraction cleared, as the
+// final image has them: a later layer that rewrites a path without the bit, or a whiteout that
+// deletes it, takes it off again.
+fn apply_layer(
+    tar_bytes: &[u8],
+    dest: &Path,
+    setid: &mut std::collections::BTreeSet<PathBuf>,
+) -> Result<usize> {
     let dest_canon =
         std::fs::canonicalize(dest).with_context(|| format!("resolving {}", dest.display()))?;
 
@@ -153,6 +180,13 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path) -> Result<usize> {
             continue;
         };
         if let Some(stripped) = name.strip_prefix(".wh.") {
+            let parent = image_path(path.parent().unwrap_or(Path::new("")));
+            if stripped == ".wh..opq" {
+                // An opaque marker clears the directory's contents, not the directory.
+                setid.retain(|p| !p.starts_with(&parent) || p == &parent);
+            } else {
+                forget_under(setid, &parent.join(stripped));
+            }
             apply_whiteout(
                 &dest_canon,
                 dest,
@@ -183,6 +217,13 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path) -> Result<usize> {
         }
         // `unpack_in` returns Ok(false) when it refuses a path that escapes `dest`. Fail
         // loudly: a silently-dropped entry ships a rootfs that does not match the image.
+        // The mask clears the bits on disk; remember where, so the report can say so.
+        let image = image_path(&path);
+        if e.header().mode().is_ok_and(|m| m & 0o6000 != 0) {
+            setid.insert(image);
+        } else {
+            setid.remove(&image);
+        }
         if !e.unpack_in(dest).map_err(escape_tar_err)? {
             bail!(
                 "refusing to extract an entry that escapes the target: {}",
@@ -390,10 +431,53 @@ mod tests {
             ("bin/sgid", tar::EntryType::Regular, 0o2755),
             ("shared/", tar::EntryType::Directory, 0o6755),
         ]);
-        apply_layer(&layer, &dest).unwrap();
+        apply_layer(&layer, &dest, &mut Default::default()).unwrap();
         assert_eq!(mode_of(&dest.join("bin/suid")), 0o755);
         assert_eq!(mode_of(&dest.join("bin/sgid")), 0o755);
         assert_eq!(mode_of(&dest.join("shared")), 0o755);
+    }
+
+    #[test]
+    fn the_report_names_each_cleared_bit_as_the_final_image_has_it() {
+        use std::collections::BTreeSet;
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let mut setid = BTreeSet::new();
+        apply_layer(
+            &tar_with_modes(&[
+                ("./usr/bin/su", tar::EntryType::Regular, 0o4755),
+                ("usr/bin/wall", tar::EntryType::Regular, 0o2755),
+                ("usr/bin/ls", tar::EntryType::Regular, 0o755),
+                ("var/mail/", tar::EntryType::Directory, 0o2775),
+                ("opt/a/sgid", tar::EntryType::Regular, 0o2755),
+            ]),
+            &dest,
+            &mut setid,
+        )
+        .unwrap();
+        let names = |s: &BTreeSet<PathBuf>| {
+            s.iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&setid),
+            ["/opt/a/sgid", "/usr/bin/su", "/usr/bin/wall", "/var/mail"]
+        );
+
+        // A later layer rewrites `su` without the bit, deletes `wall`, and clears `/opt/a`.
+        apply_layer(
+            &tar_with_modes(&[
+                ("usr/bin/su", tar::EntryType::Regular, 0o755),
+                ("usr/bin/.wh.wall", tar::EntryType::Regular, 0o644),
+                ("opt/a/.wh..wh..opq", tar::EntryType::Regular, 0o644),
+            ]),
+            &dest,
+            &mut setid,
+        )
+        .unwrap();
+        assert_eq!(names(&setid), ["/var/mail"]);
     }
 
     #[test]
@@ -405,7 +489,7 @@ mod tests {
             ("tmp/", tar::EntryType::Directory, 0o1777),
             ("etc/conf", tar::EntryType::Regular, 0o644),
         ]);
-        apply_layer(&layer, &dest).unwrap();
+        apply_layer(&layer, &dest, &mut Default::default()).unwrap();
         assert_eq!(mode_of(&dest.join("tmp")), 0o1777);
         assert_eq!(mode_of(&dest.join("etc/conf")), 0o644);
     }
@@ -416,7 +500,7 @@ mod tests {
         let dest = tmp.path().join("out");
         std::fs::create_dir_all(&dest).unwrap();
         let layer = tar_of(&[("bin/app", b"hi"), ("etc/conf", b"x")]);
-        let n = apply_layer(&layer, &dest).unwrap();
+        let n = apply_layer(&layer, &dest, &mut Default::default()).unwrap();
         assert!(dest.join("bin/app").exists());
         assert_eq!(std::fs::read(dest.join("bin/app")).unwrap(), b"hi");
         assert!(dest.join("etc/conf").exists());
@@ -431,7 +515,7 @@ mod tests {
         std::fs::write(dest.join("etc/keep"), b"k").unwrap();
         std::fs::write(dest.join("etc/gone"), b"g").unwrap();
         let layer = tar_of(&[("etc/.wh.gone", b"")]);
-        apply_layer(&layer, &dest).unwrap();
+        apply_layer(&layer, &dest, &mut Default::default()).unwrap();
         assert!(dest.join("etc/keep").exists(), "unrelated file kept");
         assert!(!dest.join("etc/gone").exists(), "whiteout should delete");
         assert!(!dest.join("etc/.wh.gone").exists(), "marker not written");
@@ -444,7 +528,12 @@ mod tests {
         std::fs::create_dir_all(dest.join("usr/lib")).unwrap();
         std::fs::write(dest.join("usr/lib/keep"), b"k").unwrap();
         // `.wh.` with an empty name must not wipe `usr/lib`.
-        apply_layer(&tar_of(&[("usr/lib/.wh.", b"")]), &dest).unwrap();
+        apply_layer(
+            &tar_of(&[("usr/lib/.wh.", b"")]),
+            &dest,
+            &mut Default::default(),
+        )
+        .unwrap();
         assert!(dest.join("usr/lib/keep").exists());
     }
 
@@ -461,8 +550,18 @@ mod tests {
         std::os::unix::fs::symlink(&outside, dest.join("etc")).unwrap();
 
         // A later layer whites out `etc/secret`, then clears `etc` opaquely.
-        apply_layer(&tar_of(&[("etc/.wh.secret", b"")]), &dest).unwrap();
-        apply_layer(&tar_of(&[("etc/.wh..wh..opq", b"")]), &dest).unwrap();
+        apply_layer(
+            &tar_of(&[("etc/.wh.secret", b"")]),
+            &dest,
+            &mut Default::default(),
+        )
+        .unwrap();
+        apply_layer(
+            &tar_of(&[("etc/.wh..wh..opq", b"")]),
+            &dest,
+            &mut Default::default(),
+        )
+        .unwrap();
 
         assert!(
             outside.join("secret").exists(),
@@ -699,7 +798,7 @@ mod tests {
         let whiteout = tar_of(&[("f\x1b[2J/.wh.g\nforged", b"")]);
 
         for layer in [escaping, blocked, whiteout] {
-            assert_escaped(&apply_layer(&layer, &dest).unwrap_err());
+            assert_escaped(&apply_layer(&layer, &dest, &mut Default::default()).unwrap_err());
         }
     }
 
@@ -744,7 +843,10 @@ mod tests {
         let escaping = ar.into_inner().unwrap();
 
         for layer in [symlink, escaping] {
-            let shown = format!("{:#}", apply_layer(&layer, &dest).unwrap_err());
+            let shown = format!(
+                "{:#}",
+                apply_layer(&layer, &dest, &mut Default::default()).unwrap_err()
+            );
             assert!(shown.len() < 6 * TAR_ERR_MAX + 256, "{} bytes", shown.len());
             assert!(shown.contains(" bytes)"), "{shown}");
             assert!(!shown.chars().any(char::is_control));
