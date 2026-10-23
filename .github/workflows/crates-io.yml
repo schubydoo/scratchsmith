@@ -46,6 +46,9 @@ jobs:
     # so each publish needs one click after the tag. The crates.io Trusted Publisher must name
     # this environment too (see the bootstrap note above), so that an OIDC token minted outside
     # it is refused.
+    # An unapproved run waits, and GitHub cancels it after 30 days without a red run, so the
+    # release ships everywhere but crates.io. Recover by re-dispatching this workflow from the
+    # tag: the version check below makes that a no-op once the version is live.
     environment: crates-io
     permissions:
       contents: read # checkout
