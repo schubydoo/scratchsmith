@@ -501,7 +501,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             let outcome = crate::registry::push_index(&target, &sources)?;
             let signed = if sign {
                 // cosign signs a registry image by digest; the push must have returned one.
-                let dref = outcome.digest_ref.clone().context(
+                let dref = outcome.digest_ref?.context(
                     "cannot sign: the registry did not return a digest for the pushed index",
                 )?;
                 crate::supplychain::cosign_sign(&dref)?;

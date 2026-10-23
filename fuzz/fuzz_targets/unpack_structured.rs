@@ -5,7 +5,8 @@
 //! files, directories, symlinks (whose targets may escape), whiteouts (`.wh.` and opaque),
 //! chosen media types, an optional digest tamper, and an optional image-index manifest — so
 //! the fuzzer reaches the layer application, whiteout deletion, path-containment, digest
-//! verification, and media dispatch that the raw target cannot. It asserts no panic.
+//! verification, and media dispatch that the raw target cannot. It asserts no panic, and
+//! that no error it returns can break a line of output.
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
@@ -254,5 +255,18 @@ fuzz_target!(|spec: Spec| {
     if std::fs::write(&archive, &bytes).is_err() {
         return;
     }
-    let _ = scratchsmith::unpack::run(&archive, &tmp.path().join("out"));
+    // An error quotes text out of the archive (digests, media types, entry paths, tar's own
+    // header text) and `main` prints it to the terminal. None may carry a character that
+    // breaks or reorders a line, or the archive could forge a line of scratchsmith's output.
+    // `breaks_a_line` is the set the escape uses: Cc, the separators, and the bidi controls.
+    // Entry paths here pass `rel`, so what this mainly reaches is a symlink target that
+    // tar quotes in its own errors.
+    use scratchsmith::resolver::breaks_a_line;
+    if let Err(err) = scratchsmith::unpack::run(&archive, &tmp.path().join("out")) {
+        let shown = format!("{err:#}");
+        assert!(
+            !shown.chars().any(breaks_a_line),
+            "an unpack error carries a character that breaks a line: {shown:?}"
+        );
+    }
 });

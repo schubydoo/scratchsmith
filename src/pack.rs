@@ -842,24 +842,29 @@ fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackR
 }
 
 /// Pack `binary` and push it straight to a registry reference — no Docker daemon.
-/// Credentials come from the local Docker config; blobs the registry already has are
-/// skipped.
+/// Credentials come from the local Docker config; every blob is uploaded (oci-client 0.18
+/// makes no HEAD check first).
 fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackReport> {
     if opts.smoke {
         bail!("--smoke needs a running image, so it isn't supported with --push; pull the pushed image and run it separately, or drop --smoke");
     }
     let mut s = stage_for_image(binary, opts)?;
     // The push returns the pushed image's digest when the registry reports one; a plain push
-    // never fails on a missing digest — only signing, which needs it, does.
+    // never fails on a missing or mismatched digest — only signing, which needs it, does.
     let (digest_ref, ms) = timed(|| crate::registry::push_to_registry(&s.tree, reference, &s.cfg))?;
     s.clock.timings.deliver_ms = Some(ms);
     let signed = if opts.sign {
-        let dref = digest_ref
+        let dref = digest_ref?
             .context("cannot sign: the registry did not return a digest for the pushed image")?;
         let (signed, ms) = timed(|| sign_pushed(&dref, opts))?;
         s.clock.timings.sign_ms = Some(ms);
         Some(signed)
     } else {
+        // Nothing reads the digest without --sign, but a registry that names a manifest other
+        // than the one just pushed must not pass in silence.
+        if let Err(e) = &digest_ref {
+            s.warnings.push(format!("{e:#}"));
+        }
         None
     };
     Ok(PackReport {

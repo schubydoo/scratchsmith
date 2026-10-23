@@ -185,7 +185,14 @@ impl IndexReport {
     pub fn to_text(&self) -> String {
         let mut out = format!("pushed index {}\n", self.pushed);
         for m in &self.manifests {
-            out.push_str(&format!("  {} {} ({})\n", m.platform, m.digest, m.source));
+            // The platform comes from a registry-served config blob: escaped if it holds a
+            // character that breaks a line, or it could forge one here.
+            out.push_str(&format!(
+                "  {} {} ({})\n",
+                crate::resolver::escape_if_line_breaking(&m.platform),
+                m.digest,
+                m.source
+            ));
         }
         if let Some(signed) = &self.signed {
             out.push_str(&format!("signed {signed}\n"));
@@ -324,14 +331,28 @@ impl DiffReport {
         if !self.has_changes() {
             out.push_str("no changes\n");
         }
+        // A path is an on-disk name, chosen by whoever built the tree (an unpacked image's
+        // tar headers): escaped if it holds a character that breaks a line, or it could
+        // forge one here.
         for f in &self.added {
-            out.push_str(&format!("+ {} ({})\n", f.path, human_size(f.size)));
+            out.push_str(&format!(
+                "+ {} ({})\n",
+                crate::resolver::escape_if_line_breaking(&f.path),
+                human_size(f.size)
+            ));
         }
         for f in &self.removed {
-            out.push_str(&format!("- {} ({})\n", f.path, human_size(f.size)));
+            out.push_str(&format!(
+                "- {} ({})\n",
+                crate::resolver::escape_if_line_breaking(&f.path),
+                human_size(f.size)
+            ));
         }
         for path in &self.changed {
-            out.push_str(&format!("~ {path}\n"));
+            out.push_str(&format!(
+                "~ {}\n",
+                crate::resolver::escape_if_line_breaking(path)
+            ));
         }
         let delta = self.size_after as i64 - self.size_before as i64;
         let sign = if delta >= 0 { "+" } else { "-" };
@@ -542,6 +563,169 @@ mod tests {
         };
         assert!(!report.has_changes());
         assert!(report.to_text().contains("no changes"));
+    }
+
+    use crate::resolver::breaks_a_line;
+
+    #[test]
+    fn diff_report_text_escapes_crafted_file_names() {
+        // A path is an on-disk name, and after `unpack` of an image someone else built, its
+        // tar headers chose it. One with a newline, a carriage return, a terminal escape, a
+        // line separator or a bidi isolate must stay on its own line of the report, as text.
+        let forged = "lib/x\nerror: forged\r\x1b[2J\u{2028}\u{2067}y";
+        let report = DiffReport {
+            added: vec![DiffFile {
+                path: forged.into(),
+                size: 10,
+            }],
+            removed: vec![DiffFile {
+                path: forged.into(),
+                size: 4,
+            }],
+            changed: vec![forged.into()],
+            size_before: 4,
+            size_after: 10,
+        };
+        let text = report.to_text();
+        assert!(
+            text.lines().all(|l| !l.chars().any(breaks_a_line)),
+            "{text:?}"
+        );
+        let shown = "lib/x\\nerror: forged\\r\\u{1b}[2J\\u{2028}\\u{2067}y";
+        assert_eq!(
+            text,
+            format!("+ {shown} (10 B)\n- {shown} (4 B)\n~ {shown}\nsize: 4 B -> 10 B (+6 B)")
+        );
+
+        // The JSON keeps the real name: serde escapes it, and a consumer needs the bytes.
+        let v = serde_json::to_value(&report).unwrap();
+        assert_eq!(v["added"][0]["path"], forged);
+        assert_eq!(v["removed"][0]["path"], forged);
+        assert_eq!(v["changed"][0], forged);
+    }
+
+    #[test]
+    fn diff_and_index_text_print_ordinary_names_unchanged() {
+        // The escaping must leave what an honest name holds alone, byte for byte.
+        let diff = DiffReport {
+            added: vec![DiffFile {
+                path: "usr/lib/x86_64-linux-gnu/libssl.so.3".into(),
+                size: 10,
+            }],
+            removed: vec![DiffFile {
+                path: "usr/share/fonts/DejaVu Sans-Bold_1.2+x.ttf".into(),
+                size: 4,
+            }],
+            changed: vec!["usr/share/locale/fr/café.mo".into()],
+            size_before: 1_500_000,
+            size_after: 1_499_000,
+        };
+        assert_eq!(
+            diff.to_text(),
+            "+ usr/lib/x86_64-linux-gnu/libssl.so.3 (10 B)\n\
+             - usr/share/fonts/DejaVu Sans-Bold_1.2+x.ttf (4 B)\n\
+             ~ usr/share/locale/fr/café.mo\n\
+             size: 1.5 MB -> 1.5 MB (-1.0 KB)"
+        );
+
+        let index = IndexReport {
+            pushed: "ghcr.io/you/app:1.0".into(),
+            manifests: vec![
+                IndexManifest {
+                    source: "ghcr.io/you/app:1.0-amd64".into(),
+                    platform: "linux/amd64".into(),
+                    digest: "sha256:aaa".into(),
+                },
+                IndexManifest {
+                    source: "ghcr.io/you/app:1.0-armv7".into(),
+                    platform: "linux/arm/v7".into(),
+                    digest: "sha256:bbb".into(),
+                },
+            ],
+            signed: Some("ghcr.io/you/app@sha256:idx".into()),
+        };
+        assert_eq!(
+            index.to_text(),
+            "pushed index ghcr.io/you/app:1.0\n  \
+             linux/amd64 sha256:aaa (ghcr.io/you/app:1.0-amd64)\n  \
+             linux/arm/v7 sha256:bbb (ghcr.io/you/app:1.0-armv7)\n\
+             signed ghcr.io/you/app@sha256:idx"
+        );
+
+        // Nor may it touch a character that cannot break a line, though `escape_debug` alone
+        // would: a quote, a backslash, a no-break or zero-width space, a leading combining
+        // mark, or the RLM a Hebrew name can carry.
+        for name in [
+            "usr/share/doc/O'Reilly.txt",
+            "srv/quote\"d.txt",
+            "srv/back\\slash",
+            "srv/no\u{a0}break",
+            "srv/zero\u{200b}width",
+            "\u{301}leading-mark",
+            "srv/\u{5e9}\u{5dc}\u{5d5}\u{5dd}\u{200f}.txt",
+        ] {
+            let diff = DiffReport {
+                added: vec![DiffFile {
+                    path: name.into(),
+                    size: 10,
+                }],
+                removed: vec![DiffFile {
+                    path: name.into(),
+                    size: 4,
+                }],
+                changed: vec![name.into()],
+                size_before: 4,
+                size_after: 10,
+            };
+            assert_eq!(
+                diff.to_text(),
+                format!("+ {name} (10 B)\n- {name} (4 B)\n~ {name}\nsize: 4 B -> 10 B (+6 B)")
+            );
+            let index = IndexReport {
+                pushed: "ghcr.io/you/app:1.0".into(),
+                manifests: vec![IndexManifest {
+                    source: "ghcr.io/you/app:1.0-amd64".into(),
+                    platform: name.into(),
+                    digest: "sha256:aaa".into(),
+                }],
+                signed: None,
+            };
+            assert_eq!(
+                index.to_text(),
+                format!(
+                    "pushed index ghcr.io/you/app:1.0\n  \
+                     {name} sha256:aaa (ghcr.io/you/app:1.0-amd64)"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn an_escaped_name_reads_as_a_raw_one_the_tree_could_hold() {
+        // Escaping only what breaks a line leaves one collision: a real newline reads `\n`,
+        // and so does a name holding a backslash and an `n`, printed as it is. Accepted, not
+        // marked: the escaped text is itself a name the hostile tree could have used, so it
+        // prints no line the tree could not already print, and a visual collision is there
+        // anyway (a zero-width space). The JSON keeps the two apart.
+        let hostile = "lib/a\nb";
+        let honest = "lib/a\\nb";
+        let report = |path: &str| DiffReport {
+            added: vec![DiffFile {
+                path: path.into(),
+                size: 1,
+            }],
+            removed: vec![],
+            changed: vec![],
+            size_before: 0,
+            size_after: 1,
+        };
+        assert_eq!(report(hostile).to_text(), report(honest).to_text());
+        let shown = crate::resolver::escape_if_line_breaking(hostile);
+        assert_eq!(report(&shown).to_text(), report(hostile).to_text());
+
+        let json = |path| serde_json::to_value(report(path)).unwrap();
+        assert_eq!(json(hostile)["added"][0]["path"], hostile);
+        assert_eq!(json(honest)["added"][0]["path"], honest);
     }
 
     fn sample_report() -> PackReport {
@@ -833,6 +1017,38 @@ mod tests {
         assert_eq!(json["pushed"], "ghcr.io/you/app:1.0");
         assert_eq!(json["manifests"][1]["platform"], "linux/arm64");
         assert_eq!(json["signed"], "ghcr.io/you/app@sha256:idx");
+    }
+
+    #[test]
+    fn index_report_text_escapes_a_crafted_platform() {
+        // The platform is os/arch/variant out of a config blob the registry served. One with
+        // a newline, a carriage return, a terminal escape, a line separator or a bidi
+        // isolate must stay on its own line of the report, as text.
+        let forged = "linux/amd64\nsigned evil\r\x1b[2J\u{2028}\u{2067}";
+        let report = IndexReport {
+            pushed: "ghcr.io/you/app:1.0".into(),
+            manifests: vec![IndexManifest {
+                source: "ghcr.io/you/app:1.0-amd64".into(),
+                platform: forged.into(),
+                digest: "sha256:aaa".into(),
+            }],
+            signed: None,
+        };
+        let text = report.to_text();
+        assert!(
+            text.lines().all(|l| !l.chars().any(breaks_a_line)),
+            "{text:?}"
+        );
+        assert_eq!(
+            text,
+            "pushed index ghcr.io/you/app:1.0\n  \
+             linux/amd64\\nsigned evil\\r\\u{1b}[2J\\u{2028}\\u{2067} \
+             sha256:aaa (ghcr.io/you/app:1.0-amd64)"
+        );
+
+        // The JSON keeps the real value, as the graph report does.
+        let v = serde_json::to_value(&report).unwrap();
+        assert_eq!(v["manifests"][0]["platform"], forged);
     }
 
     #[test]
