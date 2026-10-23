@@ -336,7 +336,10 @@ jobs:
           # ⚠️ Load-bearing for SECURITY, not for signing. Without it, tag mode silently adds
           # `Bash(git add|commit|rm:*)` and a `git push origin <ref>` wrapper, and writes the
           # Claude App's write token into the remote. With it, tag mode adds two MCP commit
-          # tools instead, and `--disallowedTools` below removes those. A review never commits.
+          # tools instead of the git rules, and `--disallowedTools` below removes those, so no
+          # commit path is left. A review never commits. It does NOT take the token out of the
+          # remote: `replaceCheckoutCredentials` still writes it into `.git/config`. The
+          # `.git/**` Read deny below is the only control for that token; never drop it.
           use_commit_signing: true
           # ⚠️ The exact `submit` rule + the `Write` tool are what make a GROUPED review
           # possible. `gh pr review` can open a review body but CANNOT attach inline
@@ -370,6 +373,10 @@ jobs:
           # the capability; the `ADDED -gt 1` check is what catches such a split afterwards.
           #
           # ⚠️ --disallowedTools: a deny rule wins over every allow rule, whoever adds it.
+          #   `Read(//<path>)` is Claude Code's filesystem-absolute form, so a rule built from a
+          #   `${{ }}` value that already starts with `/` gets ONE more `/` in front. With one
+          #   slash fewer the rule resolves against the working directory, matches nothing,
+          #   and the job still reports green.
           #   - the two MCP commit tools `use_commit_signing` adds (see above);
           #   - reads of files that hold a secret, because a review is public: /proc (the
           #     environment carries CLAUDE_CODE_OAUTH_TOKEN), $RUNNER_TEMP (step outputs),
@@ -454,8 +461,8 @@ jobs:
             elif [ "$ADDED" -gt 1 ]; then
               echo "::warning::the review SPLIT into $ADDED submitted reviews (thread replies are not counted). Cause is one of: standalone inline comments (each becomes its own review; the MCP inline-comment tool is not allowlisted for this reason), or falling back from the 'Write review.json + gh api --input' recipe."
             else
-              # One review is necessary, not sufficient: `gh pr review --comment` also yields
-              # exactly one, with no anchors. Count the anchors the added (newest, highest-id)
+              # One review is necessary, not sufficient: a review.json whose `comments` array is
+              # empty also yields exactly one, with no anchors. Count the anchors the added (newest, highest-id)
               # review carries and read the tally its body must open with.
               RID=$(printf '%s\n' "$REVIEWS" | tail -1)
               ANCHORS=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews/${RID}/comments" --paginate \
@@ -471,7 +478,7 @@ jobs:
               elif [ -z "$TALLY" ]; then
                 echo "::warning::the one added review carries $ANCHORS anchor(s) but NO tally line in its body. Either the body is EMPTY (a standalone review comment GitHub wrapped in a review of its own — not the grouped POST, so no summary table), the body could not be read, or the first line is not the tally the instructions require."
               elif [ "$ANCHORS" -eq 0 ] && [ "$FINDINGS" -gt 0 ]; then
-                echo "::warning::one review was submitted but it carries NO inline anchors while its body reports '$TALLY' — a body-only review (e.g. 'gh pr review --comment'); the findings have no resolvable threads."
+                echo "::warning::one review was submitted but it carries NO inline anchors while its body reports '$TALLY' — a body-only review (a review.json with an empty comments array); the findings have no resolvable threads."
               else
                 echo "::notice::one grouped review submitted with $ANCHORS inline anchor(s); tally: $TALLY"
               fi
