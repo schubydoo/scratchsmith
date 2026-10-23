@@ -411,6 +411,10 @@ scratchsmith unpack app.oci.tar ./rootfs   # apply the layers into ./rootfs
 export), applies each layer in order, and honors whiteouts. Combine it with `diff` to
 compare two images: unpack both, then run `scratchsmith diff old new`.
 
+`unpack` clears the setuid and setgid bits on every file it writes. An untrusted image cannot
+then plant a setuid program owned by the user who unpacks it. The unpacked tree does not show
+which files in the image had those bits.
+
 ## Multi-arch images
 
 Scratchsmith resolves against the host's libraries, so it packs for the architecture it runs on.
