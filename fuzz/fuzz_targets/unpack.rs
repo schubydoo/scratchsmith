@@ -27,10 +27,8 @@ fuzz_target!(|data: &[u8]| {
     // An error quotes text out of the archive (digests, media types, entry paths, tar's own
     // header text) and `main` prints it to the terminal. None may carry a character that
     // breaks or reorders a line, or the archive could forge a line of scratchsmith's output.
-    // `is_control` is the Cc category only, so the separators and bidi overrides are listed.
-    let breaks_a_line = |c: char| {
-        c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}')
-    };
+    // `breaks_a_line` is the set the escape uses: Cc, the separators, and the bidi controls.
+    use scratchsmith::resolver::breaks_a_line;
     if let Err(err) = scratchsmith::unpack::run(&archive, &dest) {
         let shown = format!("{err:#}");
         assert!(

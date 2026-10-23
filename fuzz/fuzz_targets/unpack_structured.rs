@@ -258,12 +258,10 @@ fuzz_target!(|spec: Spec| {
     // An error quotes text out of the archive (digests, media types, entry paths, tar's own
     // header text) and `main` prints it to the terminal. None may carry a character that
     // breaks or reorders a line, or the archive could forge a line of scratchsmith's output.
-    // `is_control` is the Cc category only, so the separators and bidi overrides are listed.
+    // `breaks_a_line` is the set the escape uses: Cc, the separators, and the bidi controls.
     // Entry paths here pass `rel`, so what this mainly reaches is a symlink target that
     // tar quotes in its own errors.
-    let breaks_a_line = |c: char| {
-        c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}')
-    };
+    use scratchsmith::resolver::breaks_a_line;
     if let Err(err) = scratchsmith::unpack::run(&archive, &tmp.path().join("out")) {
         let shown = format!("{err:#}");
         assert!(

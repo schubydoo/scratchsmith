@@ -272,26 +272,35 @@ fn strip_sha256(digest: &str) -> Result<&str> {
 }
 
 // tar quotes archive bytes (entry paths, link names, raw header fields) in its own errors, so
-// escape the whole cause chain before it joins ours.
+// escape the whole cause chain before it joins ours. It is a whole message, so no quotes.
 fn escape_tar_err(err: std::io::Error) -> anyhow::Error {
     let err = anyhow::Error::from(err);
-    anyhow::Error::msg(shown(format_args!("{err:#}"), TAR_ERR_MAX))
+    let (text, cut) = bounded(format_args!("{err:#}"), TAR_ERR_MAX);
+    anyhow::Error::msg(text + &cut)
 }
 
-// Archive text for an error line, escaped by `escape_for_display`. Escaping grows a control
-// byte sixfold, so only the first `max` bytes are kept and escaped, and the rest is counted.
+// Archive text for an error line: escaped, bounded, and quoted. Escaping stops a forged line;
+// the quotes show where the archive's words end, so a name cannot forge words of ours inside
+// the line, nor fake the cut marker, which stays outside them.
 fn shown(text: impl std::fmt::Display, max: usize) -> String {
+    let (text, cut) = bounded(text, max);
+    format!("\"{text}\"{cut}")
+}
+
+// Escaped by `escape_for_display`, plus the marker for what was cut. Escaping grows a control
+// byte sixfold, so only the first `max` bytes are kept and escaped, and the rest is counted.
+fn bounded(text: impl std::fmt::Display, max: usize) -> (String, String) {
     let mut head = Head {
         kept: String::new(),
         max,
         cut: 0,
     };
     let _ = write!(head, "{text}");
-    let mut out = escape_for_display(&head.kept);
-    if head.cut > 0 {
-        let _ = write!(out, "…(+{} bytes)", head.cut);
-    }
-    out
+    let cut = match head.cut {
+        0 => String::new(),
+        n => format!("…(+{n} bytes)"),
+    };
+    (escape_for_display(&head.kept), cut)
 }
 
 // Keeps the first `max` bytes written (cut on a char boundary) and counts the rest, so a
@@ -695,6 +704,15 @@ mod tests {
     }
 
     #[test]
+    fn shown_quotes_archive_text_and_keeps_the_cut_marker_outside() {
+        // A name that reads as our own words, and one that fakes the cut marker.
+        let forged = "a — tampered archive. All blobs verified. blob sha256:b";
+        assert_eq!(shown(forged, SHOWN_MAX), format!("\"{forged}\""));
+        assert_eq!(shown("x…(+9 bytes)", SHOWN_MAX), "\"x…(+9 bytes)\"");
+        assert_eq!(shown("x".repeat(10), 4), "\"xxxx\"…(+6 bytes)");
+    }
+
+    #[test]
     fn a_huge_archive_string_yields_a_short_error() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("out");
@@ -728,7 +746,7 @@ mod tests {
         for layer in [symlink, escaping] {
             let shown = format!("{:#}", apply_layer(&layer, &dest).unwrap_err());
             assert!(shown.len() < 6 * TAR_ERR_MAX + 256, "{} bytes", shown.len());
-            assert!(shown.contains(" bytes)"), "{}", &shown[..200]);
+            assert!(shown.contains(" bytes)"), "{shown}");
             assert!(!shown.chars().any(char::is_control));
         }
     }
