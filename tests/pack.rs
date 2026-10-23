@@ -1101,8 +1101,10 @@ fn push_to_local_registry_is_pullable_and_runnable() {
             "-d",
             "--name",
             "ss-test-reg",
+            // Loopback only: a published port bypasses the host firewall, and this
+            // unauthenticated registry serves the tag the test later pulls and runs.
             "-p",
-            "5099:5000",
+            "127.0.0.1:5099:5000",
             "registry:2",
         ])
         .output()
@@ -1199,8 +1201,9 @@ fn index_assembles_a_pushed_image_into_an_index() {
             "-d",
             "--name",
             "ss-test-reg-idx",
+            // Loopback only, as above: keep the unauthenticated registry off the LAN.
             "-p",
-            "5098:5000",
+            "127.0.0.1:5098:5000",
             "registry:2",
         ])
         .output()
