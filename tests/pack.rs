@@ -1238,7 +1238,7 @@ fn index_assembles_a_pushed_image_into_an_index() {
         outcome.entries[0].platform
     );
     assert!(
-        outcome.digest_ref.is_some(),
+        matches!(outcome.digest_ref, Ok(Some(_))),
         "the registry should report the pushed index digest"
     );
 
