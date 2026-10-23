@@ -117,12 +117,13 @@ FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, pos
   review is the difference between one pass over the PR and several.
 - **How to submit it, exactly.** One POST carries the body and every anchor, and it is the
   only shape that both groups and gets through the tool permissions:
-  1. Use the `Write` tool to create `review.json` in the workspace root with the payload:
-     `commit_id` (the PR head SHA: the `headRefOid` field of the exact `gh pr view <n> --json …` command the system prompt lists),
+  1. Use the `Write` tool to create `review.json` at the exact path the submit command in
+     the system prompt names, outside every checkout, with the payload: `commit_id` (the
+     pinned head SHA the system prompt names, which `./pr-head` is checked out at),
      `event: "COMMENT"`, `body` (the summary), and a `comments` array of
      `{path, line, side: "RIGHT", body}` entries, one per finding (`side: "LEFT"` only for
      a line the diff removes).
-  2. Run `gh api repos/<owner>/<repo>/pulls/<n>/reviews --input review.json`, exactly as
+  2. Run `gh api repos/<owner>/<repo>/pulls/<n>/reviews --input <dir>/review.json`, exactly as
      the system prompt spells it out with the real values. The tool permissions match that
      command character for character, so an added flag or a different path is refused.
 
@@ -137,7 +138,8 @@ FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, pos
   (`POST .../pulls/<n>/comments` without `in_reply_to`, or an inline-comment tool) in a
   submitted review of its own, so every one of them splits the review. Every anchor rides in
   the `comments` array of the single POST above; a clarification after the fact is a reply
-  on the thread, not a new comment. To reply, `Write` `reply.json` as
+  on the thread, not a new comment. To reply, `Write` `reply.json`, at the path the reply
+  command names, as
   `{"body": "...", "in_reply_to": <id>}`, where `<id>` is the numeric id of the review
   comment that opens the thread. Get it from
   `gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate --jq '.[] | {id, in_reply_to_id,
@@ -145,7 +147,7 @@ FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, pos
   review-comment ids. The system prompt carries it verbatim. It is read-only, and it prints
   those fields for each comment, not the bodies. The id you need is the `id` of the thread's
   comment whose `in_reply_to_id` is `null`. Find that comment by its `path` and
-  `original_line`, because a push that outdates the thread sets `line` to `null`. Then run `gh api repos/<owner>/<repo>/pulls/<n>/comments --input reply.json`.
+  `original_line`, because a push that outdates the thread sets `line` to `null`. Then run `gh api repos/<owner>/<repo>/pulls/<n>/comments --input <dir>/reply.json`.
   Run both exactly as the system prompt spells them out. `reply.json` must **always** carry
   `in_reply_to`: without it that endpoint posts a standalone review comment, which splits
   the review. These are refused, so do not reach for them: any other `gh api` call (other
