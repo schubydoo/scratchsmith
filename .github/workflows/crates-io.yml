@@ -40,6 +40,10 @@ jobs:
     if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The `crates-io` environment admits only `v*` tags and waits for the maintainer's approval,
+    # so each publish needs one click after the tag. The crates.io Trusted Publisher names this
+    # environment too, so an OIDC token minted outside it is refused.
+    environment: crates-io
     permissions:
       contents: read # checkout
       id-token: write # OIDC token for Trusted Publishing
