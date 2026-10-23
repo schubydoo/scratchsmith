@@ -271,29 +271,26 @@ impl LinkInfoSource for GoblinSource {
     }
 }
 
-// The most read from a character or block device. No real library is one, but the packed ELF
-// picks the path (a DT_NEEDED with a slash, or a search dir plus a soname), and `/dev/zero`
-// never ends.
+// The most read from a device or a FIFO. No real library is one, but `/dev/zero` never ends,
+// and neither does a FIFO that `yes` feeds.
 const DEVICE_READ_CAP: u64 = 256 << 20;
 
 // Read a whole file, as `std::fs::read` does, with the stop chosen by fstat on the open handle.
-// A device stops one byte past `device_cap` and fails. A regular file may read past the length
-// it reported, because a procfs file reports 0 and still has content, but not past
-// `device_cap` too: a tracefs pipe is a regular file of length 0 that never ends. A FIFO or
-// pipe reads to EOF as before: it ends when its writer closes, and an operator can pipe in a
-// real library (`--include <(cat lib.so)`). Only the operator names one: `resolve_with`
-// refuses a FIFO that a name out of an ELF resolves to, and PT_INTERP must be a regular file.
+// A device or a FIFO stops one byte past `device_cap` and fails. A regular file may read past
+// the length it reported, because a procfs file reports 0 and still has content, but not past
+// `device_cap` too: a tracefs pipe is a regular file of length 0 that never ends. A FIFO ends
+// when its writer closes, so an operator can still pipe in a real library
+// (`--include <(cat lib.so)`). Only the operator names one: `resolve_with` refuses a FIFO that
+// a name out of an ELF resolves to, and PT_INTERP must be a regular file.
 fn read_bounded(path: &Path, device_cap: u64) -> Result<Vec<u8>> {
     use std::io::Read;
-    use std::os::unix::fs::FileTypeExt;
 
     let reading = || format!("reading {}", path.display());
     // A blocking open, as before: a FIFO's open waits for a writer that starts late.
-    let mut file = std::fs::File::open(path).with_context(reading)?;
+    let file = std::fs::File::open(path).with_context(reading)?;
     let meta = file.metadata().with_context(reading)?;
-    let kind = meta.file_type();
     let mut bytes = Vec::new();
-    if kind.is_file() {
+    if meta.is_file() {
         let len = meta.len();
         bytes
             .try_reserve_exact(usize::try_from(len).unwrap_or(usize::MAX))
@@ -310,20 +307,18 @@ fn read_bounded(path: &Path, device_cap: u64) -> Result<Vec<u8>> {
                 printable(path)
             );
         }
-    } else if kind.is_char_device() || kind.is_block_device() {
-        // Its size is no length to reserve: grow as bytes arrive.
+    } else {
+        // A device or a FIFO: its size is no length to reserve, so grow as bytes arrive.
         file.take(device_cap.saturating_add(1))
             .read_to_end(&mut bytes)
             .with_context(reading)?;
         if bytes.len() as u64 > device_cap {
             bail!(
-                "{} is a device that yields more than {device_cap} bytes, so it is not read \
-                 as an ELF",
+                "{} is a device or a FIFO that yields more than {device_cap} bytes, so it is \
+                 not read as an ELF",
                 printable(path)
             );
         }
-    } else {
-        file.read_to_end(&mut bytes).with_context(reading)?;
     }
     Ok(bytes)
 }
@@ -1469,11 +1464,17 @@ mod tests {
         let fifo = root.join("usr/lib/libfifo.so");
         fs::create_dir_all(fifo.parent().unwrap()).unwrap();
         mkfifo(&fifo);
-        let infos = HashMap::from([(
-            canonical(&exe),
-            elf(&["/usr/lib/libfifo.so"], &[], &[], None),
-        )]);
-        let err = returns(move || resolve_err(&exe, &root, &[], &MapSource { infos }));
+        // The library goes through GoblinSource, so a read that ran would open the FIFO.
+        let src = ScriptedRoot {
+            root: exe.clone(),
+            info: elf(&["/usr/lib/libfifo.so"], &[], &[], None),
+        };
+        let err = returns(move || {
+            format!(
+                "{:#}",
+                resolve_with(&exe, &Sysroot::new(&root), &[], &src).unwrap_err()
+            )
+        });
         assert!(
             err.contains("`/usr/lib/libfifo.so`") && err.contains("not a regular file"),
             "{err}"
@@ -1496,7 +1497,7 @@ mod tests {
             let err = read_bounded(Path::new(dev), TEST_CAP).unwrap_err();
             assert!(
                 err.to_string()
-                    .contains("is a device that yields more than 65536 bytes"),
+                    .contains("is a device or a FIFO that yields more than 65536 bytes"),
                 "{err}"
             );
         }
@@ -1568,8 +1569,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let fifo = tmp.path().join("liblate.so");
         mkfifo(&fifo);
-        // An ELF (this test binary), bigger than the pipe buffer and than any device cap here.
+        // An ELF (this test binary), bigger than the pipe buffer, and under the read cap.
         let exe = fs::read(std::env::current_exe().unwrap()).unwrap();
+        assert!(
+            (exe.len() as u64) < DEVICE_READ_CAP,
+            "the test binary outgrew the cap"
+        );
         let want = parse_elf_info(&exe).unwrap();
         let writer_fifo = fifo.clone();
         // The writer opens only after the read has begun, and pauses mid-stream. If the read
@@ -1596,7 +1601,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let fifo = tmp.path().join("libfed.so");
         mkfifo(&fifo);
-        let exe = fs::read(std::env::current_exe().unwrap()).unwrap();
+        // Bigger than the pipe buffer.
+        let exe: Vec<u8> = (0..(1u32 << 20)).map(|i| (i % 251) as u8).collect();
         // A reader that never reads, so the writer opens at once and is mid-write (the data is
         // bigger than the pipe buffer) when the real read opens.
         let _hold = fs::OpenOptions::new()
@@ -1609,10 +1615,31 @@ mod tests {
         std::thread::spawn(move || {
             let _ = w.write_all(&data);
         });
-        // The device cap does not apply to a FIFO.
-        let got = returns(move || read_bounded(&fifo, TEST_CAP).map_err(|e| e.to_string()));
+        let got = returns(move || read_bounded(&fifo, 2 << 20).map_err(|e| e.to_string()));
         let got = got.unwrap();
         assert!(got == exe, "read {} of {} bytes", got.len(), exe.len());
+    }
+
+    #[test]
+    fn an_endless_fifo_fails_at_the_cap() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let fifo = tmp.path().join("libyes.so");
+        mkfifo(&fifo);
+        let writer_fifo = fifo.clone();
+        // `yes > fifo`: the writer never closes, so only the cap ends the read.
+        std::thread::spawn(move || {
+            let mut w = fs::OpenOptions::new()
+                .write(true)
+                .open(&writer_fifo)
+                .unwrap();
+            while w.write_all(&[b'y'; 4096]).is_ok() {}
+        });
+        let err = returns(move || read_bounded(&fifo, TEST_CAP).unwrap_err().to_string());
+        assert!(
+            err.contains("is a device or a FIFO that yields more than 65536 bytes"),
+            "{err}"
+        );
     }
 
     #[test]

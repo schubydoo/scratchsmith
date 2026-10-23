@@ -1053,6 +1053,16 @@ fn write_into(dest: &Path, image: &Path, body: &[u8]) -> Result<()> {
 }
 
 fn copy_into(src: &Path, root: &Path, abs_target: &Path) -> Result<()> {
+    // `fs::copy` refuses anything but a regular file only after it opens it, and the open of
+    // a FIFO with no writer never returns. The resolver already read an --include'd FIFO to
+    // its end, so its writer is gone. `metadata` does not open the file.
+    let md = std::fs::metadata(src).with_context(|| format!("cannot read {}", src.display()))?;
+    if !md.is_file() {
+        bail!(
+            "{} is not a regular file, so it cannot be staged",
+            src.display()
+        );
+    }
     let target = staged_path(root, abs_target, true)?;
     // Copy to a sibling and rename it over the name, as `packages::write_record` does. A
     // file that an earlier pack into this directory left is replaced, never written into:
@@ -1063,16 +1073,6 @@ fn copy_into(src: &Path, root: &Path, abs_target: &Path) -> Result<()> {
         .prefix(".scratchsmith-")
         .tempfile_in(dir)
         .with_context(|| format!("creating a file in {}", dir.display()))?;
-    // `fs::copy` refuses anything but a regular file only after it opens it, and the open of
-    // a FIFO with no writer never returns. The resolver already read an --include'd FIFO to
-    // its end, so its writer is gone.
-    if !src.is_file() {
-        bail!(
-            "copying {} -> {}: the source is not a regular file",
-            src.display(),
-            target.display()
-        );
-    }
     // `fs::copy` gives the sibling the mode of the source, which the rename keeps.
     std::fs::copy(src, tmp.path())
         .with_context(|| format!("copying {} -> {}", src.display(), target.display()))?;
