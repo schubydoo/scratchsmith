@@ -140,9 +140,12 @@ FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, pos
   on the thread, not a new comment. To reply, `Write` `reply.json` as
   `{"body": "...", "in_reply_to": <id>}`, where `<id>` is the numeric id of the review
   comment that opens the thread. Get it from
-  `gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate` (read-only, the only source of
-  review-comment ids): it is the `id` of the thread's comment whose `in_reply_to_id` is
-  `null`. Then run `gh api repos/<owner>/<repo>/pulls/<n>/comments --input reply.json`.
+  `gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate --jq '.[] | {id, in_reply_to_id,
+  path, line, original_line, original_start_line, user: .user.login}'`, the only source of
+  review-comment ids. The system prompt carries it verbatim. It is read-only, and it prints
+  those fields for each comment, not the bodies. The id you need is the `id` of the thread's
+  comment whose `in_reply_to_id` is `null`. Find that comment by its `path` and
+  `original_line`, because a push that outdates the thread sets `line` to `null`. Then run `gh api repos/<owner>/<repo>/pulls/<n>/comments --input reply.json`.
   Run both exactly as the system prompt spells them out. `reply.json` must **always** carry
   `in_reply_to`: without it that endpoint posts a standalone review comment, which splits
   the review. These are refused, so do not reach for them: any other `gh api` call (other
