@@ -22,17 +22,28 @@ struct Entry {
 fn scan(root: &Path) -> Result<BTreeMap<String, Entry>> {
     let mut map = BTreeMap::new();
     for entry in walkdir::WalkDir::new(root).follow_links(false) {
-        let entry = entry.with_context(|| format!("walking {}", root.display()))?;
+        // walkdir's error, and every path below, can carry a file name out of an image
+        // someone else built, so each is escaped before it reaches the terminal.
+        let shown = |p: &Path| crate::resolver::escape_for_display(&p.to_string_lossy());
+        let entry = entry.map_err(|e| {
+            anyhow::anyhow!(
+                "walking {}: {}",
+                shown(root),
+                crate::resolver::escape_for_display(&e.to_string())
+            )
+        })?;
         let rel = entry
             .path()
             .strip_prefix(root)
-            .with_context(|| format!("{} is not under {}", entry.path().display(), root.display()))?
+            .with_context(|| format!("{} is not under {}", shown(entry.path()), shown(root)))?
             .to_string_lossy()
             .into_owned();
         if rel.is_empty() {
             continue; // the root itself
         }
-        let meta = entry.metadata()?;
+        let meta = entry.metadata().map_err(|e| {
+            anyhow::anyhow!("{}", crate::resolver::escape_for_display(&e.to_string()))
+        })?;
         if meta.file_type().is_symlink() {
             let target = std::fs::read_link(entry.path())?;
             map.insert(
@@ -44,7 +55,7 @@ fn scan(root: &Path) -> Result<BTreeMap<String, Entry>> {
             );
         } else if meta.is_file() {
             let fingerprint = sha256_file(entry.path())
-                .with_context(|| format!("reading {}", entry.path().display()))?;
+                .with_context(|| format!("reading {}", shown(entry.path())))?;
             map.insert(
                 rel,
                 Entry {
@@ -168,6 +179,29 @@ mod tests {
         let report = build(&a, &b).unwrap();
         assert!(!report.has_changes());
         assert_eq!(report.size_before, report.size_after);
+    }
+
+    #[test]
+    fn a_walk_error_escapes_the_file_name() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        // An unreadable directory whose name, from an image someone else built, holds a
+        // line break and a terminal escape. walkdir's error quotes the path.
+        let dir = tmp.path().join("d\nerror: forged\x1b[2J");
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = fs::read_dir(&dir).is_ok();
+        let result = scan(tmp.path());
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        if readable {
+            return; // root reads it anyway, so there is no error to inspect
+        }
+        let Err(err) = result else {
+            panic!("an unreadable directory must fail the walk");
+        };
+        let err = format!("{err:#}");
+        assert!(!err.contains('\n') && !err.contains('\x1b'), "{err:?}");
+        assert!(err.contains("\\nerror: forged"), "{err}");
     }
 
     #[test]

@@ -692,10 +692,13 @@ impl std::fmt::Display for SizeReport {
         // Show before -> after columns whenever a size reduction was applied (strip or UPX).
         let reduced = self.stripped || self.upx;
         for e in &self.entries {
+            // A library's path ends in the DT_NEEDED name the resolver searched for, a raw
+            // string out of the packed binary.
+            let path = crate::resolver::escape_if_line_breaking(&e.path);
             if reduced {
-                writeln!(f, "  {:>10} -> {:>10}  {}", e.before, e.after, e.path)?;
+                writeln!(f, "  {:>10} -> {:>10}  {path}", e.before, e.after)?;
             } else {
-                writeln!(f, "  {:>10}  {}", e.after, e.path)?;
+                writeln!(f, "  {:>10}  {path}", e.after)?;
             }
         }
         if reduced {
@@ -1830,6 +1833,27 @@ mod tests {
         );
         let err = NssSelection::from_modules(&[NssModule::None, NssModule::Files]).unwrap_err();
         assert!(err.to_string().contains("cannot be combined"), "{err}");
+    }
+
+    #[test]
+    fn size_report_escapes_a_line_breaking_path() {
+        // The file name is the DT_NEEDED soname, a raw string out of the packed binary.
+        for stripped in [true, false] {
+            let report = SizeReport {
+                entries: vec![SizeEntry {
+                    path: "/lib/x.so\nerror: forged\x1b[2J".into(),
+                    before: 100,
+                    after: 40,
+                }],
+                total_before: 100,
+                total_after: 40,
+                stripped,
+                upx: false,
+            };
+            let text = report.to_string();
+            assert!(!text.contains('\x1b'), "{text:?}");
+            assert!(text.contains("x.so\\nerror: forged"), "{text}");
+        }
     }
 
     #[test]

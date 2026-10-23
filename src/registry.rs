@@ -250,8 +250,10 @@ pub fn parse_child_manifest(raw: &[u8], source: &str) -> Result<(String, String)
         .to_string();
     if is_multi_arch_media_type(&media_type) {
         bail!(
-            "source {source} is itself a multi-arch index ({media_type}); pass the \
-             single-arch images, not an index"
+            "source {source} is itself a multi-arch index ({}); pass the single-arch images, \
+             not an index",
+            // A registry-served string, matched only by a substring test above.
+            crate::resolver::escape_for_display(&media_type)
         );
     }
     let config_digest = manifest
@@ -313,7 +315,8 @@ fn build_index(children: &[Child]) -> Result<OciImageIndex> {
             bail!(
                 "two source images resolve to the same platform {}; each platform must be \
                  unique in an index",
-                platform_label(c)
+                // The os/arch/variant strings come from a registry-served config blob.
+                crate::resolver::escape_for_display(&platform_label(c))
             );
         }
     }
@@ -1403,6 +1406,22 @@ mod tests {
     }
 
     #[test]
+    fn a_duplicate_platform_error_escapes_the_registry_label() {
+        // os/arch come from a config blob the registry serves.
+        let evil = "linux\nsigned evil\x1b[2J";
+        let children = vec![
+            child("amd64", evil, "sha256:aaa"),
+            child("amd64", evil, "sha256:ccc"),
+        ];
+        let err = format!(
+            "{:#}",
+            build_index(&children).expect_err("duplicate platform")
+        );
+        assert!(!err.contains('\n') && !err.contains('\x1b'), "{err:?}");
+        assert!(err.contains("linux\\nsigned evil"), "{err}");
+    }
+
+    #[test]
     fn build_index_keeps_an_unknown_architecture() {
         // An unmapped arch must survive as-is (oci-client stores it as Arch::Other), not
         // be dropped or rejected — the whole point of stamping the real host arch upstream.
@@ -1509,6 +1528,14 @@ mod tests {
         let raw = br#"{"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}"#;
         let err = parse_child_manifest(raw, "src").unwrap_err().to_string();
         assert!(err.contains("multi-arch index"), "{err}");
+    }
+
+    #[test]
+    fn the_multi_arch_rejection_escapes_the_media_type() {
+        let raw = br#"{"mediaType":"application/vnd.oci.image.index.v1+json\nerror: forged\u001b[2J","manifests":[]}"#;
+        let err = parse_child_manifest(raw, "src").unwrap_err().to_string();
+        assert!(!err.contains('\n') && !err.contains('\x1b'), "{err:?}");
+        assert!(err.contains("json\\nerror: forged"), "{err}");
     }
 
     #[test]

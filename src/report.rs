@@ -122,7 +122,10 @@ impl PackReport {
         // The loader is the one staged file whose path the kernel, not scratchsmith, chose.
         // Naming it makes a pack self-documenting; an ELF with no PT_INTERP has none to name.
         if let Some(interp) = &self.interpreter {
-            out.push_str(&format!("loader {interp}\n"));
+            out.push_str(&format!(
+                "loader {}\n",
+                crate::resolver::escape_if_line_breaking(interp)
+            ));
         }
         out.push_str("payload size:\n");
         out.push_str(&format!("{}\n", self.size));
@@ -242,13 +245,16 @@ impl DepGraphReport {
 
         let mut out = String::new();
         if let Some(root) = by_id.get(self.root.as_str()) {
-            out.push_str(&format!("{} ({})\n", root.name, root.id));
+            out.push_str(&format!("{} ({})\n", shown(&root.name), shown(&root.id)));
             let mut seen = std::collections::HashSet::new();
             seen.insert(root.id.as_str());
             render_children(root, &by_id, &mut seen, "", &mut out);
         }
         if let Some(interp) = &self.interpreter {
-            out.push_str(&format!("interpreter: {interp}\n"));
+            out.push_str(&format!(
+                "interpreter: {}\n",
+                crate::resolver::escape_if_line_breaking(interp)
+            ));
         }
         out.trim_end().to_string()
     }
@@ -257,6 +263,12 @@ impl DepGraphReport {
 // Render `node`'s children as an indented subtree: resolved `needs` first, then the
 // unresolved `missing` sonames. `seen` guards repeats: an object shown before is printed
 // as `(*)` and not expanded, so diamonds and cycles terminate.
+// Names, ids and the interpreter in the graph tree come out of the packed binary and its
+// search paths, so a line break in one would forge a line of the tree.
+fn shown(text: &str) -> std::borrow::Cow<'_, str> {
+    crate::resolver::escape_if_line_breaking(text)
+}
+
 fn render_children<'a>(
     node: &'a DepNode,
     by_id: &std::collections::HashMap<&'a str, &'a DepNode>,
@@ -273,9 +285,13 @@ fn render_children<'a>(
         let child_prefix = if last { "    " } else { "│   " };
         if let Some(child) = by_id.get(child_id.as_str()) {
             if seen.contains(child_id.as_str()) {
-                out.push_str(&format!("{prefix}{branch}{} (*)\n", child.name));
+                out.push_str(&format!("{prefix}{branch}{} (*)\n", shown(&child.name)));
             } else {
-                out.push_str(&format!("{prefix}{branch}{} ({})\n", child.name, child.id));
+                out.push_str(&format!(
+                    "{prefix}{branch}{} ({})\n",
+                    shown(&child.name),
+                    shown(&child.id)
+                ));
                 seen.insert(child.id.as_str());
                 render_children(child, by_id, seen, &format!("{prefix}{child_prefix}"), out);
             }
@@ -450,6 +466,35 @@ mod tests {
             forged_text.contains("libx.so\\nerror: forged\\u{1b}[2J (missing)"),
             "{forged_text}"
         );
+    }
+
+    #[test]
+    fn dep_graph_text_escapes_resolved_names_ids_and_the_interpreter() {
+        // A resolved soname, its on-disk path and PT_INTERP are all raw strings out of the
+        // binary or the host tree; none may break a line of the tree.
+        const EVIL: &str = "x\nerror: forged\x1b[2J";
+        let report = DepGraphReport {
+            root: format!("/app{EVIL}"),
+            interpreter: Some(format!("/lib64/ld{EVIL}")),
+            nodes: vec![
+                node(
+                    &format!("/app{EVIL}"),
+                    &format!("app{EVIL}"),
+                    &[&format!("/lib{EVIL}")],
+                    &[],
+                ),
+                node(&format!("/lib{EVIL}"), &format!("libx.so{EVIL}"), &[], &[]),
+            ],
+            missing: vec![],
+        };
+        let text = report.to_text();
+        assert_eq!(text.lines().count(), 3, "root, child, interpreter: {text}");
+        assert!(!text.contains('\x1b'), "{text:?}");
+        assert!(
+            text.contains("libx.sox\\nerror: forged\\u{1b}[2J"),
+            "{text}"
+        );
+        assert!(text.contains("interpreter: /lib64/ldx\\n"), "{text}");
     }
 
     #[test]
@@ -877,6 +922,19 @@ mod tests {
         assert!(!r.to_text().contains("loader"));
         let json = serde_json::to_value(&r).unwrap();
         assert!(json["interpreter"].is_null());
+    }
+
+    #[test]
+    fn text_report_escapes_the_loader_path() {
+        // PT_INTERP is a raw string out of the packed binary.
+        let mut report = sample_report();
+        report.interpreter = Some("/lib64/ld.so\nerror: forged\x1b[2J".into());
+        let text = report.to_text();
+        assert!(!text.contains('\x1b'), "{text:?}");
+        assert!(
+            text.contains("loader /lib64/ld.so\\nerror: forged\\u{1b}[2J"),
+            "{text}"
+        );
     }
 
     #[test]
