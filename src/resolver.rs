@@ -85,7 +85,7 @@ pub fn ensure_glibc(info: &ElfInfo) -> Result<()> {
     if info.is_musl() {
         bail!(
             "musl binaries are out of scope; v1 targets glibc (interpreter: {})",
-            info.interpreter.clone().unwrap_or_default()
+            escape_if_line_breaking(info.interpreter.as_deref().unwrap_or_default())
         );
     }
     Ok(())
@@ -622,11 +622,38 @@ fn printable(path: &Path) -> String {
     escape_for_display(&path.to_string_lossy())
 }
 
-/// A string from the packed binary, made safe to print: control characters are escaped, so
-/// it cannot break or forge a line. The one escape policy for everything this crate prints
-/// from a binary.
+/// A string from the packed binary, an image's file names, or a registry, made safe to print:
+/// control characters are escaped, so it cannot break or forge a line. Warnings and errors
+/// escape this way on every call; a report line uses `escape_if_line_breaking`, which leaves
+/// an honest name as it is.
 pub fn escape_for_display(text: &str) -> String {
     text.escape_debug().to_string()
+}
+
+/// True for a character that breaks or reorders a printed line: the set
+/// `escape_if_line_breaking` escapes. Public so the tests and fuzz targets share one copy.
+pub fn breaks_a_line(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
+/// An untrusted name for a report line: as it is, unless it holds a character that breaks
+/// or reorders a line, and then `escape_for_display` whole. So an honest name with a quote,
+/// a backslash or a non-ASCII space reads exactly as it is.
+///
+/// The set: the Cc controls (C0, DEL, C1: newline, CR, ESC, CSI), the line and paragraph
+/// separators, and the bidi embeddings, overrides and isolates, which reorder the rest of
+/// the line. LRM/RLM are left out: each acts as one invisible strong letter, no more than
+/// a Latin or Hebrew letter an honest name prints raw.
+pub(crate) fn escape_if_line_breaking(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.chars().any(breaks_a_line) {
+        escape_for_display(text).into()
+    } else {
+        text.into()
+    }
 }
 
 // True when the file opens and begins with the ELF magic. Any IO failure reads as "no",
@@ -736,6 +763,64 @@ mod tests {
         assert!(musl.is_musl());
         let err = ensure_glibc(&musl).unwrap_err();
         assert!(err.to_string().contains("musl"));
+    }
+
+    #[test]
+    fn the_musl_rejection_escapes_the_interpreter() {
+        // An honest loader path reads exactly as before.
+        let honest = info(Some("/lib/ld-musl-x86_64.so.1"), &[]);
+        assert_eq!(
+            format!("{:#}", ensure_glibc(&honest).unwrap_err()),
+            "musl binaries are out of scope; v1 targets glibc \
+             (interpreter: /lib/ld-musl-x86_64.so.1)"
+        );
+
+        // PT_INTERP is a raw string out of the packed binary, and main prints this error to
+        // the terminal. A newline, a terminal escape, a line separator or a bidi isolate in it
+        // must not let the binary forge a line of scratchsmith's own output.
+        let forged = info(
+            Some("/lib/ld-musl-x86_64.so.1\nerror: forged\r\x1b[2J\u{2028}\u{2067}"),
+            &[],
+        );
+        let err = format!("{:#}", ensure_glibc(&forged).unwrap_err());
+        assert!(!err.chars().any(breaks_a_line), "{err:?}");
+        assert!(
+            err.ends_with(
+                "(interpreter: /lib/ld-musl-x86_64.so.1\\nerror: forged\\r\
+                 \\u{1b}[2J\\u{2028}\\u{2067})"
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn only_a_line_breaking_character_gets_a_name_escaped() {
+        // Each one alone escapes the whole name, and what comes out holds none of them.
+        for c in [
+            '\0', '\t', '\n', '\r', '\x1b', '\x7f', '\u{85}', '\u{9b}', '\u{2028}', '\u{2029}',
+            '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}', '\u{202e}', '\u{2066}', '\u{2067}',
+            '\u{2068}', '\u{2069}',
+        ] {
+            let name = format!("a'{c}b");
+            let shown = escape_if_line_breaking(&name);
+            assert_eq!(shown, escape_for_display(&name), "{name:?}");
+            assert!(!shown.contains(c), "{shown:?}");
+            // The escaped text is printable, so it reads as itself from here on.
+            assert_eq!(escape_if_line_breaking(&shown), shown);
+        }
+        // Anything else is left as it is, even what `escape_debug` would rewrite.
+        for name in [
+            "O'Reilly",
+            "quote\"d",
+            "back\\slash",
+            "no\u{a0}break",
+            "zero\u{200b}width",
+            "\u{301}mark",
+            "\u{5e9}\u{200f}\u{200e}",
+            "na\u{ef}ve",
+        ] {
+            assert_eq!(escape_if_line_breaking(name), name);
+        }
     }
 
     #[test]
