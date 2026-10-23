@@ -146,7 +146,12 @@ jobs:
           #!/usr/bin/env bash
           set -u
           cmd=$(jq -r '.tool_input.command // empty' 2>/dev/null) || cmd=""
-          if [ -n "$cmd" ] && grep -Fxq -- "$cmd" "$1"; then exit 0; fi
+          # A newline would split the command into two (grep -F even matches each line as its
+          # own pattern), so any control character is refused before the compare.
+          case "$cmd" in ''|*[[:cntrl:]]*) echo "refused: not one plain command" >&2; exit 2 ;; esac
+          while IFS= read -r line; do
+            [ "$cmd" = "$line" ] && exit 0
+          done < "$1"
           echo "refused: only the exact review commands in the system prompt may run" >&2
           exit 2
           GUARD_EOF
@@ -156,11 +161,19 @@ jobs:
           # prove the guard both refuses and allows before Claude starts.
           probe() { jq -cn --arg c "$1" '{tool_input: {command: $c}}' | "$GUARD/bash-guard.sh" "$GUARD/allowed.txt" 2>/dev/null; }
           if probe "grep -rn x ."; then echo "::error::the Bash guard let a stray command through"; exit 1; fi
+          if probe "$SUBMIT"$'\n'"cat .git/config"; then echo "::error::the Bash guard let a two-line command through"; exit 1; fi
           if ! probe "$SUBMIT"; then echo "::error::the Bash guard refused the submit command"; exit 1; fi
           # The settings JSON carries the output style too: the `settings:` input takes one
           # object, and the action writes it to ~/.claude/settings.json.
-          SETTINGS=$(jq -cn --arg style "$REVIEW_OUTPUT_STYLE" --arg hook "$GUARD/bash-guard.sh $GUARD/allowed.txt" \
-            '{outputStyle: $style, hooks: {PreToolUse: [{matcher: "Bash", hooks: [{type: "command", command: $hook}]}]}}')
+          HOOKS=$(jq -cn --arg hook "$GUARD/bash-guard.sh $GUARD/allowed.txt" \
+            '{PreToolUse: [{matcher: "Bash", hooks: [{type: "command", command: $hook}]}]}')
+          SETTINGS=$(jq -cn --arg style "$REVIEW_OUTPUT_STYLE" --argjson hooks "$HOOKS" '{outputStyle: $style, hooks: $hooks}')
+          # The same hook again as MANAGED policy: a `disableAllHooks` in user, project or local
+          # settings cannot turn a managed hook off. The action already restores `.claude/` from
+          # the base branch, so this is the second layer. Hooks from all scopes add up, so the
+          # guard runs twice, which is harmless.
+          sudo mkdir -p /etc/claude-code
+          jq -n --argjson hooks "$HOOKS" '{hooks: $hooks}' | sudo tee /etc/claude-code/managed-settings.json >/dev/null
           # "@claude review debug" additionally uploads the raw execution log.
           DEBUG=false
           case "$COMMENT_BODY" in *"@claude review debug"*) DEBUG=true ;; esac
