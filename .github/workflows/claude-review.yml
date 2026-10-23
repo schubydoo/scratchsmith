@@ -121,7 +121,14 @@ jobs:
           # only source of a reply's `in_reply_to` id), and reply on an existing thread. Built
           # after the numeric check so they can name nothing but this repo and this PR.
           SUBMIT="gh api repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews --input review.json"
-          COMMENTS="gh api repos/${GITHUB_REPOSITORY}/pulls/${PR}/comments --paginate"
+          # The `--jq` projection returns only what finding a thread root needs, instead of the
+          # full comment payload. It is not what keeps other reviewers' text out: the action
+          # renders the PR's comments into the prompt itself (`exclude_comments_by_actor` below
+          # governs that). `original_line` and `original_start_line` stay set after a push
+          # outdates a thread, when GitHub nulls `line`, which is the re-review case. The
+          # filter is part of the exact string, so the agent cannot swap in one of its own
+          # (jq's `env` reads GH_TOKEN).
+          COMMENTS="gh api repos/${GITHUB_REPOSITORY}/pulls/${PR}/comments --paginate --jq '.[] | {id, in_reply_to_id, path, line, original_line, original_start_line, user: .user.login}'"
           REPLY="gh api repos/${GITHUB_REPOSITORY}/pulls/${PR}/comments --input reply.json"
           # The ONLY read commands, exact too: an open `gh pr view:*` rule took any flag, and
           # three of them (-R, a URL positional, then --jq with jq's `env`) each leaked
