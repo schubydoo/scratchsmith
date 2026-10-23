@@ -239,10 +239,11 @@ pub trait LinkInfoSource {
     /// The two failure shapes are deliberately DIFFERENT types, because conflating them
     /// drops a whole subtree from the resolution, with nothing landing in `missing`:
     ///
-    /// - `Ok(None)` — the file was read, and it does not parse as an ELF. For a stray data
-    ///   file resolved by name that is correct: it has no `DT_NEEDED` of its own, so it is a
-    ///   leaf. A truncated or corrupt ELF lands here too and is kept as a leaf until 2.0;
-    ///   `resolve_with` tells the two apart by the magic bytes and warns about the second.
+    /// - `Ok(None)` — the file was read, and it does not parse as an ELF. For a data file the
+    ///   operator named with `--include` that is correct: it has no `DT_NEEDED` of its own, so
+    ///   it is a leaf. A truncated or corrupt ELF lands here too and is kept as a leaf until
+    ///   2.0; `resolve_with` tells the two apart by the magic bytes and warns about the second.
+    ///   A file without the magic, reached through a name out of an ELF, fails the resolution.
     /// - `Err` — the file could not be READ. Nothing is known about its dependencies, so
     ///   treating it as a leaf would drop its whole subtree from the resolution without
     ///   anything landing in `Resolution::missing`.
@@ -261,9 +262,65 @@ impl LinkInfoSource for GoblinSource {
         // the stager's copy, the hardening lint returns Option, and only `--strip` rejects it.
         // That is "tighten validation", so it waits for 2.0, and `resolve_with` warns until
         // then.
-        let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        let bytes = read_bounded(path, DEVICE_READ_CAP)?;
         Ok(parse_elf_info(&bytes).ok())
     }
+}
+
+// The most read from a character or block device. No real library is one, but the packed ELF
+// picks the path (a DT_NEEDED with a slash, or a search dir plus a soname), and `/dev/zero`
+// never ends.
+const DEVICE_READ_CAP: u64 = 256 << 20;
+
+// Read a whole file, as `std::fs::read` does, with the stop chosen by fstat on the open handle.
+// A device stops one byte past `device_cap` and fails. A regular file may read past the length
+// it reported, because a procfs file reports 0 and still has content, but not past
+// `device_cap` too: a tracefs pipe is a regular file of length 0 that never ends. A FIFO or
+// pipe reads to EOF as before: it ends when its writer closes, and an operator can pipe in a
+// real library (`--include <(cat lib.so)`).
+fn read_bounded(path: &Path, device_cap: u64) -> Result<Vec<u8>> {
+    use std::io::Read;
+    use std::os::unix::fs::FileTypeExt;
+
+    let reading = || format!("reading {}", path.display());
+    // A blocking open, as before: a FIFO's open waits for a writer that starts late.
+    let mut file = std::fs::File::open(path).with_context(reading)?;
+    let meta = file.metadata().with_context(reading)?;
+    let kind = meta.file_type();
+    let mut bytes = Vec::new();
+    if kind.is_file() {
+        let len = meta.len();
+        bytes
+            .try_reserve_exact(usize::try_from(len).unwrap_or(usize::MAX))
+            .map_err(std::io::Error::from)
+            .with_context(reading)?;
+        let cap = len.max(device_cap);
+        file.take(cap.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .with_context(reading)?;
+        if bytes.len() as u64 > cap {
+            bail!(
+                "{} yields more than {cap} bytes, more than its own length, so it is not \
+                 read as an ELF",
+                printable(path)
+            );
+        }
+    } else if kind.is_char_device() || kind.is_block_device() {
+        // Its size is no length to reserve: grow as bytes arrive.
+        file.take(device_cap.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .with_context(reading)?;
+        if bytes.len() as u64 > device_cap {
+            bail!(
+                "{} is a device that yields more than {device_cap} bytes, so it is not read \
+                 as an ELF",
+                printable(path)
+            );
+        }
+    } else {
+        file.read_to_end(&mut bytes).with_context(reading)?;
+    }
+    Ok(bytes)
 }
 
 /// Resolve a binary's transitive dependencies against a sysroot, using goblin.
@@ -295,7 +352,9 @@ pub fn resolve_with(
         .read(&root_path)?
         .ok_or_else(|| anyhow::anyhow!("{} is not a valid ELF binary", root_path.display()))?;
     // Treat --include entries as extra direct dependencies of the binary, so they and
-    // their own transitive deps are resolved and staged like anything else.
+    // their own transitive deps are resolved and staged like anything else. They go after
+    // the binary's own DT_NEEDED, so the count of those tells the two apart below.
+    let declared_needed = root_info.needed.len();
     root_info.needed.extend(includes.iter().cloned());
 
     let mut resolution = Resolution::default();
@@ -305,6 +364,18 @@ pub fn resolve_with(
     if let Some(interp) = &root_info.interpreter {
         let source = reroot(&sysroot.root, Path::new(interp));
         if source.exists() {
+            // PT_INTERP is a string out of the packed binary and can name any host file, which
+            // would then ship in the image. Stage only a regular file that starts like an ELF.
+            // `is_file` goes first, so a FIFO is never opened and cannot block the read.
+            if !source.is_file() || !has_elf_magic(&source) {
+                bail!(
+                    "the program interpreter (PT_INTERP) `{}` is not an ELF file: {}. Refusing \
+                     it, because that path can name any host file. Rebuild the binary with a \
+                     real loader path.",
+                    escape_for_display(interp),
+                    printable(&canonical(&source))
+                );
+            }
             resolution.interpreter = Some(ResolvedInterp {
                 image_path: PathBuf::from(interp),
                 source: canonical(&source),
@@ -319,9 +390,16 @@ pub fn resolve_with(
     let mut visited = HashSet::new();
     visited.insert(root_path.clone());
     let mut queue = VecDeque::new();
-    queue.push_back((root_path, root_info.clone(), Vec::<PathBuf>::new()));
+    // The last field counts the leading `needed` entries the ELF itself declared. Only the
+    // binary carries more: its --include entries.
+    queue.push_back((
+        root_path,
+        root_info.clone(),
+        Vec::<PathBuf>::new(),
+        declared_needed,
+    ));
 
-    while let Some((obj_path, obj, inherited_rpaths)) = queue.pop_front() {
+    while let Some((obj_path, obj, inherited_rpaths, declared)) = queue.pop_front() {
         let obj_dir = obj_path.parent().unwrap_or(Path::new("/"));
 
         // One glibc rule, read twice below: an object that declares RUNPATH searches NO
@@ -387,7 +465,7 @@ pub fn resolve_with(
         let mut child_rpaths = own_rpaths;
         child_rpaths.extend(inherited_rpaths.iter().cloned());
 
-        for soname in &obj.needed {
+        for (i, soname) in obj.needed.iter().enumerate() {
             let faithful = find_lib(soname, &search, obj_dir, &sysroot.root);
             // The loader does not search here for this object: the file sits only in an RPATH
             // directory of a parent, and this object has RUNPATH. Whether the program starts
@@ -434,10 +512,11 @@ pub fn resolve_with(
                 soname: soname.clone(),
                 path: real.clone(),
             });
-            // A resolved file that will not PARSE (e.g. a stray data file) is kept as a leaf
-            // rather than aborting the whole resolution. A file that cannot be READ is not:
-            // its own DT_NEEDED children are never queued, never resolved and never staged,
-            // and they never reach `missing` either, because nothing asked for them.
+            // A resolved file that will not PARSE (an --include'd data file, or a corrupt ELF)
+            // is kept as a leaf rather than aborting the whole resolution. A file that cannot
+            // be READ is not: its own DT_NEEDED children are never queued, never resolved and
+            // never staged, and they never reach `missing` either, because nothing asked for
+            // them.
             //
             // What the user saw depended on the command. `graph` resolves without staging, so
             // it exited 0 and reported a tree with a whole branch absent. `pack` did fail, but
@@ -446,7 +525,10 @@ pub fn resolve_with(
             // error named a copy. `check_lib_policy` runs after `stager::stage`, so the
             // --require/--deny gate was never reached rather than blind.
             match source.read(&real)? {
-                Some(child) => queue.push_back((real, child, child_rpaths.clone())),
+                Some(child) => {
+                    let declared = child.needed.len();
+                    queue.push_back((real, child, child_rpaths.clone(), declared));
+                }
                 // Not a stray data file: it claims to be an ELF and will not parse, so its
                 // own DT_NEEDED entries are unknown and nothing under it was resolved.
                 None if has_elf_magic(&real) => resolution.warnings.push(format!(
@@ -454,6 +536,17 @@ pub fn resolve_with(
                      libraries it needs were not resolved and can be absent from the image.",
                     printable(&real)
                 )),
+                // The name came out of an ELF: a path, or a bare name found through a search
+                // path the ELF set, can point at any host file, which would then ship in the
+                // image. Only the operator's --include may stage a file that is not an ELF.
+                None if i < declared => bail!(
+                    "{} needs `{}`, which resolved to {}, and that file is not an ELF. \
+                     Refusing it, because that name can point at any host file. Rebuild the \
+                     binary so it names a real library.",
+                    printable(&obj_path),
+                    escape_for_display(soname),
+                    printable(&real)
+                ),
                 None => {}
             }
         }
@@ -564,7 +657,8 @@ pub(crate) fn escape_if_line_breaking(text: &str) -> std::borrow::Cow<'_, str> {
 }
 
 // True when the file opens and begins with the ELF magic. Any IO failure reads as "no",
-// which only loses a warning. A 2.0 rejection must not gate on this: it would fail open.
+// which loses the corrupt-ELF warning and fails closed where a missing magic is an error. A
+// 2.0 rejection of a file that HAS the magic must not gate on this: it would fail open.
 fn has_elf_magic(path: &Path) -> bool {
     use std::io::Read;
     let mut magic = [0u8; 4];
@@ -865,15 +959,15 @@ mod tests {
     }
 
     #[test]
-    fn a_resolved_file_that_is_not_an_elf_stays_a_leaf() {
-        // The other half, and the behavior the old code was reaching for: a file that READS
-        // fine and simply is not an ELF has no DT_NEEDED of its own, so it is staged as a
-        // leaf and the resolution continues.
+    fn a_corrupt_elf_that_reads_fine_stays_a_leaf() {
+        // The other half: a file that READS fine and does not parse has no DT_NEEDED of its
+        // own, so it is staged as a leaf and the resolution continues.
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let (exe, mid, _leaf, mut infos) = chain_fixture(root);
-        // Drop libmid's scripted info: MapSource returns Ok(None) for it, which is exactly
-        // "read fine, not an ELF".
+        // Drop libmid's scripted info: MapSource returns Ok(None) for it. `touch` wrote the
+        // ELF magic, so this is the corrupt-ELF leaf; a file without the magic fails instead
+        // (see the next test).
         infos.remove(&canonical(&mid));
 
         let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos })
@@ -886,7 +980,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unparsable_elf_leaf_warns_and_a_data_file_does_not() {
+    fn an_unparsable_elf_leaf_warns_and_a_data_file_fails() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let (exe, mid, _leaf, mut infos) = chain_fixture(root);
@@ -904,12 +998,241 @@ mod tests {
             res.warnings
         );
 
-        // Same graph, but the file makes no claim to be an ELF. A stray data file is a
-        // legitimate leaf, and 2.0 keeps accepting it, so it must stay quiet.
+        // Same graph, but the file makes no claim to be an ELF. The binary's DT_NEEDED picked
+        // it, and that name can point at any host file, so it must not ship in the image.
         fs::write(&mid, b"just data").unwrap();
-        let res = resolve_with(&exe, &Sysroot::new(root), &[], &src).unwrap();
-        assert!(has(&res, "libmid.so"));
-        assert_eq!(res.warnings, Vec::<String>::new());
+        let err = format!(
+            "{:#}",
+            resolve_with(&exe, &Sysroot::new(root), &[], &src).unwrap_err()
+        );
+        assert!(
+            err.contains("`libmid.so`")
+                && err.contains(&canonical(&mid).display().to_string())
+                && err.contains("not an ELF"),
+            "{err}"
+        );
+    }
+
+    // A host file no packed binary may pull into an image, standing in for a credential.
+    fn secret(root: &Path) -> PathBuf {
+        let p = root.join("home/user/.docker/config.json");
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(&p, br#"{"auths":{"registry.example":{"auth":"c2VjcmV0"}}}"#).unwrap();
+        p
+    }
+
+    fn resolve_err(exe: &Path, root: &Path, includes: &[String], src: &MapSource) -> String {
+        match resolve_with(exe, &Sysroot::new(root), includes, src) {
+            Ok(res) => panic!("must fail, but staged {:?}", res.libs),
+            Err(e) => format!("{e:#}"),
+        }
+    }
+
+    #[test]
+    fn a_needed_path_to_a_data_file_fails_the_resolution() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        touch(&exe);
+        let secret = secret(root);
+
+        // Absolute, as the finding describes. The sysroot reroots it under `root`.
+        let abs = "/home/user/.docker/config.json";
+        let infos = HashMap::from([(canonical(&exe), elf(&[abs], &[], &[], None))]);
+        let err = resolve_err(&exe, root, &[], &MapSource { infos });
+        assert!(
+            err.contains(&format!("`{abs}`"))
+                && err.contains(&canonical(&secret).display().to_string()),
+            "{err}"
+        );
+
+        // Origin-relative, the other shape a soname with a slash takes.
+        fs::create_dir_all(root.join("app/conf")).unwrap();
+        fs::write(root.join("app/conf/token"), b"hunter2").unwrap();
+        let infos = HashMap::from([(canonical(&exe), elf(&["conf/token"], &[], &[], None))]);
+        let err = resolve_err(&exe, root, &[], &MapSource { infos });
+        assert!(err.contains("`conf/token`"), "{err}");
+
+        // A lower object's DT_NEEDED came out of an ELF too, not only the binary's.
+        let mid = root.join("usr/lib/libmid.so");
+        touch(&mid);
+        let infos = HashMap::from([
+            (canonical(&exe), elf(&["libmid.so"], &[], &[], None)),
+            (canonical(&mid), elf(&[abs], &[], &[], None)),
+        ]);
+        let err = resolve_err(&exe, root, &[], &MapSource { infos });
+        assert!(
+            err.contains(&canonical(&mid).display().to_string()) && err.contains(abs),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_bare_needed_found_through_the_binarys_search_path_must_be_an_elf() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        touch(&exe);
+        secret(root);
+
+        // The binary sets the directory and names the file in it: through RPATH, then RUNPATH.
+        let dir = ["/home/user/.docker"];
+        for (rpaths, runpaths) in [(&dir[..], &[][..]), (&[][..], &dir[..])] {
+            let infos = HashMap::from([(
+                canonical(&exe),
+                elf(&["config.json"], rpaths, runpaths, None),
+            )]);
+            let err = resolve_err(&exe, root, &[], &MapSource { infos });
+            assert!(
+                err.contains("`config.json`") && err.contains("not an ELF"),
+                "rpaths={rpaths:?} runpaths={runpaths:?}: {err}"
+            );
+        }
+
+        // The same search reaching an ELF still resolves, so the check is on content alone.
+        let lib = root.join("home/user/.docker/libok.so");
+        touch(&lib);
+        let infos = HashMap::from([
+            (canonical(&exe), elf(&["libok.so"], &dir, &[], None)),
+            (canonical(&lib), elf(&[], &[], &[], None)),
+        ]);
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert!(has(&res, "libok.so"));
+    }
+
+    #[test]
+    fn an_include_of_a_data_file_stays_a_quiet_leaf() {
+        // --include is the operator's own choice, and it is how a non-ELF plugin asset ships.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        touch(&exe);
+        let data = root.join("usr/lib/plugin.conf");
+        fs::create_dir_all(data.parent().unwrap()).unwrap();
+        fs::write(&data, b"just data").unwrap();
+        // The binary's own DT_NEEDED comes first, so the include sits past it in `needed`.
+        let lib = root.join("usr/lib/libok.so");
+        touch(&lib);
+        let infos = HashMap::from([
+            (canonical(&exe), elf(&["libok.so"], &[], &[], None)),
+            (canonical(&lib), elf(&[], &[], &[], None)),
+        ]);
+        let src = MapSource { infos };
+
+        for include in ["plugin.conf".to_string(), data.display().to_string()] {
+            let res = resolve_with(
+                &exe,
+                &Sysroot::new(root),
+                std::slice::from_ref(&include),
+                &src,
+            )
+            .unwrap();
+            assert!(has(&res, &include), "{include}: {:?}", res.libs);
+            assert!(res.warnings.is_empty(), "{include}: {:?}", res.warnings);
+        }
+    }
+
+    #[test]
+    fn the_interpreter_must_be_a_regular_elf_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        touch(&exe);
+        secret(root);
+        let loader = root.join("lib64/ld-linux-x86-64.so.2");
+        touch(&loader);
+        let resolve_interp = |interp: &str| {
+            let infos = HashMap::from([(canonical(&exe), elf(&[], &[], &[], Some(interp)))]);
+            resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos })
+        };
+
+        let res = resolve_interp("/lib64/ld-linux-x86-64.so.2").unwrap();
+        let interp = res.interpreter.expect("a real loader resolves");
+        assert_eq!(interp.source, canonical(&loader));
+
+        // A data file, then a directory.
+        for bad in ["/home/user/.docker/config.json", "/home/user/.docker"] {
+            let err = format!("{:#}", resolve_interp(bad).unwrap_err());
+            assert!(
+                err.contains(&format!("`{bad}`")) && err.contains("not an ELF"),
+                "{err}"
+            );
+        }
+
+        // An absent loader is still reported as missing, not as an error.
+        let res = resolve_interp("/lib64/ld-absent.so.2").unwrap();
+        assert_eq!(res.missing, ["/lib64/ld-absent.so.2"]);
+    }
+
+    #[test]
+    fn a_fifo_interpreter_fails_without_blocking() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        touch(&exe);
+        let fifo = root.join("lib64/ld-fifo.so.2");
+        fs::create_dir_all(fifo.parent().unwrap()).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        if !made.is_ok_and(|s| s.success()) {
+            eprintln!("skipping: mkfifo unavailable");
+            return;
+        }
+        let infos = HashMap::from([(
+            canonical(&exe),
+            elf(&[], &[], &[], Some("/lib64/ld-fifo.so.2")),
+        )]);
+        let err = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap_err();
+        assert!(format!("{err:#}").contains("not an ELF"), "{err:#}");
+    }
+
+    #[test]
+    fn a_dotdot_path_to_a_real_elf_still_resolves() {
+        // `..` reads nothing an absolute path cannot, so content is the only thing checked.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        let loader = root.join("lib64/ld-linux-x86-64.so.2");
+        let lib = root.join("lib/libfoo.so");
+        for p in [&exe, &loader, &lib] {
+            touch(p);
+        }
+        let interp = "/lib64/../lib64/ld-linux-x86-64.so.2";
+        let infos = HashMap::from([
+            (
+                canonical(&exe),
+                elf(&["../lib/libfoo.so"], &[], &[], Some(interp)),
+            ),
+            (canonical(&lib), elf(&[], &[], &[], None)),
+        ]);
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        let resolved = res
+            .interpreter
+            .as_ref()
+            .expect("in-tree `..` loader resolves");
+        assert_eq!(resolved.image_path, PathBuf::from(interp));
+        assert_eq!(resolved.source, canonical(&loader));
+        assert!(has(&res, "../lib/libfoo.so"), "{:?}", res.libs);
+        assert!(res.missing.is_empty() && res.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_rejected_name_is_escaped_in_the_error() {
+        // Both strings come out of the packed binary; neither may forge a line of output.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        touch(&exe);
+        let evil = root.join("data\nerror: forged\x1b[2J");
+        fs::write(&evil, b"just data").unwrap();
+        let name = "/data\nerror: forged\x1b[2J";
+
+        let as_needed = HashMap::from([(canonical(&exe), elf(&[name], &[], &[], None))]);
+        let as_interp = HashMap::from([(canonical(&exe), elf(&[], &[], &[], Some(name)))]);
+        for infos in [as_needed, as_interp] {
+            let err = resolve_err(&exe, root, &[], &MapSource { infos });
+            assert!(!err.contains('\n') && !err.contains('\x1b'), "{err:?}");
+            assert!(err.contains("data\\nerror: forged\\u{1b}[2J"), "{err:?}");
+        }
     }
 
     #[test]
@@ -930,6 +1253,214 @@ mod tests {
         let absent = tmp.path().join("absent.so");
         assert!(GoblinSource.read(&absent).is_err());
         assert!(!has_elf_magic(&absent));
+    }
+
+    // A small device cap, so a test that reads an endless device to it allocates little.
+    const TEST_CAP: u64 = 64 << 10;
+
+    // Scripted facts for the binary, real reads for everything it resolves to.
+    struct ScriptedRoot {
+        root: PathBuf,
+        info: ElfInfo,
+    }
+
+    impl LinkInfoSource for ScriptedRoot {
+        fn read(&self, path: &Path) -> Result<Option<ElfInfo>> {
+            if canonical(path) == canonical(&self.root) {
+                return Ok(Some(self.info.clone()));
+            }
+            GoblinSource.read(path)
+        }
+    }
+
+    fn mkfifo(path: &Path) {
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            path,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            0,
+        )
+        .unwrap();
+    }
+
+    // Run `f` on a thread, and fail rather than hang the suite if it never returns.
+    fn returns<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(30))
+            .expect("the read blocked")
+    }
+
+    #[test]
+    fn an_endless_device_fails_at_the_cap() {
+        for dev in ["/dev/zero", "/dev/urandom"] {
+            let err = read_bounded(Path::new(dev), TEST_CAP).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("is a device that yields more than 65536 bytes"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_elf_that_names_dev_zero_fails_instead_of_exhausting_memory() {
+        // The read of /dev/zero used to grow one buffer until the host ran out of memory.
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("exe");
+        touch(&exe);
+        // A DT_NEEDED path, and a search dir plus a bare soname: both reach /dev/zero.
+        for info in [
+            elf(&["/dev/zero"], &[], &[], None),
+            elf(&["zero"], &["/dev"], &[], None),
+        ] {
+            let src = ScriptedRoot {
+                root: exe.clone(),
+                info,
+            };
+            let err = resolve_with(&exe, &Sysroot::new("/"), &[], &src).unwrap_err();
+            assert!(
+                format!("{err:#}").contains(&format!(
+                    "/dev/zero is a device that yields more than {DEVICE_READ_CAP} bytes"
+                )),
+                "{err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_procfs_file_reads_past_its_reported_length() {
+        // A regular file that reports a length of 0, as every procfs file does.
+        let path = Path::new("/proc/self/status");
+        assert_eq!(fs::metadata(path).unwrap().len(), 0);
+        let bytes = read_bounded(path, DEVICE_READ_CAP).unwrap();
+        assert!(bytes.starts_with(b"Name:"), "{bytes:?}");
+    }
+
+    #[test]
+    fn a_regular_file_past_its_length_and_the_cap_fails() {
+        // A small cap stands in for a file that grows without end, like a tracefs pipe.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("grows");
+        fs::write(&path, [0u8; 64]).unwrap();
+        assert_eq!(
+            read_bounded(&path, 16).unwrap().len(),
+            64,
+            "its own length is fine"
+        );
+        let err = read_bounded(Path::new("/proc/self/status"), 16).unwrap_err();
+        assert!(err.to_string().contains("more than 16 bytes"), "{err}");
+    }
+
+    #[test]
+    fn a_finite_device_and_a_directory_read_as_before() {
+        // /dev/null reads empty, as a plain read made it: a leaf, not an error.
+        assert_eq!(
+            read_bounded(Path::new("/dev/null"), 0).unwrap(),
+            Vec::<u8>::new()
+        );
+        assert_eq!(GoblinSource.read(Path::new("/dev/null")).unwrap(), None);
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(GoblinSource.read(tmp.path()).is_err());
+    }
+
+    #[test]
+    fn a_fifo_whose_writer_starts_late_is_read_whole() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let fifo = tmp.path().join("liblate.so");
+        mkfifo(&fifo);
+        // An ELF (this test binary), bigger than the pipe buffer and than any device cap here.
+        let exe = fs::read(std::env::current_exe().unwrap()).unwrap();
+        let want = parse_elf_info(&exe).unwrap();
+        let writer_fifo = fifo.clone();
+        // The writer opens only after the read has begun, and pauses mid-stream. If the read
+        // returned first, this thread waits forever in its open, and the test still fails.
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let mut w = fs::OpenOptions::new()
+                .write(true)
+                .open(&writer_fifo)
+                .unwrap();
+            let (head, tail) = exe.split_at(exe.len() / 2);
+            let _ = w.write_all(head);
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let _ = w.write_all(tail);
+        });
+        let got = returns(move || GoblinSource.read(&fifo).map_err(|e| e.to_string()));
+        assert_eq!(got, Ok(Some(want)));
+    }
+
+    #[test]
+    fn a_fifo_fed_then_closed_reads_byte_identical() {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let fifo = tmp.path().join("libfed.so");
+        mkfifo(&fifo);
+        let exe = fs::read(std::env::current_exe().unwrap()).unwrap();
+        // A reader that never reads, so the writer opens at once and is mid-write (the data is
+        // bigger than the pipe buffer) when the real read opens.
+        let _hold = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+            .open(&fifo)
+            .unwrap();
+        let mut w = fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+        let data = exe.clone();
+        std::thread::spawn(move || {
+            let _ = w.write_all(&data);
+        });
+        // The device cap does not apply to a FIFO.
+        let got = returns(move || read_bounded(&fifo, TEST_CAP).map_err(|e| e.to_string()));
+        let got = got.unwrap();
+        assert!(got == exe, "read {} of {} bytes", got.len(), exe.len());
+    }
+
+    #[test]
+    fn a_regular_file_is_read_whole() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Bigger than any one read, so stopping at a chunk boundary would show.
+        let big = tmp.path().join("big");
+        let data: Vec<u8> = (0..3 * 1024 * 1024 + 7u32)
+            .map(|i| (i % 251) as u8)
+            .collect();
+        fs::write(&big, &data).unwrap();
+        // The device cap does not apply to a regular file.
+        assert!(read_bounded(&big, 0).unwrap() == fs::read(&big).unwrap());
+        let empty = tmp.path().join("empty");
+        fs::write(&empty, b"").unwrap();
+        assert_eq!(read_bounded(&empty, 0).unwrap(), Vec::<u8>::new());
+
+        // A real ELF (this test binary) yields the facts a plain read yields.
+        let exe = std::env::current_exe().unwrap();
+        let plain = fs::read(&exe).unwrap();
+        assert!(read_bounded(&exe, 0).unwrap() == plain);
+        assert_eq!(
+            GoblinSource.read(&exe).unwrap(),
+            Some(parse_elf_info(&plain).unwrap())
+        );
+    }
+
+    #[test]
+    fn a_regular_file_too_big_to_hold_fails_as_a_plain_read_does() {
+        // Sparse, and bigger than any 64-bit address space maps, so the reserve always fails.
+        // tmpfs holds that length, while ext4 caps a file far below it, so skip without tmpfs.
+        let Ok(tmp) = tempfile::tempdir_in("/dev/shm") else {
+            return;
+        };
+        let huge = tmp.path().join("huge");
+        if fs::File::create(&huge).unwrap().set_len(1 << 62).is_err() {
+            return;
+        }
+        let err = read_bounded(&huge, 0).unwrap_err();
+        assert_eq!(
+            format!("{err:#}"),
+            format!("reading {}: out of memory", huge.display())
+        );
     }
 
     #[test]
