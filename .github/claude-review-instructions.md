@@ -148,7 +148,7 @@ FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, pos
   the review. These are refused, so do not reach for them: any other `gh api` call (other
   read-only GETs included), JSON inline on the command line, shell redirects (`> file`),
   compound commands (`;`, `&&`, `||`), `python3`, `ls`, `git`, `gh pr review`,
-  `gh pr comment`, and any `gh` command with `-R`/`--repo`. Reads of `/proc`, the runner's
+  `gh pr comment`, and any `gh` command with `-R`/`--repo`, a URL, or `--search`/`-S`. Reads of `/proc`, the runner's
   temp directory, home dotfiles and `.git/` are refused too. A refused attempt is a denial
   the workflow counts.
 - Put the **summary table** — every finding with its file and line — in the **body of the
