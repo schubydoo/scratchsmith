@@ -157,9 +157,20 @@ fn image_path(entry: &Path) -> PathBuf {
     out
 }
 
-// Drop `path` and everything under it from the setuid/setgid record: a whiteout removed them.
-fn forget_under(setid: &mut std::collections::BTreeSet<PathBuf>, path: &Path) {
-    setid.retain(|p| !p.starts_with(path));
+// Drop everything under `path` from the setuid/setgid record, and `path` itself unless
+// `keep_self`: a whiteout removed them. `Path` orders by component, so the descendants sit
+// right after `path` in the set, and a range walk touches only them. A `retain` over the
+// whole set per whiteout would let a hostile layer make this quadratic.
+fn forget_under(setid: &mut std::collections::BTreeSet<PathBuf>, path: &Path, keep_self: bool) {
+    let gone: Vec<PathBuf> = setid
+        .range(path.to_path_buf()..)
+        .take_while(|p| p.starts_with(path))
+        .filter(|p| !(keep_self && p.as_path() == path))
+        .cloned()
+        .collect();
+    for p in gone {
+        setid.remove(&p);
+    }
 }
 
 // `setid` collects the image paths whose setuid or setgid bit this extraction cleared, as the
@@ -183,9 +194,9 @@ fn apply_layer(
             let parent = image_path(path.parent().unwrap_or(Path::new("")));
             if stripped == ".wh..opq" {
                 // An opaque marker clears the directory's contents, not the directory.
-                setid.retain(|p| !p.starts_with(&parent) || p == &parent);
+                forget_under(setid, &parent, true);
             } else {
-                forget_under(setid, &parent.join(stripped));
+                forget_under(setid, &parent.join(stripped), false);
             }
             apply_whiteout(
                 &dest_canon,
@@ -451,6 +462,8 @@ mod tests {
                 ("usr/bin/ls", tar::EntryType::Regular, 0o755),
                 ("var/mail/", tar::EntryType::Directory, 0o2775),
                 ("opt/a/sgid", tar::EntryType::Regular, 0o2755),
+                // Sorts between `/opt/a/…` entries as a string, but after them by component.
+                ("opt/a-b/sgid", tar::EntryType::Regular, 0o2755),
             ]),
             &dest,
             &mut setid,
@@ -463,7 +476,13 @@ mod tests {
         };
         assert_eq!(
             names(&setid),
-            ["/opt/a/sgid", "/usr/bin/su", "/usr/bin/wall", "/var/mail"]
+            [
+                "/opt/a/sgid",
+                "/opt/a-b/sgid",
+                "/usr/bin/su",
+                "/usr/bin/wall",
+                "/var/mail"
+            ]
         );
 
         // A later layer rewrites `su` without the bit, deletes `wall`, and clears `/opt/a`.
@@ -477,7 +496,7 @@ mod tests {
             &mut setid,
         )
         .unwrap();
-        assert_eq!(names(&setid), ["/var/mail"]);
+        assert_eq!(names(&setid), ["/opt/a-b/sgid", "/var/mail"]);
     }
 
     #[test]
