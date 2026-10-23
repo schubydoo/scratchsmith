@@ -2,8 +2,9 @@
 //! OCI-layout tarball (`pack --oci-archive`, or any skopeo/buildah OCI archive), apply its
 //! layers in order into a directory, and report what landed. Pairs with `diff` — unpack two
 //! images, then compare the directories. Audits an image you did not build, so every step
-//! treats the archive as hostile: blobs are digest-verified, decompression is capped, and
-//! both extraction and whiteout deletion refuse any path that escapes the target.
+//! treats the archive as hostile: blobs are digest-verified, decompression is capped, both
+//! extraction and whiteout deletion refuse any path that escapes the target, and setuid and
+//! setgid bits are never applied.
 
 use crate::image::hex;
 use crate::report::UnpackReport;
@@ -94,6 +95,9 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
     for entry in ar.entries().context("reading OCI archive")? {
         let mut e = entry.map_err(escape_tar_err)?;
         let path = e.path()?.to_string_lossy().into_owned();
+        // `tar -cf img.tar .` inside a layout directory stores `./index.json`; the name is the
+        // same file, so match it without the prefix.
+        let path = path.strip_prefix("./").map(str::to_owned).unwrap_or(path);
         // The `blobs/` and `blobs/sha256/` directory entries carry a trailing slash and
         // an empty body (a skopeo/buildah export tars the layout directory), so only
         // digest-verify real blob files — not the directory entry itself.
@@ -706,6 +710,31 @@ mod tests {
         gnu.sparse[0].set_length(0);
         h.set_cksum();
         ar.append(&h, &b""[..]).unwrap();
+    }
+
+    #[test]
+    fn read_archive_accepts_dot_slash_entry_names() {
+        // What `tar -cf img.tar .` writes inside an OCI layout directory.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("dot.tar");
+        let body = b"layerbytes";
+        let digest = hex(Sha256::digest(body));
+        let blob = format!("./blobs/sha256/{digest}");
+        // Raw header names: tar's builder normalizes `./` away, so set the bytes by hand.
+        let mut ar = tar::Builder::new(Vec::new());
+        for (name, data) in [(blob.as_str(), &body[..]), ("./index.json", &b"{}"[..])] {
+            let mut h = tar::Header::new_gnu();
+            h.as_gnu_mut().unwrap().name[..name.len()].copy_from_slice(name.as_bytes());
+            h.set_size(data.len() as u64);
+            h.set_mode(0o644);
+            h.set_entry_type(tar::EntryType::Regular);
+            h.set_cksum();
+            ar.append(&h, data).unwrap();
+        }
+        std::fs::write(&path, ar.into_inner().unwrap()).unwrap();
+        let (blobs, index) = read_archive(&path).expect("a ./ prefix names the same file");
+        assert!(blobs.contains_key(&digest));
+        assert_eq!(index, serde_json::json!({}));
     }
 
     #[test]

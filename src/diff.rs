@@ -173,9 +173,12 @@ mod tests {
     #[test]
     fn a_sparse_file_hashes_like_its_full_content() {
         use std::io::{Seek, SeekFrom, Write};
-        const SIZE: u64 = 64 << 20;
+        // Small on purpose: this pins the digest of a holey file, not the streaming, which no
+        // unit test can tell apart from a whole-file read without a file larger than memory.
+        const SIZE: u64 = 1 << 20;
         let tmp = tempfile::tempdir().unwrap();
-        // Mostly hole, as `unpack` writes a sparse layer entry: it is hashed, not loaded.
+        // Mostly hole, as `unpack` writes a sparse layer entry: it hashes as its zero-filled
+        // content.
         let mut f = fs::File::create(tmp.path().join("big")).unwrap();
         f.write_all(b"head").unwrap();
         f.seek(SeekFrom::Start(SIZE - 4)).unwrap();
