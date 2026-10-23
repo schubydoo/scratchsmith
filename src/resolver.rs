@@ -277,7 +277,8 @@ const DEVICE_READ_CAP: u64 = 256 << 20;
 // it reported, because a procfs file reports 0 and still has content, but not past
 // `device_cap` too: a tracefs pipe is a regular file of length 0 that never ends. A FIFO or
 // pipe reads to EOF as before: it ends when its writer closes, and an operator can pipe in a
-// real library (`--include <(cat lib.so)`).
+// real library (`--include <(cat lib.so)`). Only the operator names one: `resolve_with`
+// refuses a FIFO that a name out of an ELF resolves to, and PT_INTERP must be a regular file.
 fn read_bounded(path: &Path, device_cap: u64) -> Result<Vec<u8>> {
     use std::io::Read;
     use std::os::unix::fs::FileTypeExt;
@@ -524,6 +525,20 @@ pub fn resolve_with(
             // just above, and the stager's copy of that same unreadable file failed, so the
             // error named a copy. `check_lib_policy` runs after `stager::stage`, so the
             // --require/--deny gate was never reached rather than blind.
+            //
+            // No library is a FIFO, a device or a socket, and the name came out of an ELF. A
+            // FIFO with no writer blocks the open forever, and one with a writer never has to
+            // end. Refuse it before the read opens it. An unreadable path is left to the read.
+            if i < declared && std::fs::metadata(&real).is_ok_and(|meta| !meta.is_file()) {
+                bail!(
+                    "{} needs `{}`, which resolved to {}, and that is not a regular file. \
+                     Refusing it, because that name can point at any host file. Rebuild the \
+                     binary so it names a real library.",
+                    printable(&obj_path),
+                    escape_for_display(soname),
+                    printable(&real)
+                );
+            }
             match source.read(&real)? {
                 Some(child) => {
                     let declared = child.needed.len();
@@ -659,12 +674,15 @@ pub(crate) fn escape_if_line_breaking(text: &str) -> std::borrow::Cow<'_, str> {
 // True when the file opens and begins with the ELF magic. Any IO failure reads as "no",
 // which loses the corrupt-ELF warning and fails closed where a missing magic is an error. A
 // 2.0 rejection of a file that HAS the magic must not gate on this: it would fail open.
+// Only a regular file is opened: a FIFO was already read to EOF, so a second open waits
+// forever for a writer that is gone.
 fn has_elf_magic(path: &Path) -> bool {
     use std::io::Read;
     let mut magic = [0u8; 4];
-    std::fs::File::open(path)
-        .and_then(|mut f| f.read_exact(&mut magic))
-        .is_ok()
+    path.is_file()
+        && std::fs::File::open(path)
+            .and_then(|mut f| f.read_exact(&mut magic))
+            .is_ok()
         && magic == *b"\x7fELF"
 }
 
@@ -1295,6 +1313,36 @@ mod tests {
     }
 
     #[test]
+    fn a_needed_fifo_with_no_writer_fails_without_opening_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let exe = root.join("app/exe");
+        touch(&exe);
+        let fifo = root.join("usr/lib/libfifo.so");
+        fs::create_dir_all(fifo.parent().unwrap()).unwrap();
+        mkfifo(&fifo);
+        let infos = HashMap::from([(
+            canonical(&exe),
+            elf(&["/usr/lib/libfifo.so"], &[], &[], None),
+        )]);
+        let err = returns(move || resolve_err(&exe, &root, &[], &MapSource { infos }));
+        assert!(
+            err.contains("`/usr/lib/libfifo.so`") && err.contains("not a regular file"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_magic_check_does_not_reopen_a_fifo() {
+        // An --include'd FIFO was already read to its end, so its writer is gone, and a second
+        // open would wait for a new one forever.
+        let tmp = tempfile::tempdir().unwrap();
+        let fifo = tmp.path().join("plugin.conf");
+        mkfifo(&fifo);
+        assert!(!returns(move || has_elf_magic(&fifo)));
+    }
+
+    #[test]
     fn an_endless_device_fails_at_the_cap() {
         for dev in ["/dev/zero", "/dev/urandom"] {
             let err = read_bounded(Path::new(dev), TEST_CAP).unwrap_err();
@@ -1308,7 +1356,8 @@ mod tests {
 
     #[test]
     fn an_elf_that_names_dev_zero_fails_instead_of_exhausting_memory() {
-        // The read of /dev/zero used to grow one buffer until the host ran out of memory.
+        // The read of /dev/zero used to grow one buffer until the host ran out of memory. A
+        // name out of an ELF is now refused before the read; the cap still bounds --include.
         let tmp = tempfile::tempdir().unwrap();
         let exe = tmp.path().join("exe");
         touch(&exe);
@@ -1323,9 +1372,7 @@ mod tests {
             };
             let err = resolve_with(&exe, &Sysroot::new("/"), &[], &src).unwrap_err();
             assert!(
-                format!("{err:#}").contains(&format!(
-                    "/dev/zero is a device that yields more than {DEVICE_READ_CAP} bytes"
-                )),
+                format!("{err:#}").contains("/dev/zero, and that is not a regular file"),
                 "{err:#}"
             );
         }

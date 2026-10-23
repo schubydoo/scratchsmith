@@ -1063,6 +1063,16 @@ fn copy_into(src: &Path, root: &Path, abs_target: &Path) -> Result<()> {
         .prefix(".scratchsmith-")
         .tempfile_in(dir)
         .with_context(|| format!("creating a file in {}", dir.display()))?;
+    // `fs::copy` refuses anything but a regular file only after it opens it, and the open of
+    // a FIFO with no writer never returns. The resolver already read an --include'd FIFO to
+    // its end, so its writer is gone.
+    if !src.is_file() {
+        bail!(
+            "copying {} -> {}: the source is not a regular file",
+            src.display(),
+            target.display()
+        );
+    }
     // `fs::copy` gives the sibling the mode of the source, which the rename keeps.
     std::fs::copy(src, tmp.path())
         .with_context(|| format!("copying {} -> {}", src.display(), target.display()))?;
@@ -1134,6 +1144,34 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, bytes).unwrap();
         fs::canonicalize(path).unwrap()
+    }
+
+    #[test]
+    fn a_fifo_source_fails_without_opening_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fifo = tmp.path().join("plugin.conf");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            0,
+        )
+        .unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir(&root).unwrap();
+        // No writer ever opens the FIFO, so an open of it never returns.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(
+                copy_into(&fifo, &root, Path::new("/etc/plugin.conf")).map_err(|e| e.to_string()),
+            );
+        });
+        let err = rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("the copy blocked")
+            .unwrap_err();
+        assert!(err.contains("not a regular file"), "{err}");
     }
 
     #[test]
