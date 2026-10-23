@@ -875,9 +875,10 @@ installs it to <code>~/.local/bin</code> (or <code>/usr/local/bin</code> as root
 </code></pre></div>
 <p>Piping to <code>bash</code> runs <a href="https://github.com/schubydoo/scratchsmith/blob/main/install.sh"><code>install.sh</code></a>.
 You can read it first. <code>VERSION</code> and <code>BIN_DIR</code> env vars override the tag and install
-directory. With cosign installed, a missing signature bundle stops the install.
-<code>INSECURE_ALLOW_MISSING_SIGNATURE=1</code> installs anyway and verifies only the SHA-256. A signature
-that fails to verify still stops the install.
+directory. Without cosign, the script warns and verifies only the SHA-256. With cosign
+installed, a missing signature bundle stops the install. The <code>INSECURE_ALLOW_MISSING_SIGNATURE=1</code>
+env var installs anyway and verifies only the SHA-256. A signature that fails to verify still
+stops the install.
 If a download stalls for 30 seconds, the script stops with an error. It does not
 retry. That limit needs curl, or a wget that takes <code>-T</code>. A BusyBox wget that was built with no
 timeout feature can still hang. Uninstall with <code>--uninstall</code>:</p>
