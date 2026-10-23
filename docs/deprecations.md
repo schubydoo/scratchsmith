@@ -101,16 +101,33 @@ Now `pack` and `graph` refuse such a file and exit `1`. The loader cannot start 
 needs it, so no working image depends on it. A data file that you name with `--include` still
 stages. A library deeper in the tree that names the same file then resolves to that staged copy.
 
+### An ELF that the loader cannot load, named by the binary or a library
+
+The same names can point at a host file that is an ELF but not a library, such as a core dump.
+Through 1.7.2, scratchsmith staged that file. A core dump holds the memory of a crashed
+process, which can include secrets.
+
+Now `pack` and `graph` refuse such a file and exit `1`. A library must be a shared object
+(`ET_DYN`). glibc refuses any other type with "cannot dynamically load executable", so no
+working image depends on one. A program interpreter must be `ET_DYN` or `ET_EXEC`, because the
+kernel loads both.
+
+This check reads the ELF type only. A PIE executable is `ET_DYN` too, so a name that points at
+one still stages it. A core dump, an object file (`ET_REL`), and an executable built without
+PIE do not. A file that you name with `--include` stages as before. If the binary itself also
+names that file, the refusal comes first.
+
 ## Tolerances ending in 2.0
 
 | Input | Warns since | Error in | What to do |
 |---|---|---|---|
 | A library that starts like an ELF and cannot be parsed | 1.6.0 | 2.0.0 | Replace the damaged file |
+| A program interpreter that starts like an ELF and cannot be parsed | 1.8.0 | 2.0.0 | Replace the damaged file |
 | `$PLATFORM` in a search path, on an architecture with no value for it | 1.6.0 | 2.0.0 | Write the directory name in the path |
 | A library found only through an inherited `RPATH`, by an object that has `RUNPATH` | 1.6.0 | 2.0.0 | Give that object the directory in its own `RUNPATH` |
 | `--no-build` into an output directory that is not empty | 1.6.0 | 2.0.0 | Use a new directory, or empty it first |
 
-The first three warnings come from `pack` and from `graph`, because both resolve the same
+The first four warnings come from `pack` and from `graph`, because both resolve the same
 dependency tree. The last one comes from `pack` only.
 
 ### A library that cannot be parsed
