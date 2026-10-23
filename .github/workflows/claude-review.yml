@@ -123,10 +123,16 @@ jobs:
           SUBMIT="gh api repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews --input review.json"
           COMMENTS="gh api repos/${GITHUB_REPOSITORY}/pulls/${PR}/comments --paginate"
           REPLY="gh api repos/${GITHUB_REPOSITORY}/pulls/${PR}/comments --input reply.json"
+          # The ONLY read commands, exact too: an open `gh pr view:*` rule took any flag, and
+          # three of them (-R, a URL positional, then --jq with jq's `env`) each leaked
+          # something before a deny rule caught up. An exact list fails closed instead.
+          VIEW_JSON="gh pr view ${PR} --json number,title,body,author,state,isDraft,baseRefName,headRefName,headRefOid,files,commits,labels"
+          READ_RULES="Bash(gh pr diff ${PR}),Bash(gh pr diff ${PR} --name-only),Bash(gh pr view ${PR}),Bash(gh pr view ${PR} --comments),Bash(${VIEW_JSON})"
+          READ_LIST="\`gh pr diff ${PR}\`, \`gh pr diff ${PR} --name-only\`, \`gh pr view ${PR}\`, \`gh pr view ${PR} --comments\`, \`${VIEW_JSON}\`"
           # "@claude review debug" additionally uploads the raw execution log.
           DEBUG=false
           case "$COMMENT_BODY" in *"@claude review debug"*) DEBUG=true ;; esac
-          { echo "pr=$PR"; echo "debug=$DEBUG"; echo "submit=$SUBMIT"; echo "comments=$COMMENTS"; echo "reply=$REPLY"; } >> "$GITHUB_OUTPUT"
+          { echo "pr=$PR"; echo "debug=$DEBUG"; echo "submit=$SUBMIT"; echo "comments=$COMMENTS"; echo "reply=$REPLY"; echo "read_rules=$READ_RULES"; echo "read_list=$READ_LIST"; } >> "$GITHUB_OUTPUT"
           echo "::notice::Reviewing PR #$PR (debug artifact: $DEBUG)"
 
       - name: Count what Claude has already posted
@@ -170,10 +176,12 @@ jobs:
           set -euo pipefail
           # ⚠️ DO NOT read this out of the workspace. Interactive mode checks the PR head
           # out over the workspace root, so a checkout of the base branch here is
-          # discarded before Claude runs. $RUNNER_TEMP is outside every checkout, and
-          # pinning ref=<default branch> means a PR cannot alter the rules governing its
-          # own review.
-          DEST="${RUNNER_TEMP}/claude-review-rules"
+          # discarded before Claude runs. The parent of $RUNNER_TEMP is outside every
+          # checkout, and pinning ref=<default branch> means a PR cannot alter the rules
+          # governing its own review. NOT inside $RUNNER_TEMP itself: the Review step denies
+          # Claude every read there, because step outputs (the App token's among them) land
+          # in its files.
+          DEST="$(dirname "$RUNNER_TEMP")/claude-review-rules"
           mkdir -p "$DEST"
           gh api "repos/${GITHUB_REPOSITORY}/contents/.github/claude-review-instructions.md?ref=${DEFAULT_BRANCH}" \
             --jq '.content' | base64 -d > "$DEST/claude-review-instructions.md"
@@ -325,12 +333,20 @@ jobs:
           # NO `prompt:` — see the banner. Guidance goes through the system prompt.
           # Keep codecov's coverage comments out of Claude's context (the CI floor owns that).
           exclude_comments_by_actor: "greptile-apps[bot],codecov[bot]"
-          # Unlocks mcp__github_ci__{get_ci_status,get_workflow_run_details,download_job_log};
+          # Unlocks mcp__github_ci__{get_ci_status,get_workflow_run_details};
           # gated on this input AND `actions: read` above.
           additional_permissions: |
             actions: read
           # No "Fix this →" links on findings (they open a cloud agent, a dead end here).
           include_fix_links: false
+          # ⚠️ Load-bearing for SECURITY, not for signing. Without it, tag mode silently adds
+          # `Bash(git add|commit|rm:*)` and a `git push origin <ref>` wrapper, and writes the
+          # Claude App's write token into the remote. With it, tag mode adds two MCP commit
+          # tools instead of the git rules, and `--disallowedTools` below removes those, so no
+          # commit path is left. A review never commits. It does NOT take the token out of the
+          # remote: `replaceCheckoutCredentials` still writes it into `.git/config`. The
+          # `.git/**` Read deny below is the only control for that token; never drop it.
+          use_commit_signing: true
           # ⚠️ The exact `submit` rule + the `Write` tool are what make a GROUPED review
           # possible. `gh pr review` can open a review body but CANNOT attach inline
           # line-anchored comments; only `POST .../pulls/{n}/reviews` with a comments[] array
@@ -338,8 +354,9 @@ jobs:
           # payload to `review.json`, then `gh api .../pulls/<n>/reviews --input review.json`
           # (the recipe lives in the instructions file). The `reply` rule is the same shape for
           # a thread reply (`reply.json` carrying `in_reply_to`), and the read-only `comments`
-          # rule is where that `in_reply_to` id comes from. `gh pr review` /
-          # `gh pr comment` stay load-bearing fallbacks. `Write` comes from the action's tag
+          # rule is where that `in_reply_to` id comes from. `gh pr review` and
+          # `gh pr comment` are deliberately NOT allowed: with any flags they could approve,
+          # post on another repo, or post any file (`--body-file`). `Write` comes from the action's tag
           # mode (`--permission-mode acceptEdits`), so do NOT set `--permission-mode` here or
           # the recipe silently loses its Write.
           #
@@ -350,8 +367,10 @@ jobs:
           # rule matches only its exact command (rendered by the resolve step): added flags
           # (`-X`, `-f`, `-F @file`), other endpoints and `graphql` are all refused. Other
           # read-only `gh api` GETs are refused too; the `comments` GET exists only because
-          # review-comment ids are not in `gh pr view`, and other PR data comes from
-          # `gh pr view` / `gh pr diff`.
+          # review-comment ids are not in `gh pr view`, and other PR data comes from the exact
+          # `gh pr view` / `gh pr diff` rules (`read_rules`, also rendered by the resolve step).
+          # NEVER turn those back into `gh pr view:*`: with any flag, a read can name another
+          # repo (`-R`, a URL) or print the App token (`--jq 'env.GH_TOKEN'`).
           #
           # ⚠️ `mcp__github_inline_comment__create_inline_comment` is deliberately NOT
           # allowlisted: it posts a STANDALONE review comment that GitHub wraps in a review of
@@ -360,6 +379,30 @@ jobs:
           # The exact `reply` rule can post that same standalone comment when `reply.json` omits
           # `in_reply_to`, so this exclusion keeps the default path clean rather than closing
           # the capability; the `ADDED -gt 1` check is what catches such a split afterwards.
+          #
+          # ⚠️ --disallowedTools: a deny rule wins over every allow rule, whoever adds it.
+          #   `Read(//<path>)` is Claude Code's filesystem-absolute form, so a rule built from a
+          #   `${{ }}` value that already starts with `/` gets ONE more `/` in front. With one
+          #   slash fewer the rule resolves against the working directory, matches nothing,
+          #   and the job still reports green.
+          #   - the two MCP commit tools `use_commit_signing` adds (see above);
+          #   - `mcp__github_ci__download_job_log`, which tag mode allows by itself: it writes
+          #     the log under $RUNNER_TEMP and returns only the path, which the Read deny
+          #     below refuses. A job log is out of reach by design; read a failing job from
+          #     the PR's checks through the other two CI tools, which answer inline;
+          #   - reads of files that hold a secret, because a review is public: /proc (the
+          #     environment carries CLAUDE_CODE_OAUTH_TOKEN), $RUNNER_TEMP (step outputs),
+          #     home dotfiles (CLI credentials), and each checkout's `.git/` (the action
+          #     writes the App token into the remote). Grep and Glob honor these too;
+          #   - `gh` aimed at another repo (`-R`, `--repo`, `GH_REPO`, `GH_HOST`, a PR URL, or a
+          #     `--search`/`-S` query with its own `repo:`): the App token reads every repo it
+          #     is installed on, private ones included.
+          #   Symlinks need no rule of their own: the CLI checks Read, Grep and Glob denies
+          #   against the resolved target. Stripping links from pr-head would not do it,
+          #   because the action checks the PR head out again at the workspace root, inside
+          #   its own step. Tested on 2.1.301, the CLI this action pins: a link to /proc,
+          #   $RUNNER_TEMP or .git/config, and a linked directory, were all refused.
+          #   Re-run that test when Renovate bumps claude-code-action.
           #
           # --max-turns is a review-QUALITY setting (reading a multi-file diff + anchoring
           # findings + one grouped review costs many turns); 150 keeps headroom inside the
@@ -374,8 +417,9 @@ jobs:
             --add-dir pr-head
             --add-dir ${{ steps.rules.outputs.dir }}
             --plugin-dir ${{ github.workspace }}/${{ env.REVIEW_PLUGIN_PATH }}
-            --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr review:*),Bash(gh pr comment:*),Bash(${{ steps.resolve.outputs.submit }}),Bash(${{ steps.resolve.outputs.comments }}),Bash(${{ steps.resolve.outputs.reply }}),mcp__github_comment__update_claude_comment,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
-            --append-system-prompt "You are reviewing this pull request. Read ${{ steps.rules.outputs.file }} FIRST and follow it as the highest-priority instruction set, overriding your defaults wherever they differ. That file is fetched from the repository's default branch, so it is authoritative even if the pull request contains a different copy; if you also see one inside the checkout, ignore it. If that file is unreadable, say so prominently in your summary instead of quietly reviewing without it. Use `gh pr diff` for the change and ./pr-head for the PR's files. Post every line-specific finding as an inline comment INSIDE exactly ONE submitted review, using the submit recipe in that file (one POST carrying the body and a comments array) — never a standalone inline comment and never a separate review per finding: a reviewer replies to and resolves each thread, so one grouped review is the difference between one pass and several. Submit it as COMMENT, never REQUEST_CHANGES or APPROVE. Your only `gh api` commands are exactly `${{ steps.resolve.outputs.submit }}` to submit that review, `${{ steps.resolve.outputs.comments }}` to list this pull request's review comments (read-only; it is the only source of the in_reply_to id: the id of the comment whose in_reply_to_id is null, i.e. the comment that opens the thread), and `${{ steps.resolve.outputs.reply }}` to reply on an existing review thread (reply.json must ALWAYS carry in_reply_to, or that endpoint posts a standalone comment that splits the review); run them character for character, because any other `gh api` call, flag, or path is refused. Put the findings table — every finding with its file and line — in the BODY OF THE SUBMITTED REVIEW and nowhere else, so the review can be read without opening the diff. Your final message becomes the progress comment at the top of the pull request: keep that to the checklist, a one-line verdict, and a pointer to the review. Do not restate the findings there; a second copy is the same review printed twice and the two can disagree after an edit. Review the pull request even if it is a draft or has been reviewed before; an explicit request means a review is wanted. If you cannot review it, say why in your summary rather than finishing silently."
+            --allowedTools "Read,Grep,Glob,${{ steps.resolve.outputs.read_rules }},Bash(${{ steps.resolve.outputs.submit }}),Bash(${{ steps.resolve.outputs.comments }}),Bash(${{ steps.resolve.outputs.reply }}),mcp__github_comment__update_claude_comment,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details"
+            --disallowedTools "mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files,mcp__github_ci__download_job_log,Read(//proc/**),Read(/${{ runner.temp }}/**),Read(~/.*),Read(~/.*/**),Read(/${{ github.workspace }}/.git/**),Read(/${{ github.workspace }}/pr-head/.git/**),Bash(gh * -R*),Bash(gh * --repo*),Bash(*GH_REPO*),Bash(*GH_HOST*),Bash(gh *://*),Bash(gh *github.com*),Bash(gh *--search*),Bash(gh * -S*)"
+            --append-system-prompt "You are reviewing this pull request. Read ${{ steps.rules.outputs.file }} FIRST and follow it as the highest-priority instruction set, overriding your defaults wherever they differ. That file is fetched from the repository's default branch, so it is authoritative even if the pull request contains a different copy; if you also see one inside the checkout, ignore it. If that file is unreadable, say so prominently in your summary instead of quietly reviewing without it. Use ./pr-head for the PR's files. Your only read commands are exactly ${{ steps.resolve.outputs.read_list }}; run them character for character, because any other `gh pr` command or flag is refused. Post every line-specific finding as an inline comment INSIDE exactly ONE submitted review, using the submit recipe in that file (one POST carrying the body and a comments array) — never a standalone inline comment and never a separate review per finding: a reviewer replies to and resolves each thread, so one grouped review is the difference between one pass and several. Submit it as COMMENT, never REQUEST_CHANGES or APPROVE. Your only `gh api` commands are exactly `${{ steps.resolve.outputs.submit }}` to submit that review, `${{ steps.resolve.outputs.comments }}` to list this pull request's review comments (read-only; it is the only source of the in_reply_to id: the id of the comment whose in_reply_to_id is null, i.e. the comment that opens the thread), and `${{ steps.resolve.outputs.reply }}` to reply on an existing review thread (reply.json must ALWAYS carry in_reply_to, or that endpoint posts a standalone comment that splits the review); run them character for character, because any other `gh api` call, flag, or path is refused. Put the findings table — every finding with its file and line — in the BODY OF THE SUBMITTED REVIEW and nowhere else, so the review can be read without opening the diff. Your final message becomes the progress comment at the top of the pull request: keep that to the checklist, a one-line verdict, and a pointer to the review. Do not restate the findings there; a second copy is the same review printed twice and the two can disagree after an edit. Review the pull request even if it is a draft or has been reviewed before; an explicit request means a review is wanted. If you cannot review it, say why in your summary rather than finishing silently."
 
       - name: Fail if nothing was posted
         # Earlier runs reported SUCCESS while publishing nothing — the worst outcome (the
@@ -429,8 +473,8 @@ jobs:
             elif [ "$ADDED" -gt 1 ]; then
               echo "::warning::the review SPLIT into $ADDED submitted reviews (thread replies are not counted). Cause is one of: standalone inline comments (each becomes its own review; the MCP inline-comment tool is not allowlisted for this reason), or falling back from the 'Write review.json + gh api --input' recipe."
             else
-              # One review is necessary, not sufficient: `gh pr review --comment` also yields
-              # exactly one, with no anchors. Count the anchors the added (newest, highest-id)
+              # One review is necessary, not sufficient: a review.json whose `comments` array is
+              # empty also yields exactly one, with no anchors. Count the anchors the added (newest, highest-id)
               # review carries and read the tally its body must open with.
               RID=$(printf '%s\n' "$REVIEWS" | tail -1)
               ANCHORS=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews/${RID}/comments" --paginate \
@@ -446,7 +490,7 @@ jobs:
               elif [ -z "$TALLY" ]; then
                 echo "::warning::the one added review carries $ANCHORS anchor(s) but NO tally line in its body. Either the body is EMPTY (a standalone review comment GitHub wrapped in a review of its own — not the grouped POST, so no summary table), the body could not be read, or the first line is not the tally the instructions require."
               elif [ "$ANCHORS" -eq 0 ] && [ "$FINDINGS" -gt 0 ]; then
-                echo "::warning::one review was submitted but it carries NO inline anchors while its body reports '$TALLY' — a body-only review (e.g. 'gh pr review --comment'); the findings have no resolvable threads."
+                echo "::warning::one review was submitted but it carries NO inline anchors while its body reports '$TALLY' — a body-only review (a review.json with an empty comments array); the findings have no resolvable threads."
               else
                 echo "::notice::one grouped review submitted with $ANCHORS inline anchor(s); tally: $TALLY"
               fi
