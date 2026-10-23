@@ -83,6 +83,13 @@ Profiles do not inherit from each other, so repeat the keys the inner table reli
 Some input was the attack itself. COMPATIBILITY.md allows a minor or patch release to refuse
 such input with no deprecation cycle, and this section lists each case.
 
+### A library that is not a regular file
+
+A `DT_NEEDED` name can resolve to a FIFO, a device, or a socket. Through 1.7.2, the read of a
+FIFO waited forever for a writer, or read a writer's stream with no end. Now `pack` and `graph`
+refuse such a library before they open it, and exit `1`. No library is a FIFO, so no working
+image depends on one.
+
 ### A file that is not an ELF, named by the binary or a library
 
 A `DT_NEEDED` entry in the binary or in a library names a file. The binary's program
