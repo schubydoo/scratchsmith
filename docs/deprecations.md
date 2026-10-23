@@ -78,6 +78,22 @@ push = "ghcr.io/me/app:latest"
 
 Profiles do not inherit from each other, so repeat the keys the inner table relied on.
 
+## Refused without a deprecation cycle
+
+Some input was the attack itself. COMPATIBILITY.md allows a minor or patch release to refuse
+such input with no deprecation cycle, and this section lists each case.
+
+### A file that is not an ELF, named by the binary or a library
+
+A `DT_NEEDED` entry in the binary or in a library names a file. The binary's program
+interpreter (`PT_INTERP`) names a file too. Through 1.7.2, scratchsmith staged that file, and
+it did not check that the file was an ELF. The name can point at any file on the host, such as
+`~/.docker/config.json`, and that file shipped in the image.
+
+Now `pack` and `graph` refuse such a file and exit `1`. The loader cannot start a binary that
+needs it, so no working image depends on it. A data file that you name with `--include` still
+stages. A library deeper in the tree that names the same file then resolves to that staged copy.
+
 ## Tolerances ending in 2.0
 
 | Input | Warns since | Error in | What to do |
@@ -95,12 +111,6 @@ dependency tree. The last one comes from `pack` only.
 Scratchsmith reads each library that the binary needs, and then resolves the libraries that
 library needs in turn. A file that you name with `--include` and that is not an ELF at all has
 no dependencies, so scratchsmith stages it and continues. That stays true in 2.0.
-
-The binary or a library can name a file as a `DT_NEEDED` entry or as the program interpreter.
-If that file is not an ELF, scratchsmith refuses it, and `pack` and `graph` exit `1`. The name
-can point at any file on the host, and that file then ships in the image. This is a security
-exception to the deprecation cycle in COMPATIBILITY.md. The loader cannot start such a binary,
-so no working image depends on it.
 
 A truncated or corrupt library is a different case. The file starts with the ELF signature, and
 scratchsmith cannot read its list of dependencies. Today scratchsmith stages the damaged file

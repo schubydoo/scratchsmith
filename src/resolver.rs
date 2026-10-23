@@ -313,8 +313,9 @@ pub fn resolve_with(
             // `is_file` goes first, so a FIFO is never opened and cannot block the read.
             if !source.is_file() || !has_elf_magic(&source) {
                 bail!(
-                    "the program interpreter (PT_INTERP) `{}` is not an ELF file, so it is not \
-                     staged: {}",
+                    "the program interpreter (PT_INTERP) `{}` is not an ELF file: {}. Refusing \
+                     it, because that path can name any host file. Rebuild the binary with a \
+                     real loader path.",
                     escape_for_display(interp),
                     printable(&canonical(&source))
                 );
@@ -483,8 +484,9 @@ pub fn resolve_with(
                 // path the ELF set, can point at any host file, which would then ship in the
                 // image. Only the operator's --include may stage a file that is not an ELF.
                 None if i < declared => bail!(
-                    "{} needs `{}`, which resolved to {}, and that file is not an ELF, so it \
-                     is not staged.",
+                    "{} needs `{}`, which resolved to {}, and that file is not an ELF. \
+                     Refusing it, because that name can point at any host file. Rebuild the \
+                     binary so it names a real library.",
                     printable(&obj_path),
                     escape_for_display(soname),
                     printable(&real)
@@ -816,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn a_resolved_file_that_is_not_an_elf_stays_a_leaf() {
+    fn a_corrupt_elf_that_reads_fine_stays_a_leaf() {
         // The other half: a file that READS fine and does not parse has no DT_NEEDED of its
         // own, so it is staged as a leaf and the resolution continues.
         let tmp = tempfile::tempdir().unwrap();
