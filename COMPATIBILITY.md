@@ -61,6 +61,12 @@ stderr, which never breaks a consumer.
 **Defaults are special:** a default value cannot be cleanly "deprecated". **A changed default
 is always a major change.** We do not try to warn our way around it.
 
+**Security exceptions:** some input is the attack itself, such as an ELF that names a host
+secret as a library to copy into the image. A minor/patch can refuse that input without a
+deprecation cycle. The changelog lists each one under **Security**, and
+[Deprecations](docs/deprecations.md) names what changed. We use this only for input that no
+working image depends on.
+
 ## How this is enforced
 
 Each surface is guarded by a test that lands with this policy, and the library API by an
