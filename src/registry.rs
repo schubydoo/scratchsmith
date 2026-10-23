@@ -313,7 +313,8 @@ fn build_index(children: &[Child]) -> Result<OciImageIndex> {
             bail!(
                 "two source images resolve to the same platform {}; each platform must be \
                  unique in an index",
-                platform_label(c)
+                // The os/arch/variant strings come from a registry-served config blob.
+                crate::resolver::escape_for_display(&platform_label(c))
             );
         }
     }
@@ -1400,6 +1401,22 @@ mod tests {
             format!("{err:#}").contains("same platform linux/amd64"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn a_duplicate_platform_error_escapes_the_registry_label() {
+        // os/arch come from a config blob the registry serves.
+        let evil = "linux\nsigned evil\x1b[2J";
+        let children = vec![
+            child("amd64", evil, "sha256:aaa"),
+            child("amd64", evil, "sha256:ccc"),
+        ];
+        let err = format!(
+            "{:#}",
+            build_index(&children).expect_err("duplicate platform")
+        );
+        assert!(!err.contains('\n') && !err.contains('\x1b'), "{err:?}");
+        assert!(err.contains("linux\\nsigned evil"), "{err}");
     }
 
     #[test]
