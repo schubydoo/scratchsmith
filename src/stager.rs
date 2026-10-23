@@ -883,55 +883,93 @@ fn stage_files(
     })
 }
 
-// Where the loader goes: PT_INTERP walked the way the kernel walks it inside the image, where
-// `..` at the root stays at the root. Joining the raw string under `dest` left that walk to
-// the HOST, so `/../../tmp/x` landed outside the staging root. Each directory the walk passes
-// through is created, as that join's `create_dir_all` did, because the image still carries
-// the unchanged string: `/lib/../lib64/ld.so` needs `/lib` too. A staged link that `..` leaves
-// is followed as the host did, and refused if it leads out of the root.
+// Where the loader goes: PT_INTERP resolved inside the image (see `image_dir`). Joining the raw
+// string under `dest` left the walk to the HOST, so `/../../tmp/x` landed outside the staging
+// root. The directories on the way are created, as that join's `create_dir_all` did, because
+// the image still carries the unchanged string: `/lib/../lib64/ld.so` needs `/lib` too.
 fn interp_target(dest: &Path, pt_interp: &Path) -> Result<PathBuf> {
     use std::path::Component;
+    let shown = || crate::resolver::escape_for_display(&pt_interp.to_string_lossy());
+    let Some(Component::Normal(name)) = pt_interp.components().next_back() else {
+        bail!("PT_INTERP {} does not name a file", shown());
+    };
+    let dir = pt_interp.parent().unwrap_or(Path::new("/"));
+    let dir = image_dir(dest, dir, true).with_context(|| format!("PT_INTERP {}", shown()))?;
+    Ok(dir.join(name))
+}
+
+// A directory path resolved the way the kernel resolves it once the tree is the root: `.`
+// drops, `..` pops and stays at the root, and each staged link on the way is followed by the
+// value it carries, read inside the image as `link_target_in_image` reads one (its walk,
+// `lexical_image_path`, is the twin of this one for a path with no link on it). The HOST must
+// never follow a staged link: an absolute value, or `..` out of a link, would then name a host
+// path. The result holds no link, so a host call under it stays inside `dest`. `create` makes
+// each missing directory; without it, `..` out of a missing one fails, as the host's walk did.
+fn image_dir(dest: &Path, dir: &Path, create: bool) -> Result<PathBuf> {
+    use std::path::Component;
+    // The kernel's own limit before ELOOP.
+    const MAX_LINKS: usize = 40;
+    enum Step {
+        Root,
+        Up,
+        Name(std::ffi::OsString),
+    }
+    // Pending steps, last one first, so a link's value can be pushed in front of the rest.
+    let push = |todo: &mut Vec<Step>, p: &Path| {
+        todo.extend(p.components().rev().filter_map(|c| match c {
+            Component::Prefix(_) | Component::RootDir => Some(Step::Root),
+            Component::CurDir => None,
+            Component::ParentDir => Some(Step::Up),
+            Component::Normal(n) => Some(Step::Name(n.to_owned())),
+        }))
+    };
     let shown = |p: &Path| crate::resolver::escape_for_display(&p.to_string_lossy());
+    let mut todo = Vec::new();
+    push(&mut todo, dir);
     let mut at = PathBuf::from("/");
-    let mut walk = pt_interp.components().peekable();
-    while let Some(c) = walk.next() {
-        if walk.peek().is_none() {
-            if let Component::Normal(name) = c {
-                return Ok(at.join(name));
-            }
-            break;
-        }
-        match c {
-            Component::Prefix(_) | Component::RootDir => at = PathBuf::from("/"),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                let here = under(dest, &at);
-                if here
-                    .symlink_metadata()
-                    .is_ok_and(|m| m.file_type().is_symlink())
-                {
-                    let root = std::fs::canonicalize(dest)
-                        .with_context(|| format!("resolving {}", dest.display()))?;
-                    let real = std::fs::canonicalize(&here)
-                        .with_context(|| format!("resolving {}", here.display()))?;
-                    let Ok(rel) = real.strip_prefix(&root) else {
-                        bail!(
-                            "PT_INTERP {}: {} is a link out of the staging root",
-                            shown(pt_interp),
-                            shown(&at)
-                        );
-                    };
-                    at = Path::new("/").join(rel);
-                }
+    let (mut links, mut missing) = (0, false);
+    while let Some(step) = todo.pop() {
+        match step {
+            Step::Root => (at, missing) = (PathBuf::from("/"), false),
+            Step::Up if missing => bail!("{} is not a directory in the image", shown(&at)),
+            Step::Up => {
                 at.pop();
             }
-            Component::Normal(p) => {
-                at.push(p);
-                std::fs::create_dir_all(under(dest, &at))?;
+            Step::Name(name) => {
+                let next = at.join(name);
+                let host = under(dest, &next);
+                if missing {
+                    at = next;
+                    continue;
+                }
+                match host.symlink_metadata() {
+                    Ok(m) if m.file_type().is_symlink() => {
+                        links += 1;
+                        if links > MAX_LINKS {
+                            bail!("{}: too many levels of links", shown(&next));
+                        }
+                        let value = std::fs::read_link(&host)
+                            .with_context(|| format!("reading the link {}", host.display()))?;
+                        // A relative value resolves against `at`, the link's own directory.
+                        push(&mut todo, &value);
+                    }
+                    Ok(m) if m.is_dir() => at = next,
+                    Ok(_) => bail!("{} is not a directory in the image", shown(&next)),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        if create {
+                            std::fs::create_dir(&host)
+                                .with_context(|| format!("creating {}", host.display()))?;
+                        } else {
+                            missing = true;
+                        }
+                        at = next;
+                    }
+                    Err(e) => return Err(e).with_context(|| format!("reading {}", host.display())),
+                }
             }
         }
     }
-    bail!("PT_INTERP {} does not name a file", shown(pt_interp))
+    Ok(at)
 }
 
 // Regenerate /etc/ld.so.cache inside the staged root. A fresh root has no
@@ -1189,20 +1227,72 @@ mod tests {
     }
 
     #[test]
-    fn a_staged_link_out_of_the_root_is_refused_before_dotdot() {
+    fn a_staged_absolute_link_is_read_inside_the_image() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("dest");
         let outside = tmp.path().join("outside");
         let binary = make_file(&tmp.path().join("src/app"), b"binary");
         let loader = make_file(&tmp.path().join("src/real-ld.so"), b"LOADER");
-        fs::create_dir_all(outside.join("sub")).unwrap();
-        fs::create_dir_all(&dest).unwrap();
-        std::os::unix::fs::symlink(outside.join("sub"), dest.join("lib")).unwrap();
+        fs::create_dir_all(outside.join("usr/lib")).unwrap();
+        fs::create_dir_all(dest.join("usr/lib")).unwrap();
+        // The merged-usr form an image really carries. On the host it names the host's /usr/lib.
+        std::os::unix::fs::symlink("/usr/lib", dest.join("lib")).unwrap();
+        // A link whose value is a host path: in the image it is just a path under the root.
+        std::os::unix::fs::symlink(&outside, dest.join("out")).unwrap();
 
-        let res = with_interp("/lib/../x/ld.so", &loader);
-        let err = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap_err();
-        assert!(err.to_string().contains("out of the staging root"), "{err}");
-        assert!(!outside.join("x").exists(), "wrote through the link");
+        for (pt, staged) in [
+            ("/lib/../x/ld.so", "usr/x/ld.so"),
+            ("/lib/ld.so", "usr/lib/ld.so"),
+            ("/out/usr/lib/ld.so", "outside-in-image/usr/lib/ld.so"),
+        ] {
+            let staged = match staged.strip_prefix("outside-in-image/") {
+                Some(rest) => under(&dest, &outside).join(rest),
+                None => dest.join(staged),
+            };
+            let res = with_interp(pt, &loader);
+            stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+            assert_eq!(fs::read(&staged).unwrap(), b"LOADER", "{pt}");
+        }
+        assert!(
+            !outside.join("usr/lib/ld.so").exists(),
+            "wrote through the link"
+        );
+    }
+
+    #[test]
+    fn a_staged_link_loop_or_a_file_on_the_way_fails_with_its_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        std::os::unix::fs::symlink("b", dest.join("a")).unwrap();
+        std::os::unix::fs::symlink("a", dest.join("b")).unwrap();
+        fs::write(dest.join("file"), b"x").unwrap();
+
+        let err = interp_target(&dest, Path::new("/a/ld.so")).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("too many levels of links"),
+            "{err:#}"
+        );
+        let err = interp_target(&dest, Path::new("/file/ld.so")).unwrap_err();
+        let err = format!("{err:#}");
+        assert!(
+            err.contains("/file is not a directory in the image"),
+            "{err}"
+        );
+        assert!(err.contains("PT_INTERP /file/ld.so"), "{err}");
+    }
+
+    #[test]
+    fn image_dir_without_create_makes_nothing_and_fails_on_dotdot_out_of_a_gap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path();
+        assert_eq!(
+            image_dir(dest, Path::new("/gap/x"), false).unwrap(),
+            Path::new("/gap/x")
+        );
+        assert!(!dest.join("gap").exists(), "created a directory");
+        let err = image_dir(dest, Path::new("/gap/../x"), false).unwrap_err();
+        assert!(err.to_string().contains("/gap is not a directory"), "{err}");
     }
 
     #[test]
