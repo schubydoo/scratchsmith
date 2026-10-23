@@ -1574,9 +1574,10 @@ It then prints the total size delta. <code>--format json</code> emits the same d
 <p><code>unpack</code> reads an OCI-layout archive (what <code>pack --oci-archive</code> writes, or a skopeo/buildah
 export), applies each layer in order, and honors whiteouts. Combine it with <code>diff</code> to
 compare two images: unpack both, then run <code>scratchsmith diff old new</code>.</p>
-<p><code>unpack</code> clears the setuid and setgid bits on every file it writes. An untrusted image cannot
-then plant a setuid program owned by the user who unpacks it. The unpacked tree does not show
-which files in the image had those bits.</p>
+<p><code>unpack</code> clears the setuid and setgid bits on every file and directory it writes. An untrusted
+image cannot then plant a setuid program owned by the user who unpacks it. <code>unpack</code> prints one
+warning line on standard error for each path in the final image that had one of those bits.
+The <code>stripped_setid</code> field of <code>--format json</code> lists the same paths.</p>
 <h2 id="multi-arch-images">Multi-arch images<a class="headerlink" href="#multi-arch-images" title="Permanent link">&para;</a></h2>
 <p>Scratchsmith resolves against the host's libraries, so it packs for the architecture it runs on.
 To publish a multi-arch image, run <code>pack --push</code> on each architecture (a CI matrix). Then combine
