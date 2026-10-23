@@ -6,23 +6,25 @@ use crate::image::{self, ImageConfig};
 use crate::stager::StagedTree;
 use anyhow::{bail, Context, Result};
 use oci_client::client::{ClientConfig, ClientProtocol, Config as OciConfig, ImageLayer};
-use oci_client::manifest::OciImageIndex;
+use oci_client::manifest::{OciImageIndex, OciImageManifest, OciManifest};
 use oci_client::secrets::RegistryAuth;
 use oci_client::{Client, Reference};
+use sha2::{Digest, Sha256};
 
 /// Push the assembled image straight to a registry — **no Docker daemon**. The config and
-/// layer blobs and the manifest go up over HTTPS; oci-client HEAD-skips any blob the
-/// registry already has. Credentials come from the local Docker config
+/// layer blobs and the manifest go up over HTTPS; oci-client 0.18 uploads every blob, with
+/// no HEAD check for one the registry already has. Credentials come from the local Docker config
 /// (`~/.docker/config.json`, incl. credential helpers); a localhost registry is treated as
 /// plain-HTTP (matching Docker's insecure-localhost default), which also lets CI test
 /// against a local `registry:2`. Returns the pushed image's by-digest reference
 /// (`registry/repo@sha256:…`) when the registry reports a digest — `Some` for `--sign` to
-/// sign, `None` when the response carries no digest (a plain push still succeeds).
+/// sign, `None` when the response carries no digest (a plain push still succeeds). The inner
+/// `Err` is a reported digest that is not the manifest pushed: only `--sign` acts on it.
 pub fn push_to_registry(
     staged: &StagedTree,
     reference: &str,
     cfg: &ImageConfig,
-) -> Result<Option<String>> {
+) -> Result<Result<Option<String>>> {
     // Everything cheap first. Building the image stages and gzips the whole rootfs, so a bad
     // reference, a broken credential helper or a missing trust store used to surface only
     // after all of that work — where `index` reports the same failures instantly.
@@ -47,6 +49,9 @@ pub fn push_to_registry(
     let built = image::build_image(staged, cfg)?;
     let layers = vec![ImageLayer::oci_v1_gzip(built.layer.gzip, None)];
     let config = OciConfig::oci_v1(built.config_bytes, None);
+    // The manifest `push` builds itself when given `None`, built here so its digest is known.
+    let manifest = OciImageManifest::build(&layers, &config, None);
+    let pushed_digest = manifest_digest(&OciManifest::Image(manifest.clone()))?;
 
     // oci-client is async; run one scoped current-thread runtime for the identity-token
     // exchange (if any) and the push, rather than making the whole CLI async.
@@ -59,10 +64,14 @@ pub fn push_to_registry(
         // The pack report is the single user-facing line (like the other sinks); don't
         // print here too.
         let pushed = client
-            .push(&reference, &layers, config, &auth, None)
+            .push(&reference, &layers, config, &auth, Some(manifest))
             .await
             .with_context(|| format!("pushing to {reference}"))?;
-        Ok::<_, anyhow::Error>(digest_ref_from(&reference, &pushed.manifest_url))
+        Ok::<_, anyhow::Error>(digest_ref_from(
+            &reference,
+            &pushed.manifest_url,
+            &pushed_digest,
+        ))
     })?;
     Ok(digest_ref)
 }
@@ -84,8 +93,9 @@ pub struct IndexOutcome {
     /// The per-arch children that were assembled, in input order.
     pub entries: Vec<IndexEntry>,
     /// The pushed index's by-digest reference (`registry/repo@sha256:…`) when the registry
-    /// reports a digest — `Some` for `--sign`, `None` when the response carries none.
-    pub digest_ref: Option<String>,
+    /// reports a digest — `Some` for `--sign`, `None` when the response carries none, `Err`
+    /// when the reported digest is not the index pushed.
+    pub digest_ref: Result<Option<String>>,
 }
 
 // Manifest media types accepted when pulling a child. Both OCI and Docker single-image
@@ -160,6 +170,7 @@ pub fn push_index(target: &str, sources: &[String]) -> Result<IndexOutcome> {
             children.push(fetch_child(&client, r, &auth, source).await?);
         }
         let index = build_index(&children)?;
+        let pushed_digest = manifest_digest(&OciManifest::ImageIndex(index.clone()))?;
         let url = client
             .push_manifest_list(&target_ref, &auth, index)
             .await
@@ -174,7 +185,7 @@ pub fn push_index(target: &str, sources: &[String]) -> Result<IndexOutcome> {
             .collect();
         Ok(IndexOutcome {
             entries,
-            digest_ref: digest_ref_from(&target_ref, &url),
+            digest_ref: digest_ref_from(&target_ref, &url, &pushed_digest),
         })
     })
 }
@@ -332,23 +343,50 @@ fn build_index(children: &[Child]) -> Result<OciImageIndex> {
     serde_json::from_value(index).context("assembling the OCI image index")
 }
 
-// Build a by-digest reference (`registry/repo@sha256:…`) from the push response's manifest
-// URL, which ends in the pushed manifest's digest. cosign signs by digest, so this is what
-// `--sign` targets — precise and immune to a tag being moved after the push. `None` when the
-// URL carries no digest: the push still succeeded, so this must not fail a plain push (only
-// `--sign`, which needs the digest, errors — in the caller).
-fn digest_ref_from(reference: &Reference, manifest_url: &str) -> Option<String> {
-    let digest = manifest_url
+// Build a by-digest reference (`registry/repo@sha256:…`) for `pushed`, the digest of the
+// manifest we uploaded. cosign signs by digest, so this is what `--sign` targets — precise and
+// immune to a tag being moved after the push. The push response's manifest URL (the
+// registry's `Location` header) must name that same digest: signing the one it names would let
+// the registry pick the image our identity signs. `Ok(None)` when the URL carries no digest,
+// `Err` when it carries another. Only `--sign` consults either, so neither fails a plain push.
+fn digest_ref_from(
+    reference: &Reference,
+    manifest_url: &str,
+    pushed: &str,
+) -> Result<Option<String>> {
+    let Some(reported) = manifest_url
         .rsplit("/manifests/")
         .next()
         .and_then(|tail| tail.split(['?', '#']).next())
-        .filter(|d| d.starts_with("sha256:"))?;
-    Some(format!(
+        .filter(|d| d.starts_with("sha256:"))
+    else {
+        return Ok(None);
+    };
+    // Exact equality with our own `sha256:` + 64 lowercase hex also refuses a malformed digest.
+    if reported != pushed {
+        bail!(
+            "cannot sign: the registry reported digest {} for the manifest just pushed, but \
+             that manifest's digest is {pushed}; refusing to sign a digest the registry chose",
+            crate::resolver::escape_for_display(reported)
+        );
+    }
+    Ok(Some(format!(
         "{}/{}@{}",
         reference.registry(),
         reference.repository(),
-        digest
-    ))
+        pushed
+    )))
+}
+
+// The digest of the manifest bytes oci-client PUTs: `push_manifest` serializes the
+// `OciManifest` with olpc-cjson's canonical formatter (oci-client 0.18 client.rs:1811-1823),
+// so the same value through the same formatter is the same bytes.
+fn manifest_digest(manifest: &OciManifest) -> Result<String> {
+    let mut body = Vec::new();
+    let mut ser =
+        serde_json::Serializer::with_formatter(&mut body, olpc_cjson::CanonicalFormatter::new());
+    serde::Serialize::serialize(manifest, &mut ser).context("serializing the manifest")?;
+    Ok(format!("sha256:{}", image::hex(Sha256::digest(&body))))
 }
 
 /// What to do with a Docker-config credential. UsernamePassword and "no credential" resolve
@@ -853,27 +891,204 @@ mod tests {
         ));
     }
 
+    // A digest as `manifest_digest` writes it, and another one a registry might name instead.
+    const PUSHED: &str = "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae";
+    const EVIL: &str = "sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
     #[test]
     fn digest_ref_from_builds_a_by_digest_reference() {
         let r: Reference = "ghcr.io/you/app:latest".parse().unwrap();
+        let at = |url: &str| digest_ref_from(&r, url, PUSHED).unwrap();
+        let want = Some(format!("ghcr.io/you/app@{PUSHED}"));
         assert_eq!(
-            digest_ref_from(&r, "https://ghcr.io/v2/you/app/manifests/sha256:abc123").as_deref(),
-            Some("ghcr.io/you/app@sha256:abc123")
+            at(&format!("https://ghcr.io/v2/you/app/manifests/{PUSHED}")),
+            want
         );
         // A namespace/query suffix on the URL is trimmed.
         assert_eq!(
-            digest_ref_from(
+            at(&format!(
+                "https://ghcr.io/v2/you/app/manifests/{PUSHED}?ns=ghcr.io"
+            )),
+            want
+        );
+        // A URL without a sha256 digest yields None (a plain push must not fail on it).
+        assert_eq!(at("https://ghcr.io/v2/you/app/manifests/latest"), None);
+        assert_eq!(at("https://ghcr.io/v2/you/app/manifests/sha512:abc"), None);
+    }
+
+    #[test]
+    fn digest_ref_from_refuses_a_digest_other_than_the_one_pushed() {
+        let r: Reference = "ghcr.io/you/app:latest".parse().unwrap();
+        let upper = PUSHED.to_uppercase().replace("SHA256", "sha256");
+        let truncated = &PUSHED[..PUSHED.len() - 1];
+        let extra_path = format!("{PUSHED}/x");
+        for tail in [EVIL, &upper, truncated, &extra_path, "sha256:"] {
+            let err = digest_ref_from(
                 &r,
-                "https://ghcr.io/v2/you/app/manifests/sha256:def?ns=ghcr.io"
+                &format!("https://ghcr.io/v2/you/app/manifests/{tail}"),
+                PUSHED,
             )
-            .as_deref(),
-            Some("ghcr.io/you/app@sha256:def")
+            .expect_err("only the pushed digest may be signed");
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("cannot sign") && msg.contains(tail) && msg.contains(PUSHED),
+                "got: {msg}"
+            );
+        }
+        // The registry's text is escaped, so it cannot forge a line of output.
+        let err = digest_ref_from(
+            &r,
+            "https://ghcr.io/v2/you/app/manifests/sha256:\nforged",
+            PUSHED,
+        )
+        .unwrap_err();
+        assert!(!format!("{err:#}").contains('\n'), "got: {err:#}");
+    }
+
+    // How the mock registry answers a manifest PUT.
+    #[derive(Clone, Copy)]
+    enum ManifestAnswer {
+        // `Location` names the digest of the bytes it received.
+        Honest,
+        // `Location` names another digest: the registry picks what would be signed.
+        Names(&'static str),
+        // No `Location` (ECR); oci-client then derives the URL from its own hash of the body.
+        NoLocation,
+    }
+
+    fn sha256_of(bytes: &[u8]) -> String {
+        format!("sha256:{}", image::hex(Sha256::digest(bytes)))
+    }
+
+    // A mock registry for repository `app`: blob uploads succeed, `extra` mocks are mounted,
+    // and a manifest PUT is answered per `answer`.
+    fn mock_registry(answer: ManifestAnswer, extra: Vec<Mock>) -> MockServer {
+        block_on(async {
+            let server = MockServer::start().await;
+            let upload =
+                |status| ResponseTemplate::new(status).insert_header("Location", "/upload");
+            Mock::given(method("POST"))
+                .and(path("/v2/app/blobs/uploads/"))
+                .respond_with(upload(202))
+                .mount(&server)
+                .await;
+            Mock::given(method("PATCH"))
+                .and(path("/upload"))
+                .respond_with(upload(202))
+                .mount(&server)
+                .await;
+            Mock::given(method("PUT"))
+                .and(path("/upload"))
+                .respond_with(upload(201))
+                .mount(&server)
+                .await;
+            Mock::given(method("PUT"))
+                .and(wiremock::matchers::path_regex("^/v2/app/manifests/"))
+                .respond_with(move |req: &wiremock::Request| {
+                    let res = ResponseTemplate::new(201);
+                    let digest = match answer {
+                        ManifestAnswer::Honest => sha256_of(&req.body),
+                        ManifestAnswer::Names(d) => d.to_string(),
+                        ManifestAnswer::NoLocation => return res,
+                    };
+                    res.insert_header("Location", format!("/v2/app/manifests/{digest}").as_str())
+                })
+                .mount(&server)
+                .await;
+            for m in extra {
+                m.mount(&server).await;
+            }
+            server
+        })
+    }
+
+    // The digest of the one manifest the mock registry received: the image actually pushed.
+    fn received_manifest_digest(server: &MockServer) -> String {
+        let requests = block_on(server.received_requests()).expect("recording is on");
+        let puts: Vec<_> = requests
+            .iter()
+            .filter(|r| {
+                r.method.as_str() == "PUT" && r.url.path().starts_with("/v2/app/manifests/")
+            })
+            .collect();
+        assert_eq!(puts.len(), 1, "one manifest PUT");
+        sha256_of(&puts[0].body)
+    }
+
+    #[test]
+    fn a_push_signs_the_manifest_it_put_never_a_digest_the_registry_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("app"), b"app").unwrap();
+        let staged = StagedTree {
+            root,
+            entrypoint: "/app".into(),
+        };
+        let push = |answer| {
+            let server = mock_registry(answer, Vec::new());
+            let host = server.address().to_string();
+            let got = push_to_registry(&staged, &format!("{host}/app:1"), &ImageConfig::default())
+                .expect("the push itself succeeds whatever digest the registry reports");
+            (got, host, received_manifest_digest(&server))
+        };
+        for answer in [ManifestAnswer::Honest, ManifestAnswer::NoLocation] {
+            let (got, host, put) = push(answer);
+            assert_eq!(got.unwrap(), Some(format!("{host}/app@{put}")));
+        }
+        let (got, _, put) = push(ManifestAnswer::Names(EVIL));
+        let msg = format!(
+            "{:#}",
+            got.expect_err("a digest the registry chose is not signed")
         );
-        // A URL without a digest yields None (a plain push must not fail on it).
-        assert_eq!(
-            digest_ref_from(&r, "https://ghcr.io/v2/you/app/manifests/latest"),
-            None
+        assert!(msg.contains(EVIL) && msg.contains(&put), "got: {msg}");
+    }
+
+    #[test]
+    fn an_index_push_signs_the_index_it_put_never_a_digest_the_registry_names() {
+        let config = br#"{"architecture":"amd64","os":"linux"}"#;
+        let config_digest = sha256_of(config);
+        let child = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": crate::image::OCI_MANIFEST,
+            "config": {
+                "mediaType": "application/vnd.oci.image.config.v1+json",
+                "digest": config_digest,
+                "size": config.len(),
+            },
+            "layers": [],
+        }))
+        .unwrap();
+        let push = |answer| {
+            let server = mock_registry(
+                answer,
+                vec![
+                    Mock::given(method("GET"))
+                        .and(path("/v2/app/manifests/amd64"))
+                        .respond_with(
+                            ResponseTemplate::new(200)
+                                .set_body_raw(child.clone(), crate::image::OCI_MANIFEST),
+                        ),
+                    Mock::given(method("GET"))
+                        .and(path(format!("/v2/app/blobs/{config_digest}")))
+                        .respond_with(ResponseTemplate::new(200).set_body_bytes(config.to_vec())),
+                ],
+            );
+            let host = server.address().to_string();
+            let outcome = push_index(&format!("{host}/app:multi"), &[format!("{host}/app:amd64")])
+                .expect("the index push itself succeeds whatever digest the registry reports");
+            (outcome.digest_ref, host, received_manifest_digest(&server))
+        };
+        for answer in [ManifestAnswer::Honest, ManifestAnswer::NoLocation] {
+            let (got, host, put) = push(answer);
+            assert_eq!(got.unwrap(), Some(format!("{host}/app@{put}")));
+        }
+        let (got, _, put) = push(ManifestAnswer::Names(EVIL));
+        let msg = format!(
+            "{:#}",
+            got.expect_err("a digest the registry chose is not signed")
         );
+        assert!(msg.contains(EVIL) && msg.contains(&put), "got: {msg}");
     }
 
     #[test]

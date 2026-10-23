@@ -37,6 +37,9 @@ serde_json = "1.0"
 toml = "1.0"
 clap_complete = "4.6.9"
 oci-client = "0.18.0"
+# The canonical-JSON formatter oci-client serializes manifests with, so `--sign` can hash the
+# exact bytes it PUTs. Already in the build through oci-client: no new crate is compiled.
+olpc-cjson = "0.1"
 docker_credential = "1.4.0"
 tokio = { version = "1.53.1", features = ["rt", "net", "time", "io-util"] }
 # Identity-token exchange needs a direct HTTP client. Match oci-client's exact TLS feature
