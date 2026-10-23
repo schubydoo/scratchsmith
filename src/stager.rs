@@ -738,8 +738,11 @@ pub fn strip_and_measure(
         let label = display_image_path(dest, &under(dest, &interp.image_path));
         targets.push((staged, label));
     }
+    // Measure where the walk resolved the library, but label it by its own path, as the
+    // loader is labelled above.
     for lib in &resolution.libs {
-        targets.push(shown(staged_path(dest, &lib.path, false)?));
+        let staged = staged_path(dest, &lib.path, false)?;
+        targets.push((staged, display_image_path(dest, &under(dest, &lib.path))));
     }
 
     let mut report = SizeReport {
@@ -1010,7 +1013,7 @@ fn under(root: &Path, abs: &Path) -> PathBuf {
 /// as `lib -> /usr/lib`, and a plain join would let the host follow it to its own `/usr/lib`.
 /// `create` makes the missing directories. The final name is not resolved: a caller that
 /// writes replaces it by a rename (`copy_into`, `write_into`), never writes through it.
-pub fn staged_path(dest: &Path, image: &Path, create: bool) -> Result<PathBuf> {
+pub(crate) fn staged_path(dest: &Path, image: &Path, create: bool) -> Result<PathBuf> {
     let Some(name) = image.file_name() else {
         return Ok(under(dest, &image_dir(dest, image, create)?));
     };
@@ -1590,8 +1593,15 @@ mod tests {
             fs::read_link(staged.with_file_name("libfoo.so.1")).unwrap(),
             Path::new("libfoo.so.1.2.3")
         );
-        assert!(
-            report.entries.iter().any(|e| e.after == 3),
+        // Measured where it landed, labelled by the library's own path.
+        let entry = report
+            .entries
+            .iter()
+            .find(|e| e.after == 3)
+            .expect("the library entry");
+        assert_eq!(
+            entry.path,
+            real.display().to_string(),
             "{:?}",
             report.entries
         );
@@ -1609,7 +1619,7 @@ mod tests {
         fs::create_dir_all(outside.join("etc")).unwrap();
         fs::write(outside.join("passwd"), b"HOST").unwrap();
         fs::create_dir_all(&dest).unwrap();
-        // `/etc` is an absolute link to a host directory, and `/etc/group` would be a link
+        // `/etc` is an absolute link to a host directory, and `/etc/passwd` is a link
         // to a host file once `/etc` is read in the image.
         std::os::unix::fs::symlink(outside.join("etc"), dest.join("etc")).unwrap();
         let etc = under(&dest, &outside.join("etc"));
