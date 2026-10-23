@@ -7,11 +7,7 @@
   },
   "rules": [
     { "type": "deletion" },
-    { "type": "non_fast_forward" },
-    { "type": "creation" }
+    { "type": "non_fast_forward" }
   ],
-  "bypass_actors": [
-    { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" },
-    { "actor_id": 4693153, "actor_type": "Integration", "bypass_mode": "always" }
-  ]
+  "bypass_actors": []
 }
