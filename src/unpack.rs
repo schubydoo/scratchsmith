@@ -7,15 +7,23 @@
 
 use crate::image::hex;
 use crate::report::UnpackReport;
+use crate::resolver::escape_for_display;
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 // Refuse a layer that decompresses beyond this, so a tiny hostile archive with a highly
 // compressible layer cannot exhaust memory (a "decompression bomb").
 const MAX_LAYER_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+// The most archive text one error quotes. An honest path is at most PATH_MAX (4096) bytes,
+// so only a hostile string (a tar long name, or a JSON string, can run to the layer cap) is
+// ever cut. tar's own error chain can quote three paths (entry, `--output`, link target).
+const SHOWN_MAX: usize = 8 * 1024;
+const TAR_ERR_MAX: usize = 64 * 1024;
 
 /// Extract the OCI archive at `archive` into `dest`, applying every layer in order.
 pub fn run(archive: &Path, dest: &Path) -> Result<UnpackReport> {
@@ -52,7 +60,7 @@ pub fn run(archive: &Path, dest: &Path) -> Result<UnpackReport> {
             // Uncompressed: hand the blob straight through, no second copy.
             files += apply_layer(bytes, dest)?;
         } else {
-            bail!("unsupported layer media type: {media}");
+            bail!("unsupported layer media type: {}", shown(media, SHOWN_MAX));
         }
     }
 
@@ -79,7 +87,7 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
     let mut blobs = HashMap::new();
     let mut index_bytes = None;
     for entry in ar.entries().context("reading OCI archive")? {
-        let mut e = entry?;
+        let mut e = entry.map_err(escape_tar_err)?;
         let path = e.path()?.to_string_lossy().into_owned();
         // The `blobs/` and `blobs/sha256/` directory entries carry a trailing slash and
         // an empty body (a skopeo/buildah export tars the layout directory), so only
@@ -102,7 +110,7 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
         if let Some(digest) = digest {
             let actual = hex(Sha256::digest(&buf));
             if actual != digest {
-                bail!("blob sha256:{digest} does not match its content (got sha256:{actual}) — tampered archive");
+                bail!("blob sha256:{} does not match its content (got sha256:{actual}) — tampered archive", shown(digest, SHOWN_MAX));
             }
             blobs.insert(digest.to_string(), buf);
         } else {
@@ -140,7 +148,7 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path) -> Result<usize> {
 
     // Pass 1: whiteouts. `.wh.<name>` deletes `<name>`; `.wh..wh..opq` clears the directory.
     for entry in tar::Archive::new(tar_bytes).entries()? {
-        let path = entry?.path()?.into_owned();
+        let path = entry.map_err(escape_tar_err)?.path()?.into_owned();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
@@ -164,7 +172,7 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path) -> Result<usize> {
     ar.set_mask(0o6000);
     ar.set_overwrite(true);
     for entry in ar.entries()? {
-        let mut e = entry?;
+        let mut e = entry.map_err(escape_tar_err)?;
         let path = e.path()?.into_owned();
         if path
             .file_name()
@@ -175,10 +183,10 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path) -> Result<usize> {
         }
         // `unpack_in` returns Ok(false) when it refuses a path that escapes `dest`. Fail
         // loudly: a silently-dropped entry ships a rootfs that does not match the image.
-        if !e.unpack_in(dest)? {
+        if !e.unpack_in(dest).map_err(escape_tar_err)? {
             bail!(
                 "refusing to extract an entry that escapes the target: {}",
-                path.display()
+                shown(path.display(), SHOWN_MAX)
             );
         }
         count += 1;
@@ -236,26 +244,87 @@ fn remove_any(path: &Path) -> Result<()> {
     let meta = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e).with_context(|| format!("stat {}", path.display())),
+        Err(e) => {
+            return Err(e).with_context(|| format!("stat {}", shown(path.display(), SHOWN_MAX)))
+        }
     };
     if meta.is_dir() {
         std::fs::remove_dir_all(path)
     } else {
         std::fs::remove_file(path)
     }
-    .with_context(|| format!("removing {}", path.display()))
+    .with_context(|| format!("removing {}", shown(path.display(), SHOWN_MAX)))
 }
 
 fn blob<'a>(blobs: &'a HashMap<String, Vec<u8>>, digest: &str) -> Result<&'a Vec<u8>> {
-    blobs
-        .get(digest)
-        .with_context(|| format!("archive is missing blob sha256:{digest}"))
+    blobs.get(digest).with_context(|| {
+        format!(
+            "archive is missing blob sha256:{}",
+            shown(digest, SHOWN_MAX)
+        )
+    })
 }
 
 fn strip_sha256(digest: &str) -> Result<&str> {
     digest
         .strip_prefix("sha256:")
-        .with_context(|| format!("digest is not sha256: {digest}"))
+        .with_context(|| format!("digest is not sha256: {}", shown(digest, SHOWN_MAX)))
+}
+
+// tar quotes archive bytes (entry paths, link names, raw header fields) in its own errors, so
+// escape the whole cause chain before it joins ours. It is a whole message, so no quotes.
+fn escape_tar_err(err: std::io::Error) -> anyhow::Error {
+    let err = anyhow::Error::from(err);
+    let (text, cut) = bounded(format_args!("{err:#}"), TAR_ERR_MAX);
+    anyhow::Error::msg(text + &cut)
+}
+
+// Archive text for an error line: escaped, bounded, and quoted. Escaping stops a forged line;
+// the quotes show where the archive's words end, so a name cannot forge words of ours inside
+// the line, nor fake the cut marker, which stays outside them.
+fn shown(text: impl std::fmt::Display, max: usize) -> String {
+    let (text, cut) = bounded(text, max);
+    format!("\"{text}\"{cut}")
+}
+
+// Escaped by `escape_for_display`, plus the marker for what was cut. Escaping grows a control
+// byte sixfold, so only the first `max` bytes are kept and escaped, and the rest is counted.
+fn bounded(text: impl std::fmt::Display, max: usize) -> (String, String) {
+    let mut head = Head {
+        kept: String::new(),
+        max,
+        cut: 0,
+    };
+    let _ = write!(head, "{text}");
+    let cut = match head.cut {
+        0 => String::new(),
+        n => format!("…(+{n} bytes)"),
+    };
+    (escape_for_display(&head.kept), cut)
+}
+
+// Keeps the first `max` bytes written (cut on a char boundary) and counts the rest, so a
+// huge `Display` is never copied whole.
+struct Head {
+    kept: String,
+    max: usize,
+    cut: usize,
+}
+
+impl std::fmt::Write for Head {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let mut room = if self.cut == 0 {
+            s.len().min(self.max - self.kept.len())
+        } else {
+            0
+        };
+        while !s.is_char_boundary(room) {
+            room -= 1;
+        }
+        self.kept.push_str(&s[..room]);
+        self.cut += s.len() - room;
+        Ok(())
+    }
 }
 
 // Decompress a gzip layer, refusing one that expands past the cap (decompression bomb).
@@ -547,6 +616,139 @@ mod tests {
             std::fs::read_link(dest.join("usr/lib/libx.so.1")).unwrap(),
             Path::new("libx.so.1.2")
         );
+    }
+
+    // Archive text in an error still shows, escaped, but never as a raw line break or escape.
+    const EVIL: &str = "evil\nerror: forged\x1b[2J";
+    fn assert_escaped(err: &anyhow::Error) {
+        let shown = format!("{err:#}");
+        assert!(!shown.chars().any(char::is_control), "{shown:?}");
+        assert!(shown.contains("\\u{1b}[2J"), "{shown:?}");
+    }
+
+    // An OCI-layout tarball holding `index` and each blob under its own digest.
+    fn oci_archive(dir: &Path, index: &serde_json::Value, blobs: &[&[u8]]) -> PathBuf {
+        let index = serde_json::to_vec(index).unwrap();
+        let names: Vec<String> = blobs
+            .iter()
+            .map(|b| format!("blobs/sha256/{}", hex(Sha256::digest(b))))
+            .collect();
+        let mut entries: Vec<(&str, &[u8])> = vec![("index.json", &index)];
+        entries.extend(names.iter().map(String::as_str).zip(blobs.iter().copied()));
+        let path = dir.join("img.tar");
+        std::fs::write(&path, tar_of(&entries)).unwrap();
+        path
+    }
+
+    #[test]
+    fn run_errors_escape_media_types_and_digests() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layer = tar_of(&[("a", b"x")]);
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "layers": [{
+                "mediaType": EVIL,
+                "digest": format!("sha256:{}", hex(Sha256::digest(&layer))),
+            }],
+        }))
+        .unwrap();
+        let manifest_digest = format!("sha256:{}", hex(Sha256::digest(&manifest)));
+        // An unsupported media type, a digest naming no blob, a digest that is not sha256.
+        for digest in [manifest_digest, format!("sha256:{EVIL}"), EVIL.to_string()] {
+            let index = serde_json::json!({ "manifests": [{ "digest": digest }] });
+            let archive = oci_archive(tmp.path(), &index, &[&manifest, &layer]);
+            assert_escaped(&run(&archive, &tmp.path().join("out")).unwrap_err());
+        }
+    }
+
+    #[test]
+    fn read_archive_escapes_a_blob_name_and_tar_header_text() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bad.tar");
+        std::fs::write(&path, tar_of(&[(&format!("blobs/sha256/{EVIL}"), b"x")])).unwrap();
+        assert_escaped(&read_archive(&path).unwrap_err());
+
+        // tar itself quotes a malformed header field, and the entry path, in its error.
+        let mut h = tar::Header::new_gnu();
+        h.set_path(EVIL).unwrap();
+        h.as_gnu_mut().unwrap().cksum = *b"\x1b[2J\n\0\0\0";
+        let mut bytes = h.as_bytes().to_vec();
+        bytes.resize(bytes.len() + 1024, 0);
+        std::fs::write(&path, bytes).unwrap();
+        assert_escaped(&read_archive(&path).unwrap_err());
+    }
+
+    #[test]
+    fn apply_layer_errors_escape_entry_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("f\x1b[2J"), b"x").unwrap();
+
+        // Our refusal of a `..` entry (raw header: tar's builder rejects `..` itself).
+        let mut h = tar::Header::new_gnu();
+        let name = format!("../{EVIL}");
+        h.as_gnu_mut().unwrap().name[..name.len()].copy_from_slice(name.as_bytes());
+        h.set_size(0);
+        h.set_mode(0o644);
+        h.set_cksum();
+        let mut ar = tar::Builder::new(Vec::new());
+        ar.append(&h, &b""[..]).unwrap();
+        let escaping = ar.into_inner().unwrap();
+        // tar's own extraction error, and a whiteout's failed stat, beneath a regular file.
+        let blocked = tar_of(&[("f\x1b[2J/g\nforged", b"y")]);
+        let whiteout = tar_of(&[("f\x1b[2J/.wh.g\nforged", b"")]);
+
+        for layer in [escaping, blocked, whiteout] {
+            assert_escaped(&apply_layer(&layer, &dest).unwrap_err());
+        }
+    }
+
+    #[test]
+    fn shown_quotes_archive_text_and_keeps_the_cut_marker_outside() {
+        // A name that reads as our own words, and one that fakes the cut marker.
+        let forged = "a — tampered archive. All blobs verified. blob sha256:b";
+        assert_eq!(shown(forged, SHOWN_MAX), format!("\"{forged}\""));
+        assert_eq!(shown("x…(+9 bytes)", SHOWN_MAX), "\"x…(+9 bytes)\"");
+        assert_eq!(shown("x".repeat(10), 4), "\"xxxx\"…(+6 bytes)");
+    }
+
+    #[test]
+    fn a_huge_archive_string_yields_a_short_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let huge = "\x1f".repeat(1 << 20);
+
+        // A symlink whose GNU long link name tar quotes in its symlink() failure.
+        let mut h = tar::Header::new_gnu();
+        h.set_entry_type(tar::EntryType::Symlink);
+        h.set_size(0);
+        let mut ar = tar::Builder::new(Vec::new());
+        ar.append_link(&mut h, "k", &huge).unwrap();
+        let symlink = ar.into_inner().unwrap();
+
+        // A GNU long name escaping through `..`, which our own refusal quotes.
+        let name = format!("../{huge}\0");
+        let mut long = tar::Header::new_gnu();
+        long.as_gnu_mut().unwrap().name[..13].copy_from_slice(b"././@LongLink");
+        long.set_entry_type(tar::EntryType::GNULongName);
+        long.set_size(name.len() as u64);
+        long.set_cksum();
+        let mut h = tar::Header::new_gnu();
+        h.set_path("x").unwrap();
+        h.set_size(0);
+        h.set_cksum();
+        let mut ar = tar::Builder::new(Vec::new());
+        ar.append(&long, name.as_bytes()).unwrap();
+        ar.append(&h, &b""[..]).unwrap();
+        let escaping = ar.into_inner().unwrap();
+
+        for layer in [symlink, escaping] {
+            let shown = format!("{:#}", apply_layer(&layer, &dest).unwrap_err());
+            assert!(shown.len() < 6 * TAR_ERR_MAX + 256, "{} bytes", shown.len());
+            assert!(shown.contains(" bytes)"), "{shown}");
+            assert!(!shown.chars().any(char::is_control));
+        }
     }
 
     #[test]
