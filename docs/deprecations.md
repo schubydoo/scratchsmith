@@ -107,19 +107,20 @@ kernel loads both.
 
 This check reads the ELF type only. A PIE executable is `ET_DYN` too, so a name that points at
 one still stages it. A core dump, an object file (`ET_REL`), and an executable built without
-PIE do not. A file that you name with `--include` stages as before, unless the binary or a
-library also names it.
+PIE do not. A file that you name with `--include` stages as before. If the binary itself also
+names that file, the refusal comes first.
 
 ## Tolerances ending in 2.0
 
 | Input | Warns since | Error in | What to do |
 |---|---|---|---|
 | A library that starts like an ELF and cannot be parsed | 1.6.0 | 2.0.0 | Replace the damaged file |
+| A program interpreter that starts like an ELF and cannot be parsed | 1.8.0 | 2.0.0 | Replace the damaged file |
 | `$PLATFORM` in a search path, on an architecture with no value for it | 1.6.0 | 2.0.0 | Write the directory name in the path |
 | A library found only through an inherited `RPATH`, by an object that has `RUNPATH` | 1.6.0 | 2.0.0 | Give that object the directory in its own `RUNPATH` |
 | `--no-build` into an output directory that is not empty | 1.6.0 | 2.0.0 | Use a new directory, or empty it first |
 
-The first three warnings come from `pack` and from `graph`, because both resolve the same
+The first four warnings come from `pack` and from `graph`, because both resolve the same
 dependency tree. The last one comes from `pack` only.
 
 ### A library that cannot be parsed
