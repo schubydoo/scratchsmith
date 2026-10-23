@@ -656,7 +656,12 @@ jobs:
           PIN: ${{ steps.pin.outputs.sha }}
         run: |
           set -euo pipefail
+          # A failed read is reported as exactly that, never as drift. It still fails the job:
+          # unlike the counts in the step above, this step exists to verify, and a pin nobody
+          # could check must not pass as a checked one.
+          unverified() { echo "::error::could not verify the pin: $1 failed, which is not drift. Re-run '@claude review'."; exit 1; }
           HEAD_NOW=$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD 2>/dev/null) || HEAD_NOW="?"
+          [ "$HEAD_NOW" != "?" ] || unverified "reading the workspace checkout"
           if [ "$HEAD_NOW" != "$PIN" ]; then
             echo "::error::the action checked out $HEAD_NOW, not the pinned $PIN: the PR moved during the run, so the review may describe code it is not filed on. Re-run '@claude review'."
             exit 1
@@ -665,12 +670,12 @@ jobs:
           # so take the last NON-empty line: the newest page that has one.
           FILED=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}/reviews" --paginate \
                     --jq '[.[] | select(((.user // {}).login // "") | test("claude"; "i")) | select((.body // "") != "")] | last | .commit_id // ""' \
-                  | awk 'NF { l = $0 } END { print l }')
+                  | awk 'NF { l = $0 } END { print l }') || unverified "reading the PR's reviews"
           if [ -n "$FILED" ] && [ "$FILED" != "$PIN" ]; then
             echo "::error::the latest review is filed on $FILED, not the pinned $PIN. Re-run '@claude review'."
             exit 1
           fi
-          NOW=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq '.head.sha')
+          NOW=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq '.head.sha') || unverified "reading the PR's head"
           if [ "$NOW" != "$PIN" ]; then
             echo "::error::the PR head moved during the run ($PIN -> $NOW), and gh pr diff follows the branch, so the review may describe code it is not filed on. Re-run '@claude review'."
             exit 1
