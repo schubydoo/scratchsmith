@@ -118,7 +118,7 @@ FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, pos
 - **How to submit it, exactly.** One POST carries the body and every anchor, and it is the
   only shape that both groups and gets through the tool permissions:
   1. Use the `Write` tool to create `review.json` in the workspace root with the payload:
-     `commit_id` (the PR head SHA, from `gh pr view <n> --json headRefOid`),
+     `commit_id` (the PR head SHA: the `headRefOid` field of the exact `gh pr view <n> --json …` command the system prompt lists),
      `event: "COMMENT"`, `body` (the summary), and a `comments` array of
      `{path, line, side: "RIGHT", body}` entries, one per finding (`side: "LEFT"` only for
      a line the diff removes).
