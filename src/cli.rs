@@ -565,6 +565,13 @@ fn dispatch(cli: Cli) -> Result<()> {
             format,
         } => {
             let report = crate::unpack::run(&archive, &output)?;
+            // stderr, so the JSON on stdout stays parseable. The path is archive text.
+            for path in &report.stripped_setid {
+                eprintln!(
+                    "warning: cleared the setuid/setgid bit on {}",
+                    crate::unpack::shown_archive_text(path)
+                );
+            }
             match format {
                 Format::Text => println!("{}", report.to_text()),
                 Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),

@@ -411,9 +411,10 @@ scratchsmith unpack app.oci.tar ./rootfs   # apply the layers into ./rootfs
 export), applies each layer in order, and honors whiteouts. Combine it with `diff` to
 compare two images: unpack both, then run `scratchsmith diff old new`.
 
-`unpack` clears the setuid and setgid bits on every file it writes. An untrusted image cannot
-then plant a setuid program owned by the user who unpacks it. The unpacked tree does not show
-which files in the image had those bits.
+`unpack` clears the setuid and setgid bits on every file and directory it writes. An untrusted
+image cannot then plant a setuid program owned by the user who unpacks it. `unpack` prints one
+warning line on standard error for each path in the final image that had one of those bits.
+The `stripped_setid` field of `--format json` lists the same paths.
 
 ## Multi-arch images
 

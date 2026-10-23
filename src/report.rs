@@ -378,6 +378,8 @@ pub struct UnpackReport {
     pub layers: usize,
     /// How many files and symlinks were written.
     pub files: usize,
+    /// Image paths that carried a setuid or setgid bit, which `unpack` cleared on disk.
+    pub stripped_setid: Vec<String>,
 }
 
 impl UnpackReport {
@@ -1120,10 +1122,11 @@ mod tests {
             dir: "/tmp/rootfs".into(),
             layers: 2,
             files: 17,
+            stripped_setid: vec!["/usr/bin/su".into()],
         };
         let json = serde_json::to_value(&report).unwrap();
         let mut keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
         keys.sort();
-        assert_eq!(keys, ["dir", "files", "layers", "source"]);
+        assert_eq!(keys, ["dir", "files", "layers", "source", "stripped_setid"]);
     }
 }
