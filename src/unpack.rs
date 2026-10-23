@@ -126,6 +126,10 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path) -> Result<usize> {
     let mut count = 0usize;
     let mut ar = tar::Archive::new(tar_bytes);
     ar.set_preserve_permissions(true);
+    // Never apply setuid/setgid from the archive: extracted files belong to whoever runs
+    // unpack, so a kept bit plants a setuid binary owned by that user (root, run as root).
+    // The mask is applied after preserve, so the sticky bit and 0o777 stay as authored.
+    ar.set_mask(0o6000);
     ar.set_overwrite(true);
     for entry in ar.entries()? {
         let mut e = entry?;
@@ -250,6 +254,59 @@ mod tests {
             ar.append_data(&mut header, name, &body[..]).unwrap();
         }
         ar.into_inner().unwrap()
+    }
+
+    // Build a small uncompressed tar of empty (path, entry type, mode) entries.
+    fn tar_with_modes(entries: &[(&str, tar::EntryType, u32)]) -> Vec<u8> {
+        let mut ar = tar::Builder::new(Vec::new());
+        for (name, kind, mode) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(*kind);
+            header.set_size(0);
+            header.set_mode(*mode);
+            header.set_cksum();
+            ar.append_data(&mut header, name, &b""[..]).unwrap();
+        }
+        ar.into_inner().unwrap()
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777
+    }
+
+    #[test]
+    fn apply_layer_strips_setuid_and_setgid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let layer = tar_with_modes(&[
+            ("bin/suid", tar::EntryType::Regular, 0o4755),
+            ("bin/sgid", tar::EntryType::Regular, 0o2755),
+            ("shared/", tar::EntryType::Directory, 0o6755),
+        ]);
+        apply_layer(&layer, &dest).unwrap();
+        assert_eq!(mode_of(&dest.join("bin/suid")), 0o755);
+        assert_eq!(mode_of(&dest.join("bin/sgid")), 0o755);
+        assert_eq!(mode_of(&dest.join("shared")), 0o755);
+    }
+
+    #[test]
+    fn apply_layer_keeps_sticky_and_plain_modes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let layer = tar_with_modes(&[
+            ("tmp/", tar::EntryType::Directory, 0o1777),
+            ("etc/conf", tar::EntryType::Regular, 0o644),
+        ]);
+        apply_layer(&layer, &dest).unwrap();
+        assert_eq!(mode_of(&dest.join("tmp")), 0o1777);
+        assert_eq!(mode_of(&dest.join("etc/conf")), 0o644);
     }
 
     #[test]
