@@ -732,19 +732,28 @@ pub fn strip_and_measure(
     // The ELF files we placed: the binary, the loader, and every resolved library. UPX
     // compresses the executable ONLY — compressing the loader or a shared library would
     // break startup — so it is applied to the binary (the first target) alone.
+    // Each target is (file to measure, path the report shows).
+    let shown = |p: PathBuf| {
+        let label = display_image_path(dest, &p);
+        (p, label)
+    };
     let binary = under(dest, &tree.entrypoint);
-    let mut targets: Vec<PathBuf> = vec![binary.clone()];
+    let mut targets: Vec<(PathBuf, String)> = vec![shown(binary.clone())];
+    // Measure the loader where stage_files put it (strip rewrites in place, so never the
+    // raw join), but keep reporting it by its PT_INTERP string, as `interpreter` does.
     if let Some(interp) = &resolution.interpreter {
-        targets.push(under(dest, &interp.image_path));
+        let staged = under(dest, &interp_target(dest, &interp.image_path)?);
+        let label = display_image_path(dest, &under(dest, &interp.image_path));
+        targets.push((staged, label));
     }
-    targets.extend(resolution.libs.iter().map(|l| under(dest, &l.path)));
+    targets.extend(resolution.libs.iter().map(|l| shown(under(dest, &l.path))));
 
     let mut report = SizeReport {
         stripped: strip,
         upx,
         ..Default::default()
     };
-    for path in targets {
+    for (path, label) in targets {
         let before = std::fs::metadata(&path)?.len();
         if strip {
             run_strip(&path)?;
@@ -757,7 +766,7 @@ pub fn strip_and_measure(
         report.total_before += before;
         report.total_after += after;
         report.entries.push(SizeEntry {
-            path: display_image_path(dest, &path),
+            path: label,
             before,
             after,
         });
@@ -853,9 +862,10 @@ fn stage_files(
         }
     }
 
-    // The kernel execs PT_INTERP verbatim, so the loader must live at that exact path.
+    // The kernel execs PT_INTERP verbatim, so the loader must live where that path resolves.
     if let Some(interp) = &resolution.interpreter {
-        copy_into(&interp.source, dest, &interp.image_path)?;
+        let target = interp_target(dest, &interp.image_path)?;
+        copy_into(&interp.source, dest, &target)?;
     }
 
     // Each library: place the real file, then recreate the soname symlink the loader
@@ -871,6 +881,57 @@ fn stage_files(
         root: dest.to_path_buf(),
         entrypoint: binary_real,
     })
+}
+
+// Where the loader goes: PT_INTERP walked the way the kernel walks it inside the image, where
+// `..` at the root stays at the root. Joining the raw string under `dest` left that walk to
+// the HOST, so `/../../tmp/x` landed outside the staging root. Each directory the walk passes
+// through is created, as that join's `create_dir_all` did, because the image still carries
+// the unchanged string: `/lib/../lib64/ld.so` needs `/lib` too. A staged link that `..` leaves
+// is followed as the host did, and refused if it leads out of the root.
+fn interp_target(dest: &Path, pt_interp: &Path) -> Result<PathBuf> {
+    use std::path::Component;
+    let shown = |p: &Path| crate::resolver::escape_for_display(&p.to_string_lossy());
+    let mut at = PathBuf::from("/");
+    let mut walk = pt_interp.components().peekable();
+    while let Some(c) = walk.next() {
+        if walk.peek().is_none() {
+            if let Component::Normal(name) = c {
+                return Ok(at.join(name));
+            }
+            break;
+        }
+        match c {
+            Component::Prefix(_) | Component::RootDir => at = PathBuf::from("/"),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let here = under(dest, &at);
+                if here
+                    .symlink_metadata()
+                    .is_ok_and(|m| m.file_type().is_symlink())
+                {
+                    let root = std::fs::canonicalize(dest)
+                        .with_context(|| format!("resolving {}", dest.display()))?;
+                    let real = std::fs::canonicalize(&here)
+                        .with_context(|| format!("resolving {}", here.display()))?;
+                    let Ok(rel) = real.strip_prefix(&root) else {
+                        bail!(
+                            "PT_INTERP {}: {} is a link out of the staging root",
+                            shown(pt_interp),
+                            shown(&at)
+                        );
+                    };
+                    at = Path::new("/").join(rel);
+                }
+                at.pop();
+            }
+            Component::Normal(p) => {
+                at.push(p);
+                std::fs::create_dir_all(under(dest, &at))?;
+            }
+        }
+    }
+    bail!("PT_INTERP {} does not name a file", shown(pt_interp))
 }
 
 // Regenerate /etc/ld.so.cache inside the staged root. A fresh root has no
@@ -1000,6 +1061,148 @@ mod tests {
             "loader must be at its PT_INTERP path"
         );
         assert_eq!(fs::read(&staged_loader).unwrap(), b"LOADER");
+    }
+
+    fn with_interp(pt_interp: &str, source: &Path) -> Resolution {
+        Resolution {
+            interpreter: Some(ResolvedInterp {
+                image_path: PathBuf::from(pt_interp),
+                source: source.to_path_buf(),
+            }),
+            ..Resolution::default()
+        }
+    }
+
+    #[test]
+    fn interp_target_reads_pt_interp_inside_the_image() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (pt, want) in [
+            ("/lib64/ld-linux-x86-64.so.2", "/lib64/ld-linux-x86-64.so.2"),
+            ("/usr/lib/../lib64/ld.so", "/usr/lib64/ld.so"),
+            ("/../../../../tmp/x", "/tmp/x"),
+            ("/a/../../b/x", "/b/x"),
+            ("lib/ld.so", "/lib/ld.so"),
+        ] {
+            assert_eq!(
+                interp_target(tmp.path(), Path::new(pt)).unwrap(),
+                Path::new(want)
+            );
+            // With no staged link on the way, the walk is the lexical one.
+            assert_eq!(
+                lexical_image_path(Path::new("/"), Path::new(pt)),
+                Path::new(want)
+            );
+        }
+        // No file name left: refused, never mapped onto the staging root itself.
+        for pt in ["", "/", "/..", "/lib64/.."] {
+            assert!(interp_target(tmp.path(), Path::new(pt)).is_err(), "{pt:?}");
+        }
+    }
+
+    #[test]
+    fn a_pt_interp_that_climbs_above_the_root_stages_inside_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("stage/root");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let loader = make_file(&tmp.path().join("src/real-ld.so"), b"LOADER");
+
+        // Joined raw under dest, each of these is tmp/escaped/ld.so.
+        for (pt, label) in [
+            ("/../../escaped/ld.so", "/../../escaped/ld.so"),
+            ("/lib/../../../escaped/ld.so", "/lib/../../../escaped/ld.so"),
+            ("../../escaped/ld.so", "/../../escaped/ld.so"),
+        ] {
+            let res = with_interp(pt, &loader);
+            let tree = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+            let staged = dest.join("escaped/ld.so");
+            assert_eq!(fs::read(&staged).unwrap(), b"LOADER");
+            // strip_and_measure must measure the loader where staging put it, yet report it
+            // under the same label as before.
+            let report = strip_and_measure(&dest, &tree, &res, false, false).unwrap();
+            let entry = report.entries.iter().find(|e| e.path == label);
+            let entry = entry.unwrap_or_else(|| panic!("{pt}: {:?}", report.entries));
+            assert_eq!(entry.after, fs::metadata(&staged).unwrap().len(), "{pt}");
+        }
+        assert!(!tmp.path().join("escaped").exists(), "wrote above the root");
+        assert!(!tmp.path().join("stage/escaped").exists());
+    }
+
+    #[test]
+    fn the_size_report_names_the_loader_by_its_raw_pt_interp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let loader = make_file(&tmp.path().join("src/real-ld.so"), b"LOADER");
+
+        for (pt, staged) in [
+            ("/usr/lib/../lib64/ld.so", "usr/lib64/ld.so"),
+            ("/lib64/./ld.so", "lib64/ld.so"),
+        ] {
+            let res = with_interp(pt, &loader);
+            let tree = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+            let report = strip_and_measure(&dest, &tree, &res, false, false).unwrap();
+            // Entries run binary, loader, libs. The label is the unnormalised string.
+            let entry = &report.entries[1];
+            assert_eq!(entry.path, pt);
+            let len = fs::metadata(dest.join(staged)).unwrap().len();
+            assert_eq!(entry.after, len, "{pt}");
+        }
+    }
+
+    #[test]
+    fn an_in_tree_dotdot_pt_interp_stages_where_the_raw_path_resolves() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let loader = make_file(&tmp.path().join("src/real-ld.so"), b"LOADER");
+
+        let pt = "/usr/lib/../lib64/ld-linux-x86-64.so.2";
+        stage_files(
+            &binary,
+            &with_interp(pt, &loader),
+            &dest,
+            SymlinkMode::CopyAll,
+        )
+        .unwrap();
+        let staged = dest.join("usr/lib64/ld-linux-x86-64.so.2");
+        assert_eq!(fs::read(&staged).unwrap(), b"LOADER");
+        // The image keeps the raw string, and the kernel walks /usr/lib to get there.
+        assert!(dest.join("usr/lib").is_dir());
+        assert_eq!(fs::read(under(&dest, Path::new(pt))).unwrap(), b"LOADER");
+    }
+
+    #[test]
+    fn a_staged_link_left_by_dotdot_is_followed_inside_the_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let loader = make_file(&tmp.path().join("src/real-ld.so"), b"LOADER");
+        // An output directory reused from an earlier pack, with a merged-usr style link.
+        fs::create_dir_all(dest.join("usr/lib")).unwrap();
+        std::os::unix::fs::symlink("usr/lib", dest.join("lib")).unwrap();
+
+        let res = with_interp("/lib/../lib64/ld.so", &loader);
+        stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+        // `/lib/..` is `/usr` through the link, in the image as on the host.
+        assert_eq!(fs::read(dest.join("usr/lib64/ld.so")).unwrap(), b"LOADER");
+        assert!(!dest.join("lib64").exists());
+    }
+
+    #[test]
+    fn a_staged_link_out_of_the_root_is_refused_before_dotdot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let outside = tmp.path().join("outside");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let loader = make_file(&tmp.path().join("src/real-ld.so"), b"LOADER");
+        fs::create_dir_all(outside.join("sub")).unwrap();
+        fs::create_dir_all(&dest).unwrap();
+        std::os::unix::fs::symlink(outside.join("sub"), dest.join("lib")).unwrap();
+
+        let res = with_interp("/lib/../x/ld.so", &loader);
+        let err = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap_err();
+        assert!(err.to_string().contains("out of the staging root"), "{err}");
+        assert!(!outside.join("x").exists(), "wrote through the link");
     }
 
     #[test]
