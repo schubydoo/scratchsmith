@@ -52,6 +52,8 @@ struct Lib {
     // interesting part is the PARTIALLY BUILT `Resolution` that precedes the failure, since
     // the library is pushed to `libs` before its facts are read.
     unreadable: bool,
+    // Write data with no ELF magic: drives the refusal of a non-ELF file an ELF names.
+    non_elf: bool,
 }
 
 // The buckets a real file may sit in: a couple of Sysroot default dirs plus the binary's own
@@ -71,6 +73,8 @@ struct Scenario {
     includes: Vec<String>,
     // Place a real loader file so the interpreter branch resolves instead of only ever missing.
     place_interp: bool,
+    // Make that loader a data file, to drive the PT_INTERP refusal.
+    interp_non_elf: bool,
 }
 
 // A fixed, safe interpreter path used when `place_interp` is set — resolution reroots it under the
@@ -116,10 +120,14 @@ fn safe_name(raw: &str) -> Option<String> {
 }
 
 fn touch(path: &Path) -> std::io::Result<()> {
+    write(path, b"\x7fELF")
+}
+
+fn write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, b"\x7fELF")
+    std::fs::write(path, bytes)
 }
 
 fuzz_target!(|scn: Scenario| {
@@ -140,7 +148,8 @@ fuzz_target!(|scn: Scenario| {
         root_facts.interpreter = Some(INTERP.to_string());
         // Place the file where reroot(root, INTERP) will look, derived from INTERP so the two
         // can't drift: reroot strips the leading '/' and joins under the sysroot.
-        let _ = touch(&root.join(INTERP.trim_start_matches('/')));
+        let magic: &[u8] = if scn.interp_non_elf { b"data" } else { b"\x7fELF" };
+        let _ = write(&root.join(INTERP.trim_start_matches('/')), magic);
     }
 
     let mut infos: HashMap<PathBuf, ElfInfo> = HashMap::new();
@@ -159,7 +168,8 @@ fuzz_target!(|scn: Scenario| {
             LibDir::AppLibs => "app/libs",
         };
         let path = root.join(sub).join(&name);
-        if touch(&path).is_err() {
+        let magic: &[u8] = if lib.non_elf { b"data" } else { b"\x7fELF" };
+        if write(&path, magic).is_err() {
             continue;
         }
         infos.insert(canonical(&path), lib.facts.into_elf());
