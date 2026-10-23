@@ -94,10 +94,10 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
     let mut index_bytes = None;
     for entry in ar.entries().context("reading OCI archive")? {
         let mut e = entry.map_err(escape_tar_err)?;
-        let path = e.path()?.to_string_lossy().into_owned();
+        let stored = e.path()?.to_string_lossy().into_owned();
         // `tar -cf img.tar .` inside a layout directory stores `./index.json`; the name is the
-        // same file, so match it without the prefix.
-        let path = path.strip_prefix("./").map(str::to_owned).unwrap_or(path);
+        // same file, so match it without the prefix. Errors still quote the stored name.
+        let path = stored.strip_prefix("./").unwrap_or(&stored);
         // The `blobs/` and `blobs/sha256/` directory entries carry a trailing slash and
         // an empty body (a skopeo/buildah export tars the layout directory), so only
         // digest-verify real blob files — not the directory entry itself.
@@ -112,10 +112,10 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
         if e.header().entry_type().is_gnu_sparse() {
             bail!(
                 "refusing GNU sparse entry {} in the OCI archive",
-                crate::resolver::escape_for_display(&path)
+                crate::resolver::escape_for_display(&stored)
             );
         }
-        let buf = read_bounded(&mut e, &mut budget, &path)?;
+        let buf = read_bounded(&mut e, &mut budget, &stored)?;
         if let Some(digest) = digest {
             let actual = hex(Sha256::digest(&buf));
             if actual != digest {
