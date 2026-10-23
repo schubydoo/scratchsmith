@@ -535,6 +535,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#refused-without-a-deprecation-cycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Refused without a deprecation cycle
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Refused without a deprecation cycle">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-file-that-is-not-an-elf-named-by-the-binary-or-a-library" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A file that is not an ELF, named by the binary or a library
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tolerances-ending-in-20" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -831,6 +859,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#refused-without-a-deprecation-cycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Refused without a deprecation cycle
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Refused without a deprecation cycle">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-file-that-is-not-an-elf-named-by-the-binary-or-a-library" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A file that is not an ELF, named by the binary or a library
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#tolerances-ending-in-20" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -990,6 +1046,17 @@ value reaches it, so the keys inside it never apply.</p>
 <a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/me/app:latest"</span>
 </code></pre></div>
 <p>Profiles do not inherit from each other, so repeat the keys the inner table relied on.</p>
+<h2 id="refused-without-a-deprecation-cycle">Refused without a deprecation cycle<a class="headerlink" href="#refused-without-a-deprecation-cycle" title="Permanent link">&para;</a></h2>
+<p>Some input was the attack itself. COMPATIBILITY.md allows a minor or patch release to refuse
+such input with no deprecation cycle, and this section lists each case.</p>
+<h3 id="a-file-that-is-not-an-elf-named-by-the-binary-or-a-library">A file that is not an ELF, named by the binary or a library<a class="headerlink" href="#a-file-that-is-not-an-elf-named-by-the-binary-or-a-library" title="Permanent link">&para;</a></h3>
+<p>A <code>DT_NEEDED</code> entry in the binary or in a library names a file. The binary's program
+interpreter (<code>PT_INTERP</code>) names a file too. Through 1.7.2, scratchsmith staged that file, and
+it did not check that the file was an ELF. The name can point at any file on the host, such as
+<code>~/.docker/config.json</code>, and that file shipped in the image.</p>
+<p>Now <code>pack</code> and <code>graph</code> refuse such a file and exit <code>1</code>. The loader cannot start a binary that
+needs it, so no working image depends on it. A data file that you name with <code>--include</code> still
+stages. A library deeper in the tree that names the same file then resolves to that staged copy.</p>
 <h2 id="tolerances-ending-in-20">Tolerances ending in 2.0<a class="headerlink" href="#tolerances-ending-in-20" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1031,8 +1098,8 @@ value reaches it, so the keys inside it never apply.</p>
 dependency tree. The last one comes from <code>pack</code> only.</p>
 <h3 id="a-library-that-cannot-be-parsed">A library that cannot be parsed<a class="headerlink" href="#a-library-that-cannot-be-parsed" title="Permanent link">&para;</a></h3>
 <p>Scratchsmith reads each library that the binary needs, and then resolves the libraries that
-library needs in turn. A file that is not an ELF at all has no dependencies, so scratchsmith
-stages it and continues. That stays true in 2.0.</p>
+library needs in turn. A file that you name with <code>--include</code> and that is not an ELF at all has
+no dependencies, so scratchsmith stages it and continues. That stays true in 2.0.</p>
 <p>A truncated or corrupt library is a different case. The file starts with the ELF signature, and
 scratchsmith cannot read its list of dependencies. Today scratchsmith stages the damaged file
 and resolves nothing below it. The image can then ship without libraries that the program needs
