@@ -97,6 +97,7 @@ pub struct IndexOutcome {
 /// What a push response says about the digest of the manifest just pushed. cosign signs by
 /// digest, so `--sign` needs `Confirmed`; a plain push succeeds with any of the three.
 #[derive(Debug)]
+#[must_use = "a `Mismatch` must reach the user, as a refusal or a warning"]
 pub enum PushedDigest {
     /// The by-digest reference (`registry/repo@sha256:…`) of the manifest pushed.
     Confirmed(String),
@@ -961,13 +962,13 @@ mod tests {
             );
         }
         // The registry's text is escaped, so it cannot forge a line of output.
-        let err = digest_ref_from(
+        let PushedDigest::Mismatch(err) = digest_ref_from(
             &r,
             "https://ghcr.io/v2/you/app/manifests/sha256:\nforged",
             PUSHED,
-        )
-        .for_signing("image")
-        .unwrap_err();
+        ) else {
+            panic!("a forged digest is a mismatch, not an absent one");
+        };
         assert!(!format!("{err:#}").contains('\n'), "got: {err:#}");
     }
 
