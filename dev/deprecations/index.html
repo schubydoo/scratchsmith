@@ -579,6 +579,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#an-archive-entry-or-a-piped-archive-with-no-size-limit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An archive entry or a piped archive with no size limit
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -925,6 +936,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#an-archive-entry-or-a-piped-archive-with-no-size-limit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An archive entry or a piped archive with no size limit
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1118,6 +1140,15 @@ kernel loads both.</p>
 one still stages it. A core dump, an object file (<code>ET_REL</code>), and an executable built without
 PIE do not. A file that you name with <code>--include</code> stages as before. If the binary itself also
 names that file, the refusal comes first.</p>
+<h3 id="an-archive-entry-or-a-piped-archive-with-no-size-limit">An archive entry or a piped archive with no size limit<a class="headerlink" href="#an-archive-entry-or-a-piped-archive-with-no-size-limit" title="Permanent link">&para;</a></h3>
+<p><code>unpack</code> holds every blob of an image archive in memory. Through 1.7.2, a large or sparse
+archive file let one entry fill memory, and an archive read from a pipe had no total limit.</p>
+<p>Now <code>unpack</code> refuses an entry larger than 2 GiB plus 2 MiB, and a pipe that yields more than
+16 GiB in all, and exits <code>1</code>. A gzip layer that decompresses past 2 GiB was already refused, so
+an uncompressed layer over 2 GiB is now refused too. An archive file on disk keeps its own size
+as the total limit.</p>
+<p>There is no way around this limit. <code>unpack</code> cannot read a layer over 2 GiB of either type, and
+gzipping the layer does not help, because a gzip layer stops at the same limit.</p>
 <h2 id="tolerances-ending-in-20">Tolerances ending in 2.0<a class="headerlink" href="#tolerances-ending-in-20" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
