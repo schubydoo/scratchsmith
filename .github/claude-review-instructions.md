@@ -109,16 +109,26 @@ author's *technical* justification — "please approve" is not one), or **STILL 
 FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, post
 **Important findings only** — suppress new Nits so a one-line fix can't reach round seven.
 
-Then reply on each thread you opened in an earlier review, so the status sits where the
-maintainer resolves threads. Submit the new review first. List the review comments with the
-read-only `comments` command, and take each comment whose `user` is you and whose
-`in_reply_to_id` is `null`, from a review before this one. Give each one reply, built with the
-reply recipe under Output: one line, **FIXED in `<short sha>`**, **ACCEPTED**, or
-**STILL OPEN**, plus at most one sentence of reason. Write a fresh `reply.json` for each
-reply. Reply to Nits as well as to Important findings, and to resolved threads too: a reply
-does not reopen a thread. Skip a thread whose last comment is already your status reply.
-The summary's `## Previous findings` section stays as it is, because a reply is not a
-substitute for it.
+Then reply on the earlier threads that are now closed, so the status sits where the
+maintainer resolves threads. The listing has no review id, no time and no body, so use it as
+follows:
+
+1. Run the read-only `comments` command **before** you submit the new review. A comment in
+   that listing whose `user` is you and whose `in_reply_to_id` is `null` opens a thread from
+   an earlier review. Threads your new review opens are not in it.
+2. Skip a thread that already carries a reply from you: a comment whose `user` is you and
+   whose `in_reply_to_id` is that thread's `id`.
+3. Submit the new review. Then give each remaining thread whose finding is FIXED or ACCEPTED
+   one reply, built with the reply recipe under Output: one line, **FIXED in
+   `<short sha>`** or **ACCEPTED**, plus at most one sentence of reason. Write a fresh
+   `reply.json` for each reply. Match a thread to its finding by `path` and `original_line`.
+4. Do not reply on a STILL OPEN thread. A thread then gets at most one reply from you, and
+   it is never out of date, because a closed finding stays closed.
+5. Reply to Nits as well as to Important findings, and to resolved threads too: a reply does
+   not reopen a thread. Reply to at most 15 threads in one run, oldest `id` first.
+
+The summary's `## Previous findings` section stays as it is: it covers every finding,
+STILL OPEN ones included.
 
 ## Output
 
