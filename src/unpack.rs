@@ -95,6 +95,7 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
         .metadata()
         .with_context(|| format!("reading {}", archive.display()))?;
     let mut budget = archive_budget(&meta);
+    let pipe = !meta.is_file();
     let mut ar = tar::Archive::new(file);
     let mut blobs = HashMap::new();
     let mut index_bytes = None;
@@ -121,7 +122,7 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
                 crate::resolver::escape_for_display(&stored)
             );
         }
-        let buf = read_bounded(&mut e, &mut budget, MAX_ENTRY_BYTES, &stored)?;
+        let buf = read_bounded(&mut e, &mut budget, MAX_ENTRY_BYTES, pipe, &stored)?;
         if let Some(digest) = digest {
             let actual = hex(Sha256::digest(&buf));
             if actual != digest {
@@ -152,7 +153,14 @@ fn archive_budget(meta: &std::fs::Metadata) -> u64 {
 // Read one archive entry of at most `cap` bytes, charging it to `budget` (what the archive can
 // still hold). Bytes past the budget were never stored in the file, only synthesized by the
 // reader. The cap holds for a large or a sparse file on disk, whose budget is its length.
-fn read_bounded(entry: impl Read, budget: &mut u64, cap: u64, name: &str) -> Result<Vec<u8>> {
+// `pipe` says the budget is `MAX_PIPE_BYTES`, so the error names the limit that was hit.
+fn read_bounded(
+    entry: impl Read,
+    budget: &mut u64,
+    cap: u64,
+    pipe: bool,
+    name: &str,
+) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     entry
         .take((*budget).min(cap).saturating_add(1))
@@ -164,10 +172,16 @@ fn read_bounded(entry: impl Read, budget: &mut u64, cap: u64, name: &str) -> Res
             crate::resolver::escape_for_display(name)
         );
     }
+    if len > *budget && pipe {
+        bail!(
+            "OCI archive entry {} takes the piped archive past {MAX_PIPE_BYTES} bytes (16 GiB); \
+             refusing",
+            crate::resolver::escape_for_display(name)
+        );
+    }
     if len > *budget {
         bail!(
-            "OCI archive entry {} holds more bytes than the archive itself, or than the \
-             {MAX_PIPE_BYTES}-byte limit for a pipe; refusing",
+            "OCI archive entry {} holds more bytes than the archive itself; refusing",
             crate::resolver::escape_for_display(name)
         );
     }
@@ -800,7 +814,14 @@ mod tests {
     #[test]
     fn an_entry_reading_past_the_archive_size_fails() {
         let mut budget = 16;
-        let buf = read_bounded(&b"0123456789abcdef"[..], &mut budget, 16, "index.json").unwrap();
+        let buf = read_bounded(
+            &b"0123456789abcdef"[..],
+            &mut budget,
+            16,
+            false,
+            "index.json",
+        )
+        .unwrap();
         assert_eq!(
             (buf.len(), budget),
             (16, 0),
@@ -808,14 +829,27 @@ mod tests {
         );
 
         let mut budget = 16;
-        let err =
-            read_bounded(std::io::repeat(0), &mut budget, 64, "index.json\u{1b}[2J").unwrap_err();
+        let err = read_bounded(
+            std::io::repeat(0),
+            &mut budget,
+            64,
+            false,
+            "index.json\u{1b}[2J",
+        )
+        .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("more bytes than the archive itself"), "{msg}");
+        assert!(!msg.contains("pipe"), "a file on disk is not a pipe: {msg}");
         assert!(
             !msg.contains('\u{1b}'),
             "the entry name must be escaped: {msg}"
         );
+
+        let mut budget = 16;
+        let err = read_bounded(std::io::repeat(0), &mut budget, 64, true, "index.json")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("takes the piped archive past"), "{err}");
     }
 
     #[test]
@@ -823,7 +857,7 @@ mod tests {
         // A sparse or huge file on disk reports a huge length, and a pipe gets a 16 GiB budget,
         // so the budget alone lets one entry fill memory.
         let mut budget = u64::MAX;
-        let buf = read_bounded(&b"01234567"[..], &mut budget, 8, "index.json").unwrap();
+        let buf = read_bounded(&b"01234567"[..], &mut budget, 8, true, "index.json").unwrap();
         assert_eq!(buf.len(), 8, "exactly the cap is fine");
 
         let mut budget = u64::MAX;
@@ -831,6 +865,7 @@ mod tests {
             std::io::repeat(0),
             &mut budget,
             8,
+            true,
             "blobs/sha256/x\u{1b}[2J",
         )
         .unwrap_err()

@@ -127,6 +127,9 @@ Now `unpack` refuses an entry larger than 2 GiB plus 2 MiB, and a pipe that yiel
 an uncompressed layer over 2 GiB is now refused too. An archive file on disk keeps its own size
 as the total limit.
 
+There is no way around this limit. `unpack` cannot read a layer over 2 GiB of either type, and
+gzipping the layer does not help, because a gzip layer stops at the same limit.
+
 ## Tolerances ending in 2.0
 
 | Input | Warns since | Error in | What to do |
