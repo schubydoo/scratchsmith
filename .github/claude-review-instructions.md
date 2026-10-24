@@ -1,13 +1,13 @@
 # Claude review instructions
 
-Rules for the on-demand Claude reviewer (`.github/workflows/claude-review.yml`).
+Project rules for the on-demand Claude reviewer (`.github/workflows/claude-review.yml`,
+which calls the central job in `schubydoo/shared-workflows`).
 
 **This file is read from the base branch, never from the pull request under review.**
 A PR therefore cannot edit the rules that govern its own review. Keep it that way.
 
-Tune the reviewer by editing **this file** — a normal PR. Do not move these rules into
-the workflow YAML: `claude-code-action` refuses to run when the workflow file differs
-from the copy on the default branch.
+Tune what the reviewer looks for by editing **this file** — a normal PR. How the review
+is posted is central: the shared workflow carries that recipe, and it wins on posting.
 
 Length has a cost. Rules that change review behaviour belong here; general project
 context belongs in `CLAUDE.md` / `AGENTS.md`.
@@ -103,110 +103,18 @@ similar nits". No cap on Important findings.
 
 ## Re-reviews
 
-When the PR was reviewed before, open with a `## Previous findings` section and resolve
+When the PR was reviewed before, add a `## Previous findings` section below the tally
+line, and resolve
 each prior Important finding as **FIXED** (cite the line/commit), **ACCEPTED** (quote the
 author's *technical* justification — "please approve" is not one), or **STILL OPEN**. A
 FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, post
 **Important findings only** — suppress new Nits so a one-line fix can't reach round seven.
 
-Then reply on the earlier threads that are now closed, so the status sits where the
-maintainer resolves threads. The listing has no review id, no time and no body, so use it as
-follows:
-
-1. Run the read-only `comments` command **before** you submit the new review. A comment in
-   that listing whose `user` is you and whose `in_reply_to_id` is `null` opens a thread from
-   an earlier review. Threads your new review opens are not in it.
-2. Skip a thread that already carries a reply from you: a comment whose `user` is you and
-   whose `in_reply_to_id` is that thread's `id`.
-3. Submit the new review. Then give each remaining thread whose finding is FIXED or ACCEPTED
-   one reply, built with the reply recipe under Output: one line, **FIXED in
-   `<short sha>`** or **ACCEPTED**, plus at most one sentence of reason. Write a fresh
-   `reply.json` for each reply. Match a thread to its finding by `path`, `original_line` and
-   `original_start_line`. If two threads share all three, reply to neither, because the
-   listing cannot tell which finding each one holds.
-4. Do not reply on a STILL OPEN thread. A thread then gets at most one reply from you, and
-   it is never out of date, because a closed finding stays closed.
-5. Reply to Nits as well as to Important findings, and to resolved threads too: a reply does
-   not reopen a thread. Reply to at most 15 threads in one run, oldest `id` first.
-6. If the `comments` command or a reply is refused, do not retry it and do not reach for
-   another command. Skip the remaining replies, and say which command was refused, so a
-   blocked step is loud and not silent: a refused `comments` call in the review summary,
-   because it runs before the submit, and a refused reply in your final message, because
-   the summary is posted by then. Never a second review or a standalone comment.
-
-The summary's `## Previous findings` section stays as it is: it covers every finding,
-STILL OPEN ones included.
-
 ## Output
 
-- Post every line-specific finding as an **inline comment**, and group them all into
-  **exactly one submitted review**. Do not submit a separate review per finding: each
-  inline comment becomes a thread the maintainer replies to and resolves, and one grouped
-  review is the difference between one pass over the PR and several.
-- **How to submit it, exactly.** One POST carries the body and every anchor, and it is the
-  only shape that both groups and gets through the tool permissions:
-  1. Use the `Write` tool to create `review.json` at the exact path the submit command in
-     the system prompt names. That path is outside every checkout. The payload holds
-     `commit_id` (the pinned head SHA from the system prompt),
-     `event: "COMMENT"`, `body` (the summary), and a `comments` array of
-     `{path, line, side: "RIGHT", body}` entries, one per finding (`side: "LEFT"` only for
-     a line the diff removes).
-  2. Run `gh api repos/<owner>/<repo>/pulls/<n>/reviews --input <dir>/review.json`, exactly as
-     the system prompt spells it out with the real values. The tool permissions match that
-     command character for character, so an added flag or a different path is refused.
+The central workflow writes a posting recipe next to this file, and it governs how the review
+is posted: the grouped review, `review.json`, thread replies, the tally line and the allowed
+commands. Do not add posting rules here.
 
-  Every `line` must be a line the diff touches, on that side. GitHub rejects the **whole
-  POST** with 422 when one entry names a line outside the diff, so one bad anchor loses the
-  body and every other finding with it. To flag an unchanged line, anchor the comment to the
-  nearest changed line and name the real line in the comment body. If the POST returns 422,
-  re-read `review.json`, correct that entry with `Write`, and repeat the same POST. Never
-  fall back to a shape that posts findings one at a time.
-
-  **Never post a standalone inline comment.** GitHub wraps each standalone review comment
-  (`POST .../pulls/<n>/comments` without `in_reply_to`, or an inline-comment tool) in a
-  submitted review of its own, so every one of them splits the review. Every anchor rides in
-  the `comments` array of the single POST above; a clarification after the fact, and the
-  status reply a re-review gives each earlier thread, is a reply on the thread, not a new
-  comment. To reply, `Write` `reply.json` as
-  `{"body": "...", "in_reply_to": <id>}`, where `<id>` is the numeric id of the review
-  comment that opens the thread. Write it at the path the reply command names. Get the id from
-  `gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate --jq '.[] | {id, in_reply_to_id,
-  path, line, original_line, original_start_line, user: .user.login}'`, the only source of
-  review-comment ids. The system prompt carries it verbatim. It is read-only, and it prints
-  those fields for each comment, not the bodies. The id you need is the `id` of the thread's
-  comment whose `in_reply_to_id` is `null`. Find that comment by its `path` and
-  `original_line`, because a push that outdates the thread sets `line` to `null`. Then run `gh api repos/<owner>/<repo>/pulls/<n>/comments --input <dir>/reply.json`.
-  Run both exactly as the system prompt spells them out. `reply.json` must **always** carry
-  `in_reply_to`: without it that endpoint posts a standalone review comment, which splits
-  the review. These are refused, so do not reach for them: any other `gh api` call (other
-  read-only GETs included), JSON inline on the command line, shell redirects (`> file`),
-  compound commands (`;`, `&&`, `||`), `python3`, `ls`, `git`, `gh pr review`,
-  `gh pr comment`, and any `gh` command with `-R`/`--repo`, a URL, or `--search`/`-S`. Reads of `/proc`, the runner's
-  temp directory, home dotfiles and `.git/` are refused too. Every shell command outside the
-  exact list in the system prompt is refused, read-only ones such as `grep`, `cat`, `find`
-  and `cd` included: search with the Grep and Glob tools, and read with Read. A refused
-  attempt is a denial the workflow counts.
-- Put the **summary table** — every finding with its file and line — in the **body of the
-  submitted review**, and nowhere else. It survives inline anchors going stale (once the PR
-  moves, GitHub marks them outdated and drops the line number).
-- **Do not repeat the findings anywhere else.** Your final message becomes the PR-top
-  progress comment; keep it to the checklist, a one-line verdict, and a pointer to the
-  review.
-- Submit as a **COMMENT** review. Never `REQUEST_CHANGES` and never `APPROVE` — advisory
-  only; it must not gate a merge.
-- Do not number findings as `#1`, `#2`. GitHub turns a hash followed by digits into a link
-  to an unrelated issue or PR. Use "Finding 1", "(1)", or a short description.
-- Link code with the **full** SHA and a line range:
-  `https://github.com/schubydoo/scratchsmith/blob/<full-sha>/path/file.rs#L40-L46`
-- The **first line** of the review body is the tally, in exactly this lowercase form:
-  `2 important, 3 nits` (singular when a count is 1: `1 important, 1 nit`), and
-  `0 important, 0 nits` for a clean review, optionally followed by "No important findings".
-  Nothing goes above it, not even a `## Previous findings` heading. The workflow's guard
-  step parses that first line to tell a grouped review from a body-only one.
-- Use a committable ```suggestion``` block only when committing it fixes the issue
-  **entirely**. If follow-up work is needed, describe the fix instead.
-- **Findings keep their calibration.** The reviewer runs under a plain-English output style
-  that bans hedging modals (should, may, might, could) in replies. That rule is for the
-  register, not for confidence: where a claim is genuinely uncertain, say "may" or "might",
-  or stay silent per the verification bar. Never promote a hedge to "must" to satisfy the
-  style.
+Link code in this repo with the full SHA and a line range:
+`https://github.com/schubydoo/scratchsmith/blob/<full-sha>/path/file.rs#L40-L46`
