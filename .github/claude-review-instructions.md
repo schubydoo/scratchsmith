@@ -121,7 +121,9 @@ follows:
 3. Submit the new review. Then give each remaining thread whose finding is FIXED or ACCEPTED
    one reply, built with the reply recipe under Output: one line, **FIXED in
    `<short sha>`** or **ACCEPTED**, plus at most one sentence of reason. Write a fresh
-   `reply.json` for each reply. Match a thread to its finding by `path` and `original_line`.
+   `reply.json` for each reply. Match a thread to its finding by `path`, `original_line` and
+   `original_start_line`. If two threads share all three, reply to neither, because the
+   listing cannot tell which finding each one holds.
 4. Do not reply on a STILL OPEN thread. A thread then gets at most one reply from you, and
    it is never out of date, because a closed finding stays closed.
 5. Reply to Nits as well as to Important findings, and to resolved threads too: a reply does
