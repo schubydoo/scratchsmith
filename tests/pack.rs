@@ -1077,14 +1077,56 @@ fn smoke_with_push_is_rejected() {
     assert!(err.to_string().contains("smoke"), "got: {err}");
 }
 
+// Runs `docker <args>` for each entry on drop, so a failed assertion (a panic) still removes
+// the test registry and its loopback port binding.
+struct DockerCleanup(Vec<Vec<String>>);
+
+impl Drop for DockerCleanup {
+    fn drop(&mut self) {
+        for args in &self.0 {
+            let _ = Command::new("docker").args(args).output();
+        }
+    }
+}
+
+fn docker_args(what: &[&str]) -> Vec<String> {
+    what.iter().map(|s| s.to_string()).collect()
+}
+
+// The digest the registry serves for `repo:tag`, read with a plain HTTP HEAD, so the test
+// runs the image the push stored and not whatever the daemon holds under that tag.
+fn registry_digest(port: u16, repo: &str, tag: &str) -> String {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    // A response that kept the socket open would hang the test, and a killed test runs no
+    // cleanup guard.
+    s.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    write!(
+        s,
+        "HEAD /v2/{repo}/manifests/{tag} HTTP/1.1\r\nHost: localhost:{port}\r\n\
+         Accept: application/vnd.oci.image.manifest.v1+json\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut resp = String::new();
+    s.read_to_string(&mut resp).unwrap();
+    resp.lines()
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.eq_ignore_ascii_case("docker-content-digest")
+                .then(|| value.trim().to_string())
+        })
+        .unwrap_or_else(|| panic!("the registry reported no digest: {resp}"))
+}
+
 #[test]
 fn push_to_local_registry_is_pullable_and_runnable() {
     if !docker_available() {
         skip_required("no Docker daemon");
         return;
     }
-    // Checked BEFORE the registry starts: under CI this is a panic, and a panic between
-    // `docker run -d` and the teardown at the end leaks the container and its port binding.
+    // Checked BEFORE the registry starts: under CI this is a panic, and the cleanup guard
+    // exists only once the registry does.
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");
         return;
@@ -1113,6 +1155,9 @@ fn push_to_local_registry_is_pullable_and_runnable() {
         skip_optional("could not start registry:2");
         return;
     }
+    let reference = "localhost:5099/scratchsmith/test:v1";
+    // Declared after the lock, so it runs before the lock is released.
+    let mut cleanup = DockerCleanup(vec![docker_args(&["rm", "-f", "ss-test-reg"])]);
     // Wait for the registry port to accept connections.
     for _ in 0..40 {
         if std::net::TcpStream::connect("127.0.0.1:5099").is_ok() {
@@ -1121,7 +1166,6 @@ fn push_to_local_registry_is_pullable_and_runnable() {
         std::thread::sleep(std::time::Duration::from_millis(300));
     }
 
-    let reference = "localhost:5099/scratchsmith/test:v1";
     let report = scratchsmith::pack::pack(
         bin,
         &PackOptions::default(),
@@ -1152,9 +1196,13 @@ fn push_to_local_registry_is_pullable_and_runnable() {
     );
     assert!(String::from_utf8_lossy(&cli.stdout).contains("pushed"));
 
-    // The pushed image pulls and runs.
+    // The pushed image pulls and runs, by the digest the registry stored for the tag.
+    let (repo_ref, tag) = reference.rsplit_once(':').unwrap();
+    let repo = repo_ref.split_once('/').unwrap().1;
+    let by_digest = format!("{repo_ref}@{}", registry_digest(5099, repo, tag));
+    cleanup.0.push(docker_args(&["rmi", "-f", &by_digest]));
     let pull = Command::new("docker")
-        .args(["pull", reference])
+        .args(["pull", &by_digest])
         .output()
         .unwrap();
     assert!(
@@ -1163,18 +1211,11 @@ fn push_to_local_registry_is_pullable_and_runnable() {
         String::from_utf8_lossy(&pull.stderr)
     );
     let run = Command::new("docker")
-        .args(["run", "--rm", reference])
+        .args(["run", "--rm", &by_digest])
         .output()
         .unwrap();
     assert!(run.status.success(), "run failed: {run:?}");
     assert!(String::from_utf8_lossy(&run.stdout).contains("uid="));
-
-    let _ = Command::new("docker")
-        .args(["rm", "-f", "ss-test-reg"])
-        .output();
-    let _ = Command::new("docker")
-        .args(["rmi", "-f", reference])
-        .output();
 }
 
 #[test]
@@ -1183,8 +1224,8 @@ fn index_assembles_a_pushed_image_into_an_index() {
         skip_required("no Docker daemon");
         return;
     }
-    // Checked BEFORE the registry starts: under CI this is a panic, and a panic between
-    // `docker run -d` and the teardown at the end leaks the container and its port binding.
+    // Checked BEFORE the registry starts: under CI this is a panic, and the cleanup guard
+    // exists only once the registry does.
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");
         return;
@@ -1212,6 +1253,7 @@ fn index_assembles_a_pushed_image_into_an_index() {
         skip_optional("could not start registry:2");
         return;
     }
+    let _cleanup = DockerCleanup(vec![docker_args(&["rm", "-f", "ss-test-reg-idx"])]);
     for _ in 0..40 {
         if std::net::TcpStream::connect("127.0.0.1:5098").is_ok() {
             break;
@@ -1281,8 +1323,4 @@ fn index_assembles_a_pushed_image_into_an_index() {
         format!("{err:#}").contains("multi-arch index"),
         "got: {err}"
     );
-
-    let _ = Command::new("docker")
-        .args(["rm", "-f", "ss-test-reg-idx"])
-        .output();
 }
