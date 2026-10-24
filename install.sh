@@ -104,8 +104,16 @@ if have curl; then
   fetch() { curl -fsSL --connect-timeout 30 --speed-time 30 --speed-limit 1 "$1"; }
   download() { curl -fsSL --connect-timeout 30 --speed-time 30 --speed-limit 1 "$1" -o "$2"; }
 elif have wget; then
-  fetch() { wget -q -T 30 -t 1 -O- "$1"; }
-  download() { wget -q -T 30 -t 1 -O "$2" "$1"; }
+  # `wget -q` hides why a fetch failed (a 404, a proxy, no network), and BusyBox wget has no
+  # mode that keeps errors only. Hold the log and print its last lines when wget fails.
+  wget_or_say() {
+    local log
+    { log="$(wget -T 30 -t 1 "$@" 2>&1 1>&3 3>&-)"; } 3>&1 && return 0
+    printf '%s\n' "$log" | grep -v '^ *[0-9]*K\|%' | tail -n 3 >&2
+    return 1
+  }
+  fetch() { wget_or_say -O- "$1"; }
+  download() { wget_or_say -O "$2" "$1"; }
 else
   die "need 'curl' or 'wget' to download the release"
 fi
@@ -145,7 +153,7 @@ ok "checksum verified"
 # swaps the tarball can just as well withhold it. INSECURE_ALLOW_MISSING_SIGNATURE=1 opts out.
 if ! have cosign; then
   warn "cosign not installed — verified the SHA-256 only. Install cosign for full signature + provenance checks (see the README 'Verifying releases')."
-elif ! download "${base}/checksums.txt.sigstore.json" "${tmp}/checksums.txt.sigstore.json" 2>/dev/null; then
+elif ! download "${base}/checksums.txt.sigstore.json" "${tmp}/checksums.txt.sigstore.json"; then
   [ "${INSECURE_ALLOW_MISSING_SIGNATURE:-}" = "1" ] \
     || die "could not fetch the cosign signature bundle (checksums.txt.sigstore.json) — refusing to install an unverified binary. Re-download, or (at your own risk) set INSECURE_ALLOW_MISSING_SIGNATURE=1 to fall back to checksum-only."
   warn "could not fetch the cosign signature bundle (checksums.txt.sigstore.json) — INSECURE_ALLOW_MISSING_SIGNATURE=1 is set, so verified the SHA-256 only."
