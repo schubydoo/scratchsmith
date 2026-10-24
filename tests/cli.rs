@@ -209,6 +209,136 @@ fn diff_flags_drift_with_exit_code() {
     assert!(!out.status.success(), "--exit-code must fail on drift");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("~ f"), "{stdout}");
+
+    let out = run(&[
+        "diff",
+        "--format",
+        "json",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "drift without --exit-code passes");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["changed"], serde_json::json!(["f"]), "{report}");
+}
+
+#[test]
+fn completions_print_a_script_on_stdout() {
+    let out = run(&["--completions", "bash"]);
+    assert!(out.status.success());
+    let script = String::from_utf8_lossy(&out.stdout);
+    assert!(script.contains("_scratchsmith"), "{script}");
+}
+
+// A directory holding one executable script per (name, body), for a PATH with nothing else.
+fn fake_tools(dir: &std::path::Path, tools: &[(&str, &str)]) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("tools");
+    std::fs::create_dir_all(&bin).unwrap();
+    for (name, body) in tools {
+        let path = bin.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    bin
+}
+
+#[test]
+fn scan_fail_on_refuses_a_finding_at_or_above_the_threshold() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    // grype reports one High finding and logs where it read the packages from. syft writes
+    // an empty SBOM to the path after `=` in its `-o` argument.
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("grype-args");
+    let tools = fake_tools(
+        tmp.path(),
+        &[
+            (
+                "grype",
+                r#"echo "$1" >> "$ASKED"
+echo '{"matches":[{"vulnerability":{"severity":"High"}}]}'"#,
+            ),
+            (
+                "syft",
+                r#"for a; do case "$a" in *=*) echo '{}' > "${a#*=}";; esac; done"#,
+            ),
+        ],
+    );
+    let pack = |name: &str, extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["pack", "--no-build", "--packages", "none", "--scan", "-o"])
+            .arg(tmp.path().join(name))
+            .args(extra)
+            .arg(bin)
+            .env("PATH", &tools)
+            .env("ASKED", &log)
+            .output()
+            .unwrap()
+    };
+
+    let out = pack("high", &["--scan-fail-on", "high"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a High finding must fail the pack");
+    assert!(
+        stderr.contains("vulnerability scan failed: 1 finding(s) at or above High")
+            && stderr.contains("high=1"),
+        "{stderr}"
+    );
+
+    // Below the threshold the pack passes, and with an SBOM grype reads it, not the tree.
+    let sbom = tmp.path().join("sbom.json");
+    let out = pack(
+        "critical",
+        &[
+            "--scan-fail-on",
+            "critical",
+            "--sbom",
+            "--sbom-file",
+            sbom.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let asked = std::fs::read_to_string(&log).unwrap();
+    let asked: Vec<&str> = asked.lines().collect();
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert!(asked[0].starts_with("dir:"), "{asked:?}");
+    assert_eq!(asked[1], format!("sbom:{}", sbom.display()));
+}
+
+#[test]
+fn a_failed_image_load_names_the_engine_and_its_error() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let tools = fake_tools(
+        tmp.path(),
+        &[
+            ("podman", "echo 'podman says no' >&2; exit 1"),
+            ("nerdctl", "echo 'nerdctl says no' >&2; exit 1"),
+        ],
+    );
+    for engine in ["podman", "nerdctl"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["pack", "--packages", "none", "--runtime", engine, bin])
+            .env("PATH", &tools)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{engine}: {stderr}");
+        assert!(
+            stderr.contains(&format!("{engine} load failed: {engine} says no")),
+            "{engine}: {stderr}"
+        );
+    }
 }
 
 #[test]
@@ -1474,5 +1604,91 @@ fn the_report_names_the_owners_of_the_extra_files_too() {
     assert!(
         !credited,
         "a staged link carries no package content: {report}"
+    );
+}
+
+#[test]
+fn a_failed_package_lookup_warns_unless_the_records_need_it() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    // The probe needs a dpkg status file. dpkg-query answers the probe and fails every lookup.
+    if !dpkg_host() {
+        common::skip_optional("needs a dpkg host");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let tools = fake_tools(
+        tmp.path(),
+        &[(
+            "dpkg-query",
+            "[ \"$1\" = --version ] && exit 0\necho 'database is locked' >&2\nexit 2",
+        )],
+    );
+    let pack = |name: &str, extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["pack", "--no-build", "--format", "json", "-o"])
+            .arg(tmp.path().join(name))
+            .args(extra)
+            .arg(bin)
+            .env("PATH", &tools)
+            .output()
+            .unwrap()
+    };
+
+    // The report list is optional: a failed lookup is a warning, and the pack goes on.
+    let out = pack("report", &[]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let warnings = report["warnings"].to_string();
+    assert!(
+        warnings.contains("package lookup failed: dpkg-query -S failed")
+            && warnings.contains("database is locked"),
+        "{warnings}"
+    );
+
+    // The image records are content the user asked for, so the same failure stops the pack.
+    let out = pack("image", &["--packages", "image"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("--packages image: the package lookup failed"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_file_dpkg_would_read_as_a_pattern_is_named_as_not_looked_up() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    if !dpkg_host() {
+        common::skip_optional("needs a dpkg host");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let odd = tmp.path().join("we*rd.conf");
+    std::fs::write(&odd, "x\n").unwrap();
+    let out = run(&[
+        "pack",
+        "--format",
+        "json",
+        "-n",
+        "-o",
+        tmp.path().join("rootfs").to_str().unwrap(),
+        "--add-file",
+        &format!("{}:/etc/weird.conf", odd.display()),
+        bin,
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let warnings = report["warnings"].to_string();
+    assert!(
+        warnings.contains("these files were not looked up") && warnings.contains("we*rd.conf"),
+        "{warnings}"
     );
 }

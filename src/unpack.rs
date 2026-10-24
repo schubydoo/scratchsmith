@@ -1205,6 +1205,48 @@ mod tests {
         }
     }
 
+    // An archive whose index names `manifest`, stored as a blob beside `blobs`.
+    fn archive_of(dir: &Path, manifest: &serde_json::Value, blobs: &[&[u8]]) -> PathBuf {
+        let manifest = serde_json::to_vec(manifest).unwrap();
+        let digest = format!("sha256:{}", hex(Sha256::digest(&manifest)));
+        let index = serde_json::json!({ "manifests": [{ "digest": digest }] });
+        let mut all = vec![manifest.as_slice()];
+        all.extend_from_slice(blobs);
+        oci_archive(dir, &index, &all)
+    }
+
+    #[test]
+    fn run_refuses_an_index_and_a_manifest_without_layers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let index = archive_of(tmp.path(), &serde_json::json!({ "manifests": [] }), &[]);
+        let err = run(&index, &tmp.path().join("out")).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("multi-arch image index"),
+            "{err:#}"
+        );
+
+        let bare = archive_of(tmp.path(), &serde_json::json!({ "config": {} }), &[]);
+        let err = run(&bare, &tmp.path().join("out")).unwrap_err();
+        assert!(format!("{err:#}").contains("has no layers"), "{err:#}");
+    }
+
+    #[test]
+    fn run_applies_an_uncompressed_layer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layer = tar_of(&[("a", b"x")]);
+        let manifest = serde_json::json!({
+            "layers": [{
+                "mediaType": "application/vnd.oci.image.layer.v1.tar",
+                "digest": format!("sha256:{}", hex(Sha256::digest(&layer))),
+            }],
+        });
+        let archive = archive_of(tmp.path(), &manifest, &[&layer]);
+        let dest = tmp.path().join("out");
+        let report = run(&archive, &dest).unwrap();
+        assert_eq!((report.layers, report.files), (1, 1));
+        assert_eq!(std::fs::read(dest.join("a")).unwrap(), b"x");
+    }
+
     #[test]
     fn read_archive_escapes_a_blob_name_and_tar_header_text() {
         let tmp = tempfile::tempdir().unwrap();

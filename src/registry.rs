@@ -976,6 +976,15 @@ mod tests {
         assert!(!format!("{err:#}").contains('\n'), "got: {err:#}");
     }
 
+    #[test]
+    fn an_unreported_digest_cannot_be_signed() {
+        let err = PushedDigest::Unreported.for_signing("index").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "cannot sign: the registry did not return a digest for the pushed index"
+        );
+    }
+
     // How the mock registry answers a manifest PUT.
     #[derive(Clone, Copy)]
     enum ManifestAnswer {
