@@ -10,8 +10,8 @@ use std::sync::Mutex;
 
 mod common;
 use common::{
-    docker_available, grype_available, skip_optional, skip_required, small_fixture, syft_available,
-    upx_available,
+    docker_available, fake_tools, grype_available, skip_optional, skip_required, small_fixture,
+    syft_available, upx_available, FAKE_SYFT,
 };
 
 // Docker tests pack the same binary into the same derived tag, so they must not run
@@ -1093,29 +1093,12 @@ fn docker_args(what: &[&str]) -> Vec<String> {
     what.iter().map(|s| s.to_string()).collect()
 }
 
-// A PATH whose cosign and syft are scripts under `dir`, ahead of the host's own tools. cosign
-// logs its arguments to $ASKED. syft writes `{}` to the path after `=` in its `-o` argument.
+// A PATH whose cosign logs its arguments to $ASKED, and whose syft writes an empty SBOM.
 fn signing_path(dir: &Path) -> std::ffi::OsString {
-    use std::os::unix::fs::PermissionsExt;
-    let tools = dir.join("tools");
-    std::fs::create_dir_all(&tools).unwrap();
-    for (name, body) in [
-        ("cosign", r#"echo "$*" >> "$ASKED""#),
-        (
-            "syft",
-            r#"for a; do case "$a" in *=*) echo '{}' > "${a#*=}";; esac; done"#,
-        ),
-    ] {
-        let path = tools.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let mut path = tools.into_os_string();
-    if let Some(host) = std::env::var_os("PATH") {
-        path.push(":");
-        path.push(host);
-    }
-    path
+    fake_tools(
+        dir,
+        &[("cosign", r#"echo "$*" >> "$ASKED""#), ("syft", FAKE_SYFT)],
+    )
 }
 
 // The digest the registry serves for `repo:tag`, read with a plain HTTP HEAD, so the test

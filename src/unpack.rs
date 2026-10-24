@@ -1217,16 +1217,21 @@ mod tests {
 
     #[test]
     fn run_refuses_an_index_and_a_manifest_without_layers() {
-        let tmp = tempfile::tempdir().unwrap();
-        let index = archive_of(tmp.path(), &serde_json::json!({ "manifests": [] }), &[]);
-        let err = run(&index, &tmp.path().join("out")).unwrap_err();
+        // One directory each: `oci_archive` always writes `img.tar`.
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let index = archive_of(a.path(), &serde_json::json!({ "manifests": [] }), &[]);
+        let bare = archive_of(b.path(), &serde_json::json!({ "config": {} }), &[]);
+        assert_ne!(
+            std::fs::read(&index).unwrap(),
+            std::fs::read(&bare).unwrap()
+        );
+
+        let err = run(&index, &a.path().join("out")).unwrap_err();
         assert!(
             format!("{err:#}").contains("multi-arch image index"),
             "{err:#}"
         );
-
-        let bare = archive_of(tmp.path(), &serde_json::json!({ "config": {} }), &[]);
-        let err = run(&bare, &tmp.path().join("out")).unwrap_err();
+        let err = run(&bare, &b.path().join("out")).unwrap_err();
         assert!(format!("{err:#}").contains("has no layers"), "{err:#}");
     }
 

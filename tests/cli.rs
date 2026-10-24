@@ -5,8 +5,8 @@
 use std::process::{Command, Output};
 
 mod common;
-use common::skip_required;
 use common::small_fixture_str as small_fixture;
+use common::{fake_tools, skip_required, FAKE_SYFT};
 
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
@@ -230,19 +230,6 @@ fn completions_print_a_script_on_stdout() {
     assert!(script.contains("_scratchsmith"), "{script}");
 }
 
-// A directory holding one executable script per (name, body), for a PATH with nothing else.
-fn fake_tools(dir: &std::path::Path, tools: &[(&str, &str)]) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let bin = dir.join("tools");
-    std::fs::create_dir_all(&bin).unwrap();
-    for (name, body) in tools {
-        let path = bin.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    bin
-}
-
 #[test]
 fn scan_fail_on_refuses_a_finding_at_or_above_the_threshold() {
     let Some(bin) = small_fixture() else {
@@ -261,10 +248,7 @@ fn scan_fail_on_refuses_a_finding_at_or_above_the_threshold() {
                 r#"echo "$1" >> "$ASKED"
 echo '{"matches":[{"vulnerability":{"severity":"High"}}]}'"#,
             ),
-            (
-                "syft",
-                r#"for a; do case "$a" in *=*) echo '{}' > "${a#*=}";; esac; done"#,
-            ),
+            ("syft", FAKE_SYFT),
         ],
     );
     let pack = |name: &str, extra: &[&str]| {

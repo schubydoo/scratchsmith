@@ -163,6 +163,11 @@ mod tests {
             },
             &mut || {
                 polls += 1;
+                // Budgeted, as above: a broken wait must fail the suite, not hang it.
+                assert!(
+                    polls <= 4,
+                    "poll {polls}: each round was stable after two polls"
+                );
                 if polls % 2 == 1 {
                     write_at(&bin, b"vN", 1_000 + polls);
                 }

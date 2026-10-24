@@ -70,6 +70,28 @@ pub fn docker_available() -> bool {
     tool_runs("docker", &["info"])
 }
 
+/// The stub `syft` for `fake_tools`: it writes `{}` to the path after `=` in its `-o` argument.
+pub const FAKE_SYFT: &str = r#"for a; do case "$a" in *=*) echo '{}' > "${a#*=}";; esac; done"#;
+
+/// A `PATH` whose first directory holds one executable script per `(name, body)`, made under
+/// `dir`. The host `PATH` follows, so a fake shadows the real tool and everything else stays.
+pub fn fake_tools(dir: &Path, tools: &[(&str, &str)]) -> std::ffi::OsString {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("tools");
+    std::fs::create_dir_all(&bin).unwrap();
+    for (name, body) in tools {
+        let path = bin.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut path = bin.into_os_string();
+    if let Some(host) = std::env::var_os("PATH") {
+        path.push(":");
+        path.push(host);
+    }
+    path
+}
+
 /// Does `root` contain a file named `name`, at any depth?
 ///
 /// An unreadable directory reads as "not here" rather than an error: callers use this to assert
@@ -136,10 +158,10 @@ pub fn skip_required(reason: &str) {
 ///
 /// Three shapes:
 ///
-/// - **Absent on the runner.** `musl-gcc` and `tini` are absent on `ubuntu-latest` and no
-///   workflow step adds them, proven by CI run 35544425984: both gated tests returned in 0.05s
-///   or less while their neighbors took seconds. The host locale sources are the same, at
-///   0.029s.
+/// - **Absent on the runner.** `musl-gcc` and `tini` are absent on `ubuntu-latest`, proven by
+///   CI run 35544425984: both gated tests returned in 0.05s or less while their neighbors took
+///   seconds. The host locale sources are the same, at 0.029s. Since then the coverage job
+///   installs tini and the test job does not, so each job runs one of the two tini tests.
 /// - **Needs the network or the host's own data at test time.** The `registry:2` pull. A miss
 ///   there is an outage, not a broken runner.
 /// - **The inverse gate.** `init_without_tini_fails_clearly` skips because tini IS present. The
