@@ -5,6 +5,94 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 1.8.0 (2026-10-24)
+
+### Features
+
+#### `unpack` reports the setuid and setgid bits it clears ([#353](https://github.com/schubydoo/scratchsmith/pull/353))
+
+For each path in the final image that had a setuid or setgid bit, `unpack` prints a warning line on standard error. The new `stripped_setid` field of `--format json` lists the same paths.
+
+### Fixes
+
+#### `index` warns when the registry names another digest ([#369](https://github.com/schubydoo/scratchsmith/pull/369))
+
+When the registry's answer names a digest other than the index just pushed, `index --sign` refuses to sign, but `index` without `--sign` said nothing. It now reports a warning, as `pack --push` does: a `warning:` line in the text output, and a new `warnings` array in `--format json`. The push and the exit code are unchanged.
+
+#### `install.sh` says why a download failed ([#365](https://github.com/schubydoo/scratchsmith/pull/365))
+
+With wget, `install.sh` hid the reason a download failed, so a missing release, a proxy and a dead network looked the same. It now prints wget's last error lines when a fetch fails, and stays quiet when it works. The cosign signature bundle download no longer hides its error with either tool, so a refusal over a missing bundle shows why the fetch failed.
+
+#### `unpack` reads an OCI archive whose entries start with `./` ([#356](https://github.com/schubydoo/scratchsmith/pull/356))
+
+`tar -cf img.tar .` inside an OCI layout directory stores `./index.json` and `./blobs/sha256/…`. `unpack` failed on such an archive with "archive has no index.json". It now reads those entries as the same files.
+
+### Security
+
+#### `unpack` and `diff` bound the memory they use on a hostile archive ([#344](https://github.com/schubydoo/scratchsmith/pull/344))
+
+`unpack` read each entry of the outer OCI archive into memory. A small GNU sparse entry could expand to gigabytes of zeros and go around the decompression limit. Scratchsmith now skips entries it does not use, refuses a sparse entry that it must read, and reads no more than the archive's own size. `diff` now hashes files as a stream instead of loading each whole file.
+
+#### `graph`, `pack`, `index` and `diff` escape the rest of their untrusted text ([#359](https://github.com/schubydoo/scratchsmith/pull/359))
+
+Some output still printed text from a binary, an image or a registry without escaping it: the names, paths and interpreter in `graph` text output, the loader line and the size table in the `pack` text report, the duplicate-platform and multi-arch errors from `index`, and file-walk errors from `diff`. A line break or a terminal escape sequence in that text could forge output lines. Scratchsmith now escapes it. JSON output and exit codes do not change.
+
+#### `diff`, `index` and the musl check escape control characters ([#340](https://github.com/schubydoo/scratchsmith/pull/340))
+
+A file name in an image, a platform string from a registry, or a string in a musl binary can hold a newline or a terminal escape sequence. `diff` and `index` text output and the musl error printed that text raw, so it could forge report lines or drive the terminal. Scratchsmith now escapes those characters. JSON output and exit codes do not change.
+
+#### `unpack` escapes archive text in its error messages ([#345](https://github.com/schubydoo/scratchsmith/pull/345))
+
+`unpack` put text from the archive into its error messages raw: media types, digests, blob names, entry paths and the tar error. A hostile archive could then forge lines or send terminal escape sequences to standard error. Scratchsmith now escapes that text and caps each string at 8 KiB. Exit codes do not change.
+
+#### `install.sh` stops when cosign is installed and the signature bundle is missing ([#348](https://github.com/schubydoo/scratchsmith/pull/348))
+
+With cosign installed, `install.sh` warned and installed anyway when it could not fetch `checksums.txt.sigstore.json`. An attacker who swaps the tarball and the checksums can also withhold the bundle. The script now stops the install in that case. Set `INSECURE_ALLOW_MISSING_SIGNATURE=1` to install with the SHA-256 check only.
+
+#### `pack` and `graph` stop reading a device after 256 MiB ([#339](https://github.com/schubydoo/scratchsmith/pull/339))
+
+A `DT_NEEDED` entry can name a device such as `/dev/zero`, and the resolver read it until the host ran out of memory. Scratchsmith now stops after 256 MiB of a character or block device and exits `1` with an error that names the file.
+
+#### `pack` and `graph` refuse a library or a loader that cannot load ([#360](https://github.com/schubydoo/scratchsmith/pull/360))
+
+A `DT_NEEDED` entry or a program interpreter (`PT_INTERP`) can name any host file that is an ELF, such as a core dump, and scratchsmith copied that file into the image. Scratchsmith now refuses a library that is not a shared object (`ET_DYN`), and an interpreter that is not `ET_DYN` or `ET_EXEC`, and exits `1`. A PIE executable is `ET_DYN`, so this check does not refuse one.
+
+#### `pack` and `graph` no longer hang on a FIFO ([#361](https://github.com/schubydoo/scratchsmith/pull/361))
+
+A `DT_NEEDED` entry can name a FIFO, and the read of it waited forever for a writer, or read a writer's endless stream. Scratchsmith now refuses a library that is not a regular file before it opens it, and exits `1`. A FIFO that you name with `--include` no longer hangs `graph` after its read, stops at 256 MiB like a device, and `pack` refuses it at once, because it cannot be staged.
+
+#### `pack` and `graph` refuse a non-ELF file named by the binary ([#338](https://github.com/schubydoo/scratchsmith/pull/338))
+
+A `DT_NEEDED` entry or a program interpreter (`PT_INTERP`) can name any host file, such as `~/.docker/config.json`, and scratchsmith copied that file into the image. Scratchsmith now refuses a library that is not an ELF, and an interpreter that is not a regular ELF file, and exits `1`. A data file that you name with `--include` stages as before.
+
+#### `--sign` signs the manifest digest that scratchsmith pushed ([#346](https://github.com/schubydoo/scratchsmith/pull/346))
+
+`pack --push --sign` and `index --sign` signed the digest that the registry named in its `Location` header. A hostile or broken registry could name a different image, and scratchsmith then signed and attested that image. Scratchsmith now hashes the exact manifest bytes it uploads, signs that digest, and exits `1` when the registry names a different one. A push without `--sign` behaves as before.
+
+#### `pack` keeps soname symlinks inside the image root ([#342](https://github.com/schubydoo/scratchsmith/pull/342))
+
+A `DT_NEEDED` name such as `../../../tmp/libx.so` comes from the packed binary, and scratchsmith created its soname symlink at that path joined under the staging directory. The link could land outside that directory. Scratchsmith now walks the name inside the image, where `..` at the root stays at the root. A link already in a reused `--output` directory is read the same way, so an absolute link value names a path in the image, not on the host.
+
+#### `pack --no-build` keeps every write inside a reused output directory ([#352](https://github.com/schubydoo/scratchsmith/pull/352))
+
+A reused `--output` directory can hold a link with an absolute target, such as `lib -> /usr/lib`. Scratchsmith joined each staged path under the directory and let the host follow that link, so a library copy, a `--strip`, or a generated file such as `/etc/passwd` could land on the host's own files. Scratchsmith now reads every link in the directory the way the image will, so each write stays inside the directory.
+
+#### `pack` keeps the staged loader inside the image root ([#341](https://github.com/schubydoo/scratchsmith/pull/341))
+
+The program interpreter path comes from the packed binary, and scratchsmith joined it under the staging directory as text. A path such as `/../../tmp/x` put the loader copy outside that directory. Scratchsmith now walks the path the way the kernel does inside the image, where `..` at the root stays at the root. A link already in a reused `--output` directory is read the same way, so an absolute link value names a path in the image, not on the host.
+
+#### `unpack` limits each archive entry and a piped archive ([#362](https://github.com/schubydoo/scratchsmith/pull/362))
+
+A large or sparse archive file on disk, or an archive read from a pipe, let one entry fill memory, and a pipe had no total limit. `unpack` now refuses an entry larger than 2 GiB plus 2 MiB, and a pipe that yields more than 16 GiB in all, and exits `1`. An uncompressed layer over 2 GiB is now refused, as a gzip layer that decompresses past 2 GiB already was.
+
+#### `unpack` clears setuid and setgid bits ([#343](https://github.com/schubydoo/scratchsmith/pull/343))
+
+`unpack` kept the setuid and setgid bits of each file in an image layer. A hostile image could then plant a setuid program owned by the user who unpacked it, or by root when `unpack` ran as root. Scratchsmith now clears both bits on every file it writes. Owners and contents do not change.
+
+#### `unpack` deletes a whiteout's target through the directory it opened ([#363](https://github.com/schubydoo/scratchsmith/pull/363))
+
+`unpack` checked a whiteout's directory and then deleted through its path again, so a local user who could write inside the output directory could swap in a symlink and redirect the deletion outside it. `unpack` now opens the directory one step at a time and deletes relative to it. A symlink in that path now resolves inside the image, as `/` there, so a whiteout under a usrmerge `lib -> /usr/lib` link deletes the file that the image means.
+
 ## 1.7.2 (2026-10-21)
 
 ### Security
