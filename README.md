@@ -53,7 +53,6 @@ build. It is purpose-built for the hard case and useful for the easy one.
 | glibc **NSS** support staged, so name-service lookups like `getent hosts` work. Trim the modules with `--nss` | ✅ |
 | **Non-root** by default (UID 65532), reproducible layers | ✅ |
 | **SBOM** generation: `--sbom` (CycloneDX or SPDX, via syft) | ✅ |
-| **SBOM** cache reuse: `--keep-sbom-cache` (skips syft when the binary is unchanged) | ✅ |
 | **Vulnerability scan**: `--scan` (grype), gate with `--scan-fail-on <severity>` | ✅ |
 | **ELF hardening lint**: `lint` (PIE/RELRO/NX/canary/FORTIFY), gate with `--fail-on` | ✅ |
 | **Library policy gate**: `pack --deny`/`--require <soname>` (a forbidden or missing library fails the pack) | ✅ |
