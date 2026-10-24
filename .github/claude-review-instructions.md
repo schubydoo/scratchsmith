@@ -129,8 +129,10 @@ follows:
 5. Reply to Nits as well as to Important findings, and to resolved threads too: a reply does
    not reopen a thread. Reply to at most 15 threads in one run, oldest `id` first.
 6. If the `comments` command or a reply is refused, do not retry it and do not reach for
-   another command. Skip the remaining replies, and say in the review summary which
-   command was refused, so a blocked step is loud and not silent.
+   another command. Skip the remaining replies, and say which command was refused, so a
+   blocked step is loud and not silent: a refused `comments` call in the review summary,
+   because it runs before the submit, and a refused reply in your final message, because
+   the summary is posted by then. Never a second review or a standalone comment.
 
 The summary's `## Previous findings` section stays as it is: it covers every finding,
 STILL OPEN ones included.

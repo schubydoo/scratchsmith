@@ -32,8 +32,9 @@ name: Claude Code Review
 # personal subscription quota. Advisory only: the instructions require a COMMENT review,
 # never REQUEST_CHANGES, so it can never gate a merge. `contents: read` caps only
 # GITHUB_TOKEN. Claude's own `gh` calls carry the Claude App's token, which `permissions:`
-# does not cap, so the Review step's `--allowedTools` is the real boundary on what Claude
-# can write (see the warning there).
+# does not cap, so the exact Bash rules are the real boundary on what Claude can write: the
+# settings JSON's `permissions.allow` and the guard hook, both built in the resolve step
+# (see the warnings there and at the Review step).
 
 on:
   # The review is requested by a comment, so this trigger is required. The hardening lives
@@ -193,14 +194,15 @@ jobs:
           # and the `{id, in_reply_to_id, …}` projection became broken fragments that match
           # nothing, and the CLI refused both commands ("requires approval"). A JSON array
           # keeps each rule whole. Built from allowed.txt, the guard's own list, so the allow
-          # rules and the guard cannot drift.
+          # rules and the guard cannot drift by construction.
           ALLOW=$(jq -Rn '[inputs | "Bash(" + . + ")"]' < "$GUARD/allowed.txt")
           SETTINGS=$(jq -cn --arg style "$REVIEW_OUTPUT_STYLE" --argjson hooks "$HOOKS" --argjson allow "$ALLOW" \
             '{outputStyle: $style, hooks: $hooks, permissions: {allow: $allow}}')
-          # One allow rule per guard line, character for character.
-          jq -e --rawfile want "$GUARD/allowed.txt" \
-            '.permissions.allow == ($want | rtrimstr("\n") | split("\n") | map("Bash(" + . + ")"))' \
-            <<<"$SETTINGS" >/dev/null || { echo "::error::the settings allow rules do not match the guard's list"; exit 1; }
+          # What the build could still get wrong: a lost or a split line. One rule per command,
+          # and the comma-heavy `comments` rule present whole.
+          jq -e --argjson n "$(( ${#READS[@]} + 3 ))" --arg comments "Bash($COMMENTS)" \
+            '(.permissions.allow | length) == $n and any(.permissions.allow[]; . == $comments)' \
+            <<<"$SETTINGS" >/dev/null || { echo "::error::the settings allow rules are not the guard's eight commands"; exit 1; }
           # This proves the JSON's shape only. Whether the CLI LOADS the hook from it can only be
           # shown by a live run: re-run the headless guard test when Renovate bumps
           # claude-code-action (it pins the CLI), as for the symlink test below.
@@ -430,7 +432,9 @@ jobs:
           # DEFAULT-BRANCH copy of a workflow for `issue_comment`), and a style name that
           # does not resolve DEGRADES SILENTLY to the default. The review instructions keep
           # an honest "may" on an uncertain finding, overriding the style's no-hedging rule.
-          # The resolve step builds this JSON: the output style plus the Bash guard hook.
+          # The resolve step builds this JSON: the output style, the Bash guard hook, and the
+          # exact Bash allow rules. It is the ONLY path those rules have to the CLI, because
+          # `--allowedTools` below is split on commas (see the resolve step).
           settings: ${{ steps.resolve.outputs.settings }}
           # NO `prompt:` — see the banner. Guidance goes through the system prompt.
           # Keep codecov's coverage comments out of Claude's context (the CI floor owns that).
