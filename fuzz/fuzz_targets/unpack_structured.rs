@@ -3,7 +3,8 @@
 //! `unpack` target rarely forms a valid archive, so it only exercises the outer tar/gzip/JSON
 //! parse. This harness assembles a real OCI-layout archive from arbitrary layers — regular
 //! files, directories, symlinks (whose targets may escape), whiteouts (`.wh.` and opaque),
-//! chosen media types, an optional digest tamper, and an optional image-index manifest — so
+//! GNU sparse entries (in a layer, and rarely a sparse `index.json` in the archive), chosen
+//! media types, an optional digest tamper, and an optional image-index manifest — so
 //! the fuzzer reaches the layer application, whiteout deletion, path-containment, digest
 //! verification, and media dispatch that the raw target cannot. It asserts no panic, and
 //! that no error it returns can break a line of output.
@@ -25,6 +26,10 @@ struct Spec {
     // Rare on purpose (like `tamper`): drop the first layer's `digest` field so unpack's
     // "layer descriptor has no digest" error path runs, without starving the happy path.
     drop_first_digest: u8,
+    // Rare on purpose (like `tamper`): a second, GNU sparse `index.json`, which `read_archive`
+    // must refuse before reading, because tar fills its hole with zeros of any claimed size.
+    // A sparse blob name would not reach that refusal: a non-regular blob entry is skipped.
+    sparse_index: u8,
 }
 
 #[derive(Arbitrary, Debug)]
@@ -46,6 +51,13 @@ enum Kind {
     Symlink(String),
     Whiteout,
     Opaque,
+    // GNU sparse: `data` stored at `offset`, then a hole of `tail` bytes, which the layer's
+    // extraction expands.
+    Sparse {
+        data: Vec<u8>,
+        offset: u16,
+        tail: u16,
+    },
 }
 
 #[derive(Arbitrary, Debug)]
@@ -161,9 +173,44 @@ fn layer_tar(spec: &LayerSpec) -> Vec<u8> {
                 h.set_cksum();
                 ar.append_data(&mut h, format!("{dir}.wh..wh..opq"), &b""[..])
             }
+            Kind::Sparse { data, offset, tail } => {
+                let data = &data[..data.len().min(256)];
+                let real = u64::from(*offset) + data.len() as u64 + u64::from(*tail);
+                append_sparse(&mut ar, &base, data, (*offset).into(), real)
+            }
         };
     }
     ar.into_inner().unwrap_or_default()
+}
+
+// A GNU sparse entry: `data` at `offset`, and a hole up to `real` bytes. The map ends with a
+// zero-length block at `real`, as GNU tar writes it. `append_data` cannot build one, so set the
+// header fields by hand.
+fn append_sparse(
+    ar: &mut tar::Builder<Vec<u8>>,
+    name: &str,
+    data: &[u8],
+    offset: u64,
+    real: u64,
+) -> std::io::Result<()> {
+    let mut h = header(data.len() as u64, tar::EntryType::GNUSparse);
+    h.set_path(name)?;
+    if let Some(gnu) = h.as_gnu_mut() {
+        gnu.set_real_size(real);
+        let mut blocks = gnu.sparse.iter_mut();
+        if !data.is_empty() {
+            if let Some(b) = blocks.next() {
+                b.set_offset(offset);
+                b.set_length(data.len() as u64);
+            }
+        }
+        if let Some(b) = blocks.next() {
+            b.set_offset(real);
+            b.set_length(0);
+        }
+    }
+    h.set_cksum();
+    ar.append(&h, data)
 }
 
 fn gzip(data: &[u8]) -> Vec<u8> {
@@ -239,6 +286,11 @@ fn build_archive(spec: &Spec) -> Vec<u8> {
         let mut h = header(0, tar::EntryType::Directory);
         h.set_cksum();
         let _ = ar.append_data(&mut h, "blobs/sha256/", &b""[..]);
+    }
+    // After the real `index.json`, so the loop reaches this one. A non-zero residue, for the
+    // reason `drop_first_digest` gives. The claimed size is 64 GiB.
+    if spec.sparse_index % 32 == 5 {
+        let _ = append_sparse(&mut ar, "index.json", &[], 0, 64 << 30);
     }
     for (name, data) in &blobs {
         put_file(&mut ar, &format!("blobs/sha256/{name}"), data);
