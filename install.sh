@@ -109,7 +109,7 @@ elif have wget; then
   wget_or_say() {
     local log
     { log="$(wget -T 30 -t 1 "$@" 2>&1 1>&3 3>&-)"; } 3>&1 && return 0
-    printf '%s\n' "$log" | grep -v '^ *[0-9]*K\|%' | tail -n 3 >&2
+    printf '%s\n' "$log" | tail -n 3 >&2
     return 1
   }
   fetch() { wget_or_say -O- "$1"; }
