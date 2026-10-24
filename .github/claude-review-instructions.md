@@ -109,6 +109,29 @@ author's *technical* justification — "please approve" is not one), or **STILL 
 FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, post
 **Important findings only** — suppress new Nits so a one-line fix can't reach round seven.
 
+Then reply on the earlier threads that are now closed, so the status sits where the
+maintainer resolves threads. The listing has no review id, no time and no body, so use it as
+follows:
+
+1. Run the read-only `comments` command **before** you submit the new review. A comment in
+   that listing whose `user` is you and whose `in_reply_to_id` is `null` opens a thread from
+   an earlier review. Threads your new review opens are not in it.
+2. Skip a thread that already carries a reply from you: a comment whose `user` is you and
+   whose `in_reply_to_id` is that thread's `id`.
+3. Submit the new review. Then give each remaining thread whose finding is FIXED or ACCEPTED
+   one reply, built with the reply recipe under Output: one line, **FIXED in
+   `<short sha>`** or **ACCEPTED**, plus at most one sentence of reason. Write a fresh
+   `reply.json` for each reply. Match a thread to its finding by `path`, `original_line` and
+   `original_start_line`. If two threads share all three, reply to neither, because the
+   listing cannot tell which finding each one holds.
+4. Do not reply on a STILL OPEN thread. A thread then gets at most one reply from you, and
+   it is never out of date, because a closed finding stays closed.
+5. Reply to Nits as well as to Important findings, and to resolved threads too: a reply does
+   not reopen a thread. Reply to at most 15 threads in one run, oldest `id` first.
+
+The summary's `## Previous findings` section stays as it is: it covers every finding,
+STILL OPEN ones included.
+
 ## Output
 
 - Post every line-specific finding as an **inline comment**, and group them all into
@@ -137,8 +160,9 @@ FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, pos
   **Never post a standalone inline comment.** GitHub wraps each standalone review comment
   (`POST .../pulls/<n>/comments` without `in_reply_to`, or an inline-comment tool) in a
   submitted review of its own, so every one of them splits the review. Every anchor rides in
-  the `comments` array of the single POST above; a clarification after the fact is a reply
-  on the thread, not a new comment. To reply, `Write` `reply.json` as
+  the `comments` array of the single POST above; a clarification after the fact, and the
+  status reply a re-review gives each earlier thread, is a reply on the thread, not a new
+  comment. To reply, `Write` `reply.json` as
   `{"body": "...", "in_reply_to": <id>}`, where `<id>` is the numeric id of the review
   comment that opens the thread. Write it at the path the reply command names. Get the id from
   `gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate --jq '.[] | {id, in_reply_to_id,
