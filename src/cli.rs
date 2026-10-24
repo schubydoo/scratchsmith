@@ -505,6 +505,11 @@ fn dispatch(cli: Cli) -> Result<()> {
                 crate::supplychain::cosign_sign(&dref)?;
                 Some(dref)
             } else {
+                // Nothing reads the digest without --sign, but a registry that names a manifest
+                // other than the one just pushed must not pass in silence, as `pack` warns too.
+                if let crate::registry::PushedDigest::Mismatch(e) = &outcome.digest_ref {
+                    eprintln!("warning: {e:#}");
+                }
                 None
             };
             let report = crate::report::IndexReport {
