@@ -1089,7 +1089,7 @@ impl Drop for DockerCleanup {
     }
 }
 
-fn docker_rm(what: &[&str]) -> Vec<String> {
+fn docker_args(what: &[&str]) -> Vec<String> {
     what.iter().map(|s| s.to_string()).collect()
 }
 
@@ -1098,6 +1098,10 @@ fn docker_rm(what: &[&str]) -> Vec<String> {
 fn registry_digest(port: u16, repo: &str, tag: &str) -> String {
     use std::io::{Read, Write};
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    // A response that kept the socket open would hang the test, and a killed test runs no
+    // cleanup guard.
+    s.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
     write!(
         s,
         "HEAD /v2/{repo}/manifests/{tag} HTTP/1.1\r\nHost: localhost:{port}\r\n\
@@ -1153,10 +1157,7 @@ fn push_to_local_registry_is_pullable_and_runnable() {
     }
     let reference = "localhost:5099/scratchsmith/test:v1";
     // Declared after the lock, so it runs before the lock is released.
-    let mut cleanup = DockerCleanup(vec![
-        docker_rm(&["rm", "-f", "ss-test-reg"]),
-        docker_rm(&["rmi", "-f", reference]),
-    ]);
+    let mut cleanup = DockerCleanup(vec![docker_args(&["rm", "-f", "ss-test-reg"])]);
     // Wait for the registry port to accept connections.
     for _ in 0..40 {
         if std::net::TcpStream::connect("127.0.0.1:5099").is_ok() {
@@ -1196,11 +1197,10 @@ fn push_to_local_registry_is_pullable_and_runnable() {
     assert!(String::from_utf8_lossy(&cli.stdout).contains("pushed"));
 
     // The pushed image pulls and runs, by the digest the registry stored for the tag.
-    let by_digest = format!(
-        "localhost:5099/scratchsmith/test@{}",
-        registry_digest(5099, "scratchsmith/test", "v1")
-    );
-    cleanup.0.push(docker_rm(&["rmi", "-f", &by_digest]));
+    let (repo_ref, tag) = reference.rsplit_once(':').unwrap();
+    let repo = repo_ref.split_once('/').unwrap().1;
+    let by_digest = format!("{repo_ref}@{}", registry_digest(5099, repo, tag));
+    cleanup.0.push(docker_args(&["rmi", "-f", &by_digest]));
     let pull = Command::new("docker")
         .args(["pull", &by_digest])
         .output()
@@ -1253,7 +1253,7 @@ fn index_assembles_a_pushed_image_into_an_index() {
         skip_optional("could not start registry:2");
         return;
     }
-    let _cleanup = DockerCleanup(vec![docker_rm(&["rm", "-f", "ss-test-reg-idx"])]);
+    let _cleanup = DockerCleanup(vec![docker_args(&["rm", "-f", "ss-test-reg-idx"])]);
     for _ in 0..40 {
         if std::net::TcpStream::connect("127.0.0.1:5098").is_ok() {
             break;
