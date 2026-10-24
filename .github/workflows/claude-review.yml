@@ -36,7 +36,9 @@ name: Claude Code Review
 # can write (see the warning there).
 
 on:
-  issue_comment:
+  # The review is requested by a comment, so this trigger is required. The hardening lives
+  # in the steps: an exact-command allow list, a guard hook, and a pin to the head SHA.
+  issue_comment: # zizmor: ignore[dangerous-triggers]
     types: [created]
 
 permissions:
