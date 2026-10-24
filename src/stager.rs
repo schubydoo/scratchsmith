@@ -16,6 +16,9 @@ pub struct StagedTree {
     pub root: PathBuf,
     /// The binary's path *inside* the image — the default entrypoint.
     pub entrypoint: PathBuf,
+    /// Where the loader was placed *inside* the image: PT_INTERP resolved inside it, which can
+    /// differ from the PT_INTERP string. `None` when the binary has no PT_INTERP.
+    pub loader: Option<PathBuf>,
 }
 
 /// Optional runtime files a user can inject. Unlike the always-on NSS includes, these
@@ -736,10 +739,14 @@ pub fn strip_and_measure(
     let mut targets: Vec<(PathBuf, String)> = vec![shown(binary.clone())];
     // Measure the loader where stage_files put it (strip rewrites in place, so never the
     // raw join), but keep reporting it by its PT_INTERP string, as `interpreter` does.
-    if let Some(interp) = &resolution.interpreter {
-        let staged = under(dest, &interp_target(dest, &interp.image_path)?);
-        let label = display_image_path(dest, &under(dest, &interp.image_path));
-        targets.push((staged, label));
+    match (&tree.loader, &resolution.interpreter) {
+        (Some(loader), Some(interp)) => {
+            let label = display_image_path(dest, &under(dest, &interp.image_path));
+            targets.push((under(dest, loader), label));
+        }
+        (None, None) => {}
+        // `stage_files` fills both from one resolution; a mismatch would skip the loader.
+        _ => bail!("the staged tree and the resolution disagree about the loader"),
     }
     // Measure where the walk resolved the library, but label it by its own path, as the
     // loader is labelled above.
@@ -863,10 +870,14 @@ fn stage_files(
     }
 
     // The kernel execs PT_INTERP verbatim, so the loader must live where that path resolves.
-    if let Some(interp) = &resolution.interpreter {
-        let target = interp_target(dest, &interp.image_path)?;
-        copy_into(&interp.source, dest, &target)?;
-    }
+    let loader = match &resolution.interpreter {
+        Some(interp) => {
+            let target = interp_target(dest, &interp.image_path)?;
+            copy_into(&interp.source, dest, &target)?;
+            Some(target)
+        }
+        None => None,
+    };
 
     // Each library: place the real file, then recreate the soname symlink the loader
     // looks up when the real file name differs (the versioned-soname case).
@@ -880,6 +891,7 @@ fn stage_files(
     Ok(StagedTree {
         root: dest.to_path_buf(),
         entrypoint: binary_real,
+        loader,
     })
 }
 
@@ -1264,6 +1276,23 @@ mod tests {
         }
         assert!(!tmp.path().join("escaped").exists(), "wrote above the root");
         assert!(!tmp.path().join("stage/escaped").exists());
+    }
+
+    #[test]
+    fn a_tree_without_the_resolved_loader_fails_the_size_report() {
+        // The loader would drop out of strip and of the report in silence.
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let loader = make_file(&tmp.path().join("src/real-ld.so"), b"LOADER");
+        let res = with_interp("/lib64/ld.so", &loader);
+        let mut tree = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+        tree.loader = None;
+        let err = strip_and_measure(&dest, &tree, &res, false, false).unwrap_err();
+        assert!(
+            err.to_string().contains("disagree about the loader"),
+            "{err}"
+        );
     }
 
     #[test]

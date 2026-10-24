@@ -1,6 +1,6 @@
 //! Command-line surface and dispatch.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::generate;
 use std::path::PathBuf;
@@ -501,9 +501,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             let outcome = crate::registry::push_index(&target, &sources)?;
             let signed = if sign {
                 // cosign signs a registry image by digest; the push must have returned one.
-                let dref = outcome.digest_ref?.context(
-                    "cannot sign: the registry did not return a digest for the pushed index",
-                )?;
+                let dref = outcome.digest_ref.for_signing("index")?;
                 crate::supplychain::cosign_sign(&dref)?;
                 Some(dref)
             } else {

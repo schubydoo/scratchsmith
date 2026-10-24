@@ -1283,7 +1283,10 @@ fn index_assembles_a_pushed_image_into_an_index() {
         outcome.entries[0].platform
     );
     assert!(
-        matches!(outcome.digest_ref, Ok(Some(_))),
+        matches!(
+            outcome.digest_ref,
+            scratchsmith::registry::PushedDigest::Confirmed(_)
+        ),
         "the registry should report the pushed index digest"
     );
 
