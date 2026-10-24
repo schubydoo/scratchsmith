@@ -15,7 +15,7 @@ use std::collections::{HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::io::Read;
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Component, Path, PathBuf};
 
@@ -321,10 +321,11 @@ fn apply_whiteout(
     let Some(shown_dir) = safe_join(dest, parent) else {
         return Ok(());
     };
-    let Some(dir) = open_dir_in_root(dest_canon, parent)? else {
+    // `image` is where the walk landed, so a marker under `lib -> usr/lib` clears the record
+    // of the file it deleted, under `/usr/lib`.
+    let Some((dir, image)) = open_dir_in_root(dest_canon, parent)? else {
         return Ok(()); // absent, or not a directory — nothing to delete
     };
-    let image = image_path(parent);
     if stripped == ".wh..opq" {
         // An opaque marker clears the directory's contents, not the directory.
         clear_dir(&dir, &shown_dir)?;
@@ -351,19 +352,35 @@ fn safe_join(dest: &Path, rel: &Path) -> Option<PathBuf> {
 
 // Open `rel` under `root` as if `root` were `/`, one component at a time. A symlink is followed
 // by its text (an absolute one restarts at `root`, and `..` stops there), as the image sees it.
-// Every step opens relative to the directory before it, with O_NOFOLLOW. `None` means absent,
-// not a directory, or a symlink loop.
-fn open_dir_in_root(root: &Path, rel: &Path) -> Result<Option<OwnedFd>> {
+// Every step opens relative to the directory before it, with O_NOFOLLOW. O_PATH needs only
+// search permission, as `canonicalize` did. Returns the directory and its path in the image;
+// `None` means absent, not a directory, or a symlink loop.
+fn open_dir_in_root(root: &Path, rel: &Path) -> Result<Option<(OwnedFd, PathBuf)>> {
+    use rustix::fs::{FileType, Mode, OFlags};
     use rustix::io::Errno;
     // The loader's limit on symlinks in one path (MAXSYMLINKS).
     const MAX_LINKS: usize = 40;
     let opening = || format!("opening {}", shown(root.join(rel).display(), SHOWN_MAX));
-    let root_fd = open_dir(rustix::fs::CWD, root.as_os_str()).with_context(opening)?;
-    // The directories opened below the root, so `..` can step back without a path.
-    let mut chain: Vec<OwnedFd> = Vec::new();
-    let mut todo: VecDeque<OsString> = rel.iter().map(OsStr::to_os_string).collect();
+    let open_path = |at: BorrowedFd<'_>, name: &OsStr| {
+        rustix::fs::openat(
+            at,
+            name,
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+    };
+    let root_fd = open_path(rustix::fs::CWD, root.as_os_str()).with_context(opening)?;
+    // The directories opened below the root, so `..` steps back without a path.
+    let mut chain: Vec<(OwnedFd, OsString)> = Vec::new();
+    // `rel` is read one part at a time, so a hostile entry name costs nothing past the first
+    // part that is absent. Only the parts a symlink's text adds are queued.
+    let mut rest = rel.iter();
+    let mut pending: VecDeque<OsString> = VecDeque::new();
     let mut links = 0;
-    while let Some(name) = todo.pop_front() {
+    while let Some(name) = pending
+        .pop_front()
+        .or_else(|| rest.next().map(OsStr::to_os_string))
+    {
         if name == "." || name == "/" {
             continue;
         }
@@ -371,37 +388,41 @@ fn open_dir_in_root(root: &Path, rel: &Path) -> Result<Option<OwnedFd>> {
             chain.pop();
             continue;
         }
-        let cur = chain.last().unwrap_or(&root_fd);
-        match open_dir(cur, &name) {
-            Ok(fd) => chain.push(fd),
-            // O_NOFOLLOW with O_DIRECTORY refuses a symlink (ENOTDIR, or ELOOP): read its text
-            // and walk that instead.
-            Err(e @ (Errno::LOOP | Errno::NOTDIR)) => {
-                let Ok(target) = rustix::fs::readlinkat(cur, name.as_os_str(), Vec::new()) else {
-                    // A marker beneath a regular file is a broken layer, so say so, as before.
-                    // Anything else (a link swapped away since the open) reads as absent.
-                    if e == Errno::NOTDIR && todo.is_empty() {
-                        return Err(e).with_context(opening);
-                    }
-                    return Ok(None);
-                };
+        let last = pending.is_empty() && rest.as_path().as_os_str().is_empty();
+        let cur = chain.last().map_or(root_fd.as_fd(), |(fd, _)| fd.as_fd());
+        let fd = match open_path(cur, &name) {
+            Ok(fd) => fd,
+            Err(Errno::NOENT) => return Ok(None),
+            Err(e) => return Err(e).with_context(opening),
+        };
+        let stat = rustix::fs::fstat(&fd).with_context(opening)?;
+        match FileType::from_raw_mode(stat.st_mode) {
+            FileType::Directory => chain.push((fd, name)),
+            FileType::Symlink => {
                 links += 1;
                 if links > MAX_LINKS {
                     return Ok(None);
                 }
+                // Read through the link's own handle, so its text is the one just opened.
+                let target = rustix::fs::readlinkat(&fd, "", Vec::new()).with_context(opening)?;
                 let target = PathBuf::from(OsString::from_vec(target.into_bytes()));
                 if target.is_absolute() {
                     chain.clear();
                 }
                 for part in target.iter().rev() {
-                    todo.push_front(part.to_os_string());
+                    pending.push_front(part.to_os_string());
                 }
             }
-            Err(Errno::NOENT) => return Ok(None),
-            Err(e) => return Err(e).with_context(opening),
+            // A marker beneath a regular file is a broken layer, so say so, as before.
+            _ if last => return Err(Errno::NOTDIR).with_context(opening),
+            _ => return Ok(None),
         }
     }
-    Ok(Some(chain.pop().unwrap_or(root_fd)))
+    let image = std::iter::once(OsStr::new("/"))
+        .chain(chain.iter().map(|(_, name)| name.as_os_str()))
+        .collect();
+    let dir = chain.pop().map_or(root_fd, |(fd, _)| fd);
+    Ok(Some((dir, image)))
 }
 
 fn open_dir(at: impl AsFd, name: &OsStr) -> rustix::io::Result<OwnedFd> {
@@ -438,11 +459,13 @@ fn remove_at(dir: &OwnedFd, name: &OsStr, shown_dir: &Path) -> Result<()> {
     }
 }
 
-// Remove everything inside `dir`, but not `dir` itself.
+// Remove everything inside `dir`, but not `dir` itself. `dir` may be an O_PATH handle, so the
+// listing reopens it for reading, relative to the handle.
 fn clear_dir(dir: &OwnedFd, shown_dir: &Path) -> Result<()> {
     let reading = || format!("reading {}", shown(shown_dir.display(), SHOWN_MAX));
     let mut names = Vec::new();
-    for entry in rustix::fs::Dir::read_from(dir).with_context(reading)? {
+    let readable = open_dir(dir, OsStr::new(".")).with_context(reading)?;
+    for entry in rustix::fs::Dir::new(readable).with_context(reading)? {
         let entry = entry.with_context(reading)?;
         let name = entry.file_name().to_bytes();
         if name != b"." && name != b".." {
@@ -782,7 +805,7 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         std::fs::write(outside.join("secret"), b"out").unwrap();
 
-        let dir = open_dir_in_root(&dest, Path::new("a")).unwrap().unwrap();
+        let (dir, _) = open_dir_in_root(&dest, Path::new("a")).unwrap().unwrap();
         std::fs::rename(dest.join("a"), dest.join("b")).unwrap();
         std::os::unix::fs::symlink(&outside, dest.join("a")).unwrap();
         remove_at(&dir, OsStr::new("secret"), &dest.join("a")).unwrap();
@@ -830,6 +853,45 @@ mod tests {
             apply_layer(&tar_of(&[(marker, b"")]), &dest, &mut Default::default()).unwrap();
             assert!(!dest.join("usr/lib").join(file).exists(), "{marker}");
         }
+    }
+
+    #[test]
+    fn a_whiteout_through_a_link_clears_the_record_where_it_deleted() {
+        use std::collections::BTreeSet;
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let mut setid = BTreeSet::new();
+        apply_layer(
+            &tar_with_modes(&[("usr/lib/su", tar::EntryType::Regular, 0o4755)]),
+            &dest,
+            &mut setid,
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("/usr/lib", dest.join("lib")).unwrap();
+        apply_layer(&tar_of(&[("lib/.wh.su", b"")]), &dest, &mut setid).unwrap();
+        assert!(!dest.join("usr/lib/su").exists());
+        assert!(setid.is_empty(), "{setid:?}");
+    }
+
+    #[test]
+    fn a_whiteout_needs_only_search_permission_on_the_way_down() {
+        // An earlier layer can leave a directory without owner-read; deleting a name inside
+        // it needs only search (x), as it did before the walk used handles.
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(dest.join("a/b")).unwrap();
+        std::fs::write(dest.join("a/b/f"), b"f").unwrap();
+        std::fs::set_permissions(dest.join("a"), std::fs::Permissions::from_mode(0o311)).unwrap();
+        let got = apply_layer(
+            &tar_of(&[("a/b/.wh.f", b"")]),
+            &dest,
+            &mut Default::default(),
+        );
+        std::fs::set_permissions(dest.join("a"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        got.unwrap();
+        assert!(!dest.join("a/b/f").exists());
     }
 
     #[test]
