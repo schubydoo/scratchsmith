@@ -7,7 +7,8 @@
 # so coverage compounds across runs. Needs schubydoo/scratchsmith-fuzz-corpus and a
 # FUZZ_STORAGE_TOKEN PAT (write). If the secret is unset the job still runs (fuzzes from seed);
 # it just does not accumulate. fuzz-seconds is the budget for the WHOLE run, split evenly across
-# the targets: 2400 over 8 targets is 300 s each. Raise it when a target is added.
+# the targets: 2400 over 8 targets is 300 s each. ci.yml's `fuzz harness check` fails when the
+# share drops under 300 s, so a PR that adds a target also raises this.
 # Docs: https://google.github.io/clusterfuzzlite/
 name: ClusterFuzzLite batch fuzzing
 
@@ -27,6 +28,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      actions: read
     concurrency:
       group: ${{ github.workflow }}-${{ matrix.sanitizer }}
       cancel-in-progress: true
@@ -52,9 +54,10 @@ jobs:
           output-sarif: true
           storage-repo: https://${{ secrets.FUZZ_STORAGE_TOKEN }}@github.com/schubydoo/scratchsmith-fuzz-corpus.git
           storage-repo-branch: main
-      # always(): a crash fails the step above, and that is the run whose SARIF matters most.
+      # Not always(): a crash fails the step above, and that run's SARIF matters most, but a
+      # cancelled run (the timeout, or a newer run) could upload an empty set and close alerts.
       - name: Upload SARIF
-        if: always() && steps.build.outcome == 'success'
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           sarif_file: cifuzz-sarif/results.sarif
