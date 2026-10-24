@@ -181,12 +181,18 @@ pub struct IndexReport {
     pub manifests: Vec<IndexManifest>,
     /// The signed by-digest reference, if `--sign` signed the pushed index.
     pub signed: Option<String>,
+    /// Warnings about the push, as `pack` reports them (a registry that named another digest).
+    pub warnings: Vec<String>,
 }
 
 impl IndexReport {
     /// Human-readable rendering (the `--format text` output).
     pub fn to_text(&self) -> String {
-        let mut out = format!("pushed index {}\n", self.pushed);
+        let mut out = String::new();
+        for w in &self.warnings {
+            out.push_str(&format!("warning: {w}\n"));
+        }
+        out.push_str(&format!("pushed index {}\n", self.pushed));
         for m in &self.manifests {
             // The platform comes from a registry-served config blob: escaped if it holds a
             // character that breaks a line, or it could forge one here.
@@ -690,6 +696,7 @@ mod tests {
                 },
             ],
             signed: Some("ghcr.io/you/app@sha256:idx".into()),
+            warnings: vec![],
         };
         assert_eq!(
             index.to_text(),
@@ -736,6 +743,7 @@ mod tests {
                     digest: "sha256:aaa".into(),
                 }],
                 signed: None,
+                warnings: vec![],
             };
             assert_eq!(
                 index.to_text(),
@@ -1068,6 +1076,7 @@ mod tests {
                 },
             ],
             signed: Some("ghcr.io/you/app@sha256:idx".into()),
+            warnings: vec![],
         };
         let text = report.to_text();
         assert!(text.contains("pushed index ghcr.io/you/app:1.0"));
@@ -1093,6 +1102,7 @@ mod tests {
                 digest: "sha256:aaa".into(),
             }],
             signed: None,
+            warnings: vec![],
         };
         let text = report.to_text();
         assert!(
@@ -1124,6 +1134,7 @@ mod tests {
                 digest: "sha256:aaa".into(),
             }],
             signed: None,
+            warnings: vec![],
         };
         let json = serde_json::to_value(&report).unwrap();
         let sorted_keys = |v: &serde_json::Value| {
@@ -1131,7 +1142,10 @@ mod tests {
             k.sort();
             k
         };
-        assert_eq!(sorted_keys(&json), ["manifests", "pushed", "signed"]);
+        assert_eq!(
+            sorted_keys(&json),
+            ["manifests", "pushed", "signed", "warnings"]
+        );
         assert_eq!(
             sorted_keys(&json["manifests"][0]),
             ["digest", "platform", "source"]

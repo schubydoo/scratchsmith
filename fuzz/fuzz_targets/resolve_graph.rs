@@ -156,7 +156,11 @@ fuzz_target!(|scn: Scenario| {
         root_facts.interpreter = Some(INTERP.to_string());
         // Place the file where reroot(root, INTERP) will look, derived from INTERP so the two
         // can't drift: reroot strips the leading '/' and joins under the sysroot.
-        let magic: &[u8] = if scn.interp_non_elf { b"data" } else { b"\x7fELF" };
+        let magic: &[u8] = if scn.interp_non_elf {
+            b"data"
+        } else {
+            b"\x7fELF"
+        };
         let _ = write(&root.join(INTERP.trim_start_matches('/')), magic);
     }
 
@@ -176,7 +180,10 @@ fuzz_target!(|scn: Scenario| {
             // ET_CORE (4) or ET_DYN (3).
             e_type: if core { 4 } else { 3 },
         };
-        infos.insert(canonical(&root.join(INTERP.trim_start_matches('/'))), loader);
+        infos.insert(
+            canonical(&root.join(INTERP.trim_start_matches('/'))),
+            loader,
+        );
     }
 
     // Materialise a bounded number of libraries as real files, each mapped to its facts.

@@ -499,27 +499,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             format,
         } => {
             let outcome = crate::registry::push_index(&target, &sources)?;
-            let signed = if sign {
-                // cosign signs a registry image by digest; the push must have returned one.
-                let dref = outcome.digest_ref.for_signing("index")?;
-                crate::supplychain::cosign_sign(&dref)?;
-                Some(dref)
-            } else {
-                None
-            };
-            let report = crate::report::IndexReport {
-                pushed: target,
-                manifests: outcome
-                    .entries
-                    .into_iter()
-                    .map(|e| crate::report::IndexManifest {
-                        source: e.source,
-                        platform: e.platform,
-                        digest: e.digest,
-                    })
-                    .collect(),
-                signed,
-            };
+            let report = index_report(target, outcome, sign)?;
             match format {
                 Format::Text => println!("{}", report.to_text()),
                 Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
@@ -579,8 +559,72 @@ fn dispatch(cli: Cli) -> Result<()> {
     }
 }
 
+// The `index` report: sign the pushed index if asked, else carry a digest mismatch as a
+// warning. Nothing reads the digest without `--sign`, but a registry that names a manifest other
+// than the one just pushed must not pass in silence, as `pack` reports it too.
+fn index_report(
+    target: String,
+    outcome: crate::registry::IndexOutcome,
+    sign: bool,
+) -> Result<crate::report::IndexReport> {
+    let mut warnings = Vec::new();
+    let signed = if sign {
+        // cosign signs a registry image by digest; the push must have returned one.
+        let dref = outcome.digest_ref.for_signing("index")?;
+        crate::supplychain::cosign_sign(&dref)?;
+        Some(dref)
+    } else {
+        if let crate::registry::PushedDigest::Mismatch(e) = &outcome.digest_ref {
+            warnings.push(format!("{e:#}"));
+        }
+        None
+    };
+    Ok(crate::report::IndexReport {
+        pushed: target,
+        manifests: outcome
+            .entries
+            .into_iter()
+            .map(|e| crate::report::IndexManifest {
+                source: e.source,
+                platform: e.platform,
+                digest: e.digest,
+            })
+            .collect(),
+        signed,
+        warnings,
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_unsigned_index_reports_a_digest_mismatch_as_a_warning() {
+        use crate::registry::{IndexOutcome, PushedDigest};
+        let outcome = |digest_ref| IndexOutcome {
+            entries: Vec::new(),
+            digest_ref,
+        };
+        let mismatch = || PushedDigest::Mismatch(anyhow::anyhow!("the registry reported X"));
+        let report = index_report("r:1".into(), outcome(mismatch()), false).unwrap();
+        assert_eq!(report.warnings, ["the registry reported X"]);
+        assert!(report
+            .to_text()
+            .starts_with("warning: the registry reported X\n"));
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["warnings"][0], "the registry reported X");
+
+        for quiet in [
+            PushedDigest::Confirmed("r@sha256:x".into()),
+            PushedDigest::Unreported,
+        ] {
+            let report = index_report("r:1".into(), outcome(quiet), false).unwrap();
+            assert!(report.warnings.is_empty());
+        }
+        // With --sign the mismatch is a refusal, before cosign is ever run.
+        let err = index_report("r:1".into(), outcome(mismatch()), true).unwrap_err();
+        assert!(format!("{err:#}").starts_with("cannot sign:"), "{err:#}");
+    }
+
     use super::*;
     use clap::error::ErrorKind;
     use clap::CommandFactory;
