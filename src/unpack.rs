@@ -20,6 +20,14 @@ use std::path::{Component, Path, PathBuf};
 // compressible layer cannot exhaust memory (a "decompression bomb").
 const MAX_LAYER_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+// The most one archive entry may hold. A gzip layer can be a little larger than the layer it
+// decompresses to (stored deflate blocks add 5 bytes per 64 KiB), so leave 2 MiB of room.
+const MAX_ENTRY_BYTES: u64 = MAX_LAYER_BYTES + (MAX_LAYER_BYTES >> 10);
+
+// The most a pipe may yield in all. A pipe reports no length to bound the entries by, and every
+// blob is held in memory.
+const MAX_PIPE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
 // The most archive text one error quotes. An honest path is at most PATH_MAX (4096) bytes,
 // so only a hostile string (a tar long name, or a JSON string, can run to the layer cap) is
 // ever cut. tar's own error chain can quote three paths (entry, `--output`, link target).
@@ -83,12 +91,10 @@ pub fn run(archive: &Path, dest: &Path) -> Result<UnpackReport> {
 fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json::Value)> {
     let file =
         std::fs::File::open(archive).with_context(|| format!("opening {}", archive.display()))?;
-    // The entries read can never hold more bytes than the archive file itself. A pipe reports
-    // no length, so it gets no budget; the sparse refusal below still bounds it.
     let meta = file
         .metadata()
         .with_context(|| format!("reading {}", archive.display()))?;
-    let mut budget = if meta.is_file() { meta.len() } else { u64::MAX };
+    let mut budget = archive_budget(&meta);
     let mut ar = tar::Archive::new(file);
     let mut blobs = HashMap::new();
     let mut index_bytes = None;
@@ -115,7 +121,7 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
                 crate::resolver::escape_for_display(&stored)
             );
         }
-        let buf = read_bounded(&mut e, &mut budget, &stored)?;
+        let buf = read_bounded(&mut e, &mut budget, MAX_ENTRY_BYTES, &stored)?;
         if let Some(digest) = digest {
             let actual = hex(Sha256::digest(&buf));
             if actual != digest {
@@ -133,15 +139,35 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
     Ok((blobs, index))
 }
 
-// Read one archive entry, charging it to `budget` (what the archive can still hold). Bytes
-// past that were never stored in the file, only synthesized by the reader.
-fn read_bounded(entry: impl Read, budget: &mut u64, name: &str) -> Result<Vec<u8>> {
+// The entries read can never hold more bytes than the archive file itself. A pipe reports no
+// length, so it gets a fixed budget.
+fn archive_budget(meta: &std::fs::Metadata) -> u64 {
+    if meta.is_file() {
+        meta.len()
+    } else {
+        MAX_PIPE_BYTES
+    }
+}
+
+// Read one archive entry of at most `cap` bytes, charging it to `budget` (what the archive can
+// still hold). Bytes past the budget were never stored in the file, only synthesized by the
+// reader. The cap holds for a large or a sparse file on disk, whose budget is its length.
+fn read_bounded(entry: impl Read, budget: &mut u64, cap: u64, name: &str) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
-    entry.take(budget.saturating_add(1)).read_to_end(&mut buf)?;
+    entry
+        .take((*budget).min(cap).saturating_add(1))
+        .read_to_end(&mut buf)?;
     let len = buf.len() as u64;
+    if len > cap {
+        bail!(
+            "OCI archive entry {} is larger than {cap} bytes; refusing",
+            crate::resolver::escape_for_display(name)
+        );
+    }
     if len > *budget {
         bail!(
-            "OCI archive entry {} holds more bytes than the archive itself; refusing",
+            "OCI archive entry {} holds more bytes than the archive itself, or than the \
+             {MAX_PIPE_BYTES}-byte limit for a pipe; refusing",
             crate::resolver::escape_for_display(name)
         );
     }
@@ -774,7 +800,7 @@ mod tests {
     #[test]
     fn an_entry_reading_past_the_archive_size_fails() {
         let mut budget = 16;
-        let buf = read_bounded(&b"0123456789abcdef"[..], &mut budget, "index.json").unwrap();
+        let buf = read_bounded(&b"0123456789abcdef"[..], &mut budget, 16, "index.json").unwrap();
         assert_eq!(
             (buf.len(), budget),
             (16, 0),
@@ -782,13 +808,72 @@ mod tests {
         );
 
         let mut budget = 16;
-        let err = read_bounded(std::io::repeat(0), &mut budget, "index.json\u{1b}[2J").unwrap_err();
+        let err =
+            read_bounded(std::io::repeat(0), &mut budget, 64, "index.json\u{1b}[2J").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("more bytes than the archive itself"), "{msg}");
         assert!(
             !msg.contains('\u{1b}'),
             "the entry name must be escaped: {msg}"
         );
+    }
+
+    #[test]
+    fn an_entry_past_its_own_cap_fails_whatever_the_budget() {
+        // A sparse or huge file on disk reports a huge length, and a pipe gets a 16 GiB budget,
+        // so the budget alone lets one entry fill memory.
+        let mut budget = u64::MAX;
+        let buf = read_bounded(&b"01234567"[..], &mut budget, 8, "index.json").unwrap();
+        assert_eq!(buf.len(), 8, "exactly the cap is fine");
+
+        let mut budget = u64::MAX;
+        let err = read_bounded(
+            std::io::repeat(0),
+            &mut budget,
+            8,
+            "blobs/sha256/x\u{1b}[2J",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("is larger than 8 bytes"), "{err}");
+        assert!(
+            !err.contains('\u{1b}'),
+            "the entry name must be escaped: {err}"
+        );
+    }
+
+    #[test]
+    fn a_pipe_archive_has_a_total_budget() {
+        // A pipe reports no length, and it used to get an unlimited budget.
+        let tmp = tempfile::tempdir().unwrap();
+        let fifo = tmp.path().join("img.tar");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            0,
+        )
+        .unwrap();
+        let body = b"layerbytes";
+        let digest = hex(Sha256::digest(body));
+        let data = tar_of(&[
+            (&format!("blobs/sha256/{digest}"), &body[..]),
+            ("index.json", b"{}"),
+        ]);
+        let writer = fifo.clone();
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&writer)
+                .and_then(|mut w| w.write_all(&data));
+        });
+        // `metadata` does not open the FIFO, so the writer still meets the read below.
+        let meta = std::fs::metadata(&fifo).unwrap();
+        assert_eq!(archive_budget(&meta), MAX_PIPE_BYTES);
+        let (blobs, _) = read_archive(&fifo).expect("an honest pipe still unpacks");
+        assert!(blobs.contains_key(&digest));
     }
 
     #[test]
