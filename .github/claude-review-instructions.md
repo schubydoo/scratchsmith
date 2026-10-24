@@ -109,6 +109,17 @@ author's *technical* justification — "please approve" is not one), or **STILL 
 FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, post
 **Important findings only** — suppress new Nits so a one-line fix can't reach round seven.
 
+Then reply on each thread you opened in an earlier review, so the status sits where the
+maintainer resolves threads. Submit the new review first. List the review comments with the
+read-only `comments` command, and take each comment whose `user` is you and whose
+`in_reply_to_id` is `null`, from a review before this one. Give each one reply, built with the
+reply recipe under Output: one line, **FIXED in `<short sha>`**, **ACCEPTED**, or
+**STILL OPEN**, plus at most one sentence of reason. Write a fresh `reply.json` for each
+reply. Reply to Nits as well as to Important findings, and to resolved threads too: a reply
+does not reopen a thread. Skip a thread whose last comment is already your status reply.
+The summary's `## Previous findings` section stays as it is, because a reply is not a
+substitute for it.
+
 ## Output
 
 - Post every line-specific finding as an **inline comment**, and group them all into
@@ -137,8 +148,9 @@ FIXED/ACCEPTED finding is closed; don't re-raise it. After the first review, pos
   **Never post a standalone inline comment.** GitHub wraps each standalone review comment
   (`POST .../pulls/<n>/comments` without `in_reply_to`, or an inline-comment tool) in a
   submitted review of its own, so every one of them splits the review. Every anchor rides in
-  the `comments` array of the single POST above; a clarification after the fact is a reply
-  on the thread, not a new comment. To reply, `Write` `reply.json` as
+  the `comments` array of the single POST above; a clarification after the fact, and the
+  status reply a re-review gives each earlier thread, is a reply on the thread, not a new
+  comment. To reply, `Write` `reply.json` as
   `{"body": "...", "in_reply_to": <id>}`, where `<id>` is the numeric id of the review
   comment that opens the thread. Write it at the path the reply command names. Get the id from
   `gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate --jq '.[] | {id, in_reply_to_id,
