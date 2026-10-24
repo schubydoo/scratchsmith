@@ -117,6 +117,19 @@ one still stages it. A core dump, an object file (`ET_REL`), and an executable b
 PIE do not. A file that you name with `--include` stages as before. If the binary itself also
 names that file, the refusal comes first.
 
+### An archive entry or a piped archive with no size limit
+
+`unpack` holds every blob of an image archive in memory. Through 1.7.2, a large or sparse
+archive file let one entry fill memory, and an archive read from a pipe had no total limit.
+
+Now `unpack` refuses an entry larger than 2 GiB plus 2 MiB, and a pipe that yields more than
+16 GiB in all, and exits `1`. A gzip layer that decompresses past 2 GiB was already refused, so
+an uncompressed layer over 2 GiB is now refused too. An archive file on disk keeps its own size
+as the total limit.
+
+There is no way around this limit. `unpack` cannot read a layer over 2 GiB of either type, and
+gzipping the layer does not help, because a gzip layer stops at the same limit.
+
 ## Tolerances ending in 2.0
 
 | Input | Warns since | Error in | What to do |
