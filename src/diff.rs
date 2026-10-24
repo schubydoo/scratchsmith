@@ -182,6 +182,19 @@ mod tests {
     }
 
     #[test]
+    fn a_symlink_compares_by_its_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        for (root, target) in [(&a, "libx.so.1.0"), (&b, "libx.so.1.1")] {
+            fs::create_dir_all(root.join("lib")).unwrap();
+            std::os::unix::fs::symlink(target, root.join("lib/libx.so.1")).unwrap();
+        }
+        let report = build(&a, &b).unwrap();
+        assert_eq!(report.changed, vec!["lib/libx.so.1".to_string()]);
+        assert_eq!((report.size_before, report.size_after), (0, 0));
+    }
+
+    #[test]
     fn a_walk_error_escapes_the_file_name() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();

@@ -10,8 +10,8 @@ use std::sync::Mutex;
 
 mod common;
 use common::{
-    docker_available, grype_available, skip_optional, skip_required, small_fixture, syft_available,
-    upx_available,
+    docker_available, fake_tools, grype_available, skip_optional, skip_required, small_fixture,
+    syft_available, upx_available, FAKE_SYFT,
 };
 
 // Docker tests pack the same binary into the same derived tag, so they must not run
@@ -1093,6 +1093,14 @@ fn docker_args(what: &[&str]) -> Vec<String> {
     what.iter().map(|s| s.to_string()).collect()
 }
 
+// A PATH whose cosign logs its arguments to $ASKED, and whose syft writes an empty SBOM.
+fn signing_path(dir: &Path) -> std::ffi::OsString {
+    fake_tools(
+        dir,
+        &[("cosign", r#"echo "$*" >> "$ASKED""#), ("syft", FAKE_SYFT)],
+    )
+}
+
 // The digest the registry serves for `repo:tag`, read with a plain HTTP HEAD, so the test
 // runs the image the push stored and not whatever the daemon holds under that tag.
 fn registry_digest(port: u16, repo: &str, tag: &str) -> String {
@@ -1105,7 +1113,8 @@ fn registry_digest(port: u16, repo: &str, tag: &str) -> String {
     write!(
         s,
         "HEAD /v2/{repo}/manifests/{tag} HTTP/1.1\r\nHost: localhost:{port}\r\n\
-         Accept: application/vnd.oci.image.manifest.v1+json\r\nConnection: close\r\n\r\n"
+         Accept: application/vnd.oci.image.manifest.v1+json, \
+         application/vnd.oci.image.index.v1+json\r\nConnection: close\r\n\r\n"
     )
     .unwrap();
     let mut resp = String::new();
@@ -1195,6 +1204,42 @@ fn push_to_local_registry_is_pullable_and_runnable() {
         String::from_utf8_lossy(&cli.stderr)
     );
     assert!(String::from_utf8_lossy(&cli.stdout).contains("pushed"));
+
+    // `--sign` signs the pushed digest and attaches the SBOM, with cosign and syft as
+    // scripts that log their arguments.
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("asked");
+    let sbom = tmp.path().join("sbom.json");
+    let signed_ref = "localhost:5099/scratchsmith/test:signed";
+    let signed = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args([
+            "pack",
+            "--push",
+            signed_ref,
+            "--sign",
+            "--sbom",
+            "--sbom-file",
+        ])
+        .arg(&sbom)
+        .arg(bin)
+        .env("PATH", signing_path(tmp.path()))
+        .env("ASKED", &log)
+        .output()
+        .unwrap();
+    assert!(
+        signed.status.success(),
+        "cli --push --sign failed: {}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let digest = registry_digest(5099, "scratchsmith/test", "signed");
+    let by_digest = format!("localhost:5099/scratchsmith/test@{digest}");
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        format!(
+            "sign --yes {by_digest}\nattest --yes --type cyclonedx --predicate {} {by_digest}\n",
+            sbom.display()
+        )
+    );
 
     // The pushed image pulls and runs, by the digest the registry stored for the tag.
     let (repo_ref, tag) = reference.rsplit_once(':').unwrap();
@@ -1314,6 +1359,31 @@ fn index_assembles_a_pushed_image_into_an_index() {
         String::from_utf8_lossy(&cli.stderr)
     );
     assert!(String::from_utf8_lossy(&cli.stdout).contains("pushed index"));
+
+    // `--sign` signs the index by digest; the JSON report names what it signed.
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("asked");
+    let signed = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["index", "--sign", "--format", "json", cli_target, child])
+        .env("PATH", signing_path(tmp.path()))
+        .env("ASKED", &log)
+        .output()
+        .unwrap();
+    assert!(
+        signed.status.success(),
+        "cli index --sign failed: {}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&signed.stdout).unwrap();
+    let by_digest = format!(
+        "localhost:5098/scratchsmith/idx@{}",
+        registry_digest(5098, "scratchsmith/idx", "cli")
+    );
+    assert_eq!(report["signed"], by_digest.as_str(), "{report}");
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        format!("sign --yes {by_digest}\n")
+    );
 
     // Passing an index as a source is rejected — the pushed `:multi` is an index, so feeding
     // it back in must fail with a clear message (covers the media-type guard).

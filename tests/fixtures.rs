@@ -228,6 +228,52 @@ fn pack_warns_about_dlopen_and_include_stages_extra_libs() {
 }
 
 #[test]
+fn a_missing_library_shows_in_the_graph_and_stops_the_pack() {
+    if !cc_available() {
+        skip_required("no C compiler");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let app = build_fixture(tmp.path(), "app", "-Wl,--enable-new-dtags");
+    std::fs::remove_file(tmp.path().join("libfoo.so.1")).unwrap();
+    std::fs::remove_file(tmp.path().join("libfoo.so.1.2.3")).unwrap();
+
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let graph = Command::new(bin)
+        .args(["graph", "--format", "json", app.to_str().unwrap()])
+        .output()
+        .expect("run");
+    assert!(!graph.status.success(), "an incomplete graph must fail");
+    let report: serde_json::Value = serde_json::from_slice(&graph.stdout).unwrap();
+    let missing: Vec<&str> = report["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|n| n["missing"].as_array().unwrap())
+        .filter_map(|s| s.as_str())
+        .collect();
+    assert_eq!(missing, ["libfoo.so.1"], "{report}");
+
+    let rootfs = tmp.path().join("rootfs");
+    let pack = Command::new(bin)
+        .args([
+            "pack",
+            "-n",
+            "-o",
+            rootfs.to_str().unwrap(),
+            app.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&pack.stderr);
+    assert!(!pack.status.success(), "pack must refuse: {stderr}");
+    assert!(
+        stderr.contains("cannot pack: unresolved dependencies: \"libfoo.so.1\""),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn a_truncated_library_warns_on_stderr_and_still_graphs_and_packs() {
     // The tolerance scratchsmith 2.0 ends: a resolved library that claims to be an ELF and
     // will not parse is kept as a leaf. Until then the run must succeed exactly as before,

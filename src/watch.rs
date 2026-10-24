@@ -23,22 +23,33 @@ fn stamp(path: &Path) -> Stamp {
 /// interrupted. The first pack fails like a plain `pack`, so a wrong path or flag is not left
 /// spinning. A later failure is printed and the watch goes on: a half-written binary or a
 /// broken build is what the next save fixes.
-pub fn run(binary: &Path, mut pack: impl FnMut() -> Result<()>) -> Result<()> {
+pub fn run(binary: &Path, pack: impl FnMut() -> Result<()>) -> Result<()> {
+    watch(binary, pack, &mut || std::thread::sleep(POLL), || true)
+}
+
+// `run`, with the sleep and the condition for another round passed in, so a test can drive it.
+fn watch(
+    binary: &Path,
+    mut pack: impl FnMut() -> Result<()>,
+    sleep: &mut dyn FnMut(),
+    mut again: impl FnMut() -> bool,
+) -> Result<()> {
     let (mut packed, first) = pack_current(binary, &mut pack);
     first?;
-    loop {
+    while again() {
         // stderr, like every other status line: stdout is the report.
         eprintln!(
             "watching {} for changes; press Ctrl-C to stop",
             binary.display()
         );
-        wait_for_change(binary, packed, &mut || std::thread::sleep(POLL));
+        wait_for_change(binary, packed, sleep);
         let (stamped, result) = pack_current(binary, &mut pack);
         packed = stamped;
         if let Err(err) = result {
             eprintln!("error: {err:#}");
         }
     }
+    Ok(())
 }
 
 // Pack the binary as it is now, and say which version that was. The stamp is taken BEFORE
@@ -119,6 +130,55 @@ mod tests {
         assert_eq!(polls, 5, "must wait out the absence and the two writes");
         assert_eq!(seen, stamp(&bin));
         assert_ne!(seen, packed);
+    }
+
+    #[test]
+    fn a_failed_first_pack_ends_the_watch_and_a_later_one_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("app");
+        write_at(&bin, b"v1", 1_000);
+
+        let err = watch(
+            &bin,
+            || anyhow::bail!("bad flag"),
+            &mut || {},
+            || panic!("a failed first pack must not start watching"),
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), "bad flag");
+
+        // Each round rebuilds the binary on its first poll. The second pack fails, and the
+        // third still runs: a broken build is what the next save fixes.
+        let mut packs = 0;
+        let mut polls = 0;
+        let mut rounds = 0;
+        let result = watch(
+            &bin,
+            || {
+                packs += 1;
+                if packs == 2 {
+                    anyhow::bail!("half-written");
+                }
+                Ok(())
+            },
+            &mut || {
+                polls += 1;
+                // Budgeted, as above: a broken wait must fail the suite, not hang it.
+                assert!(
+                    polls <= 4,
+                    "poll {polls}: each round was stable after two polls"
+                );
+                if polls % 2 == 1 {
+                    write_at(&bin, b"vN", 1_000 + polls);
+                }
+            },
+            || {
+                rounds += 1;
+                rounds <= 2
+            },
+        );
+        assert!(result.is_ok());
+        assert_eq!(packs, 3, "the first pack, then one per change");
     }
 
     #[test]

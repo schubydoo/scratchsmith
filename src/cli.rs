@@ -958,6 +958,17 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_without_a_command_is_an_error() {
+        // argv cannot reach this (clap prints help first), but `dispatch` must not panic on it.
+        let cli = Cli {
+            completions: None,
+            command: None,
+        };
+        let err = dispatch(cli).unwrap_err();
+        assert!(err.to_string().starts_with("no command given"), "{err}");
+    }
+
+    #[test]
     fn completions_emit_a_script_for_each_supported_shell() {
         for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
             let mut buf = Vec::new();

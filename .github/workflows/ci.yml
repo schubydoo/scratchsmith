@@ -152,9 +152,11 @@ jobs:
       # writes lcov.info before the threshold check, so the upload still runs on a
       # floor failure.
       # upx isn't preinstalled; without it the --upx pack tests skip and their lines look uncovered.
+      # tini is here only, so the --init path is covered and the test job still runs the
+      # tini-absent refusal.
       # ⚠️ Required by tests/common::skip_required — see the note on the test job's copy.
-      - name: Install upx
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends upx-ucl
+      - name: Install upx and tini
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends upx-ucl tini
       # ⚠️ Required by tests/common::skip_required — see the note on the test job's copy.
       - name: Install syft
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3

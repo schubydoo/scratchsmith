@@ -1172,13 +1172,15 @@ mod tests {
 
     #[test]
     fn a_needed_elf_that_is_not_a_shared_object_fails_but_an_include_stays() {
-        use goblin::elf::header::{ET_CORE, ET_EXEC};
+        use goblin::elf::header::{ET_CORE, ET_EXEC, ET_REL};
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let (exe, mid, _leaf, base) = chain_fixture(root);
         for (e_type, what) in [
             (ET_CORE, "a core dump (ET_CORE)"),
             (ET_EXEC, "an executable (ET_EXEC)"),
+            (ET_REL, "an object file (ET_REL)"),
+            (0xfe00, "an ELF of type 65024"),
         ] {
             // libmid parses as an ELF, but not as a shared object: the binary's DT_NEEDED
             // reached a host file such as a core dump.

@@ -1214,6 +1214,28 @@ mod tests {
         assert_eq!(fs::read(&staged_loader).unwrap(), b"LOADER");
     }
 
+    #[test]
+    fn without_a_libc_the_nss_modules_are_skipped_with_a_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let report =
+            stage_default_includes(&Resolution::default(), tmp.path(), &NssSelection::default())
+                .unwrap();
+        assert_eq!(
+            report.warnings,
+            vec!["no libc in resolution; skipped NSS modules".to_string()]
+        );
+        assert!(report.staged.iter().all(|p| !p.starts_with("/lib")));
+    }
+
+    #[test]
+    fn the_staged_path_of_the_root_is_the_staging_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            staged_path(tmp.path(), Path::new("/"), false).unwrap(),
+            tmp.path()
+        );
+    }
+
     fn with_interp(pt_interp: &str, source: &Path) -> Resolution {
         Resolution {
             interpreter: Some(ResolvedInterp {
@@ -2221,6 +2243,11 @@ mod tests {
             lexical_image_path(Path::new("/etc"), Path::new("/opt/./app")),
             Path::new("/opt/app")
         );
+        // A leading `.` is the one `Path::components` keeps.
+        assert_eq!(
+            lexical_image_path(Path::new("/etc"), Path::new("./x.conf")),
+            Path::new("/etc/x.conf")
+        );
     }
 
     #[test]
@@ -2357,6 +2384,18 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("is a directory"), "{err}");
+
+        let err = stage_added_files(
+            &dest,
+            &[AddFile {
+                src: PathBuf::from("/dev/null"),
+                dst: PathBuf::from("/etc/null"),
+            }],
+            SymlinkMode::CopyAll,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("is not a regular file"), "{err}");
 
         // An explicitly named file that is not there is an error, never a warning: the
         // image would otherwise ship silently without it.
