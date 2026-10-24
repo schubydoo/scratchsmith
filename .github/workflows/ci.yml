@@ -302,6 +302,19 @@ jobs:
           RUSTFLAGS: "-D warnings"
           CFLAGS: "-O1"
           AWS_LC_SYS_NO_JITTER_ENTROPY: "1"
+      # fuzz-seconds in cflite_batch.yml is the budget for the WHOLE batch run, split across the
+      # targets, so a new target quietly shortens every target's share. Keep 300 s each.
+      - name: Fuzz budget covers every target
+        run: |
+          set -euo pipefail
+          targets=$(find fuzz/fuzz_targets -maxdepth 1 -name '*.rs' | wc -l)
+          budget=$(sed -nE 's/^ *fuzz-seconds: *([0-9]+).*/\1/p' .github/workflows/cflite_batch.yml)
+          share=$((budget / targets))
+          if [ "$share" -lt 300 ]; then
+            echo "::error::cflite_batch.yml fuzz-seconds ($budget) gives each of $targets targets ${share} s; set it to $((targets * 300))."
+            exit 1
+          fi
+          echo "fuzz budget: $budget s over $targets targets = $share s each"
       # After the type-check, so an API break in a target is reported before a format drift.
       # The main `Format` step reads the root workspace only, and fuzz/ is detached, so its
       # targets drifted from rustfmt unseen.

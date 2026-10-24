@@ -1,6 +1,7 @@
 # ClusterFuzzLite: fuzz the code each PR changes (cargo-fuzz harnesses in fuzz/). A short
 # per-PR run on the address sanitizer. NOT a required check, so a flaky finding never blocks a
-# merge, but a reproducible crash surfaces here and as SARIF in the Security tab. Deeper runs
+# merge, but a reproducible crash fails this run and, on a same-repo PR, is uploaded as a code-
+# scanning alert (category clusterfuzzlite-pr, apart from the batch set). Deeper runs
 # live in cflite_batch.yml. No corpus secret here (fork-PR-safe).
 # Docs: https://google.github.io/clusterfuzzlite/
 name: ClusterFuzzLite PR fuzzing
@@ -25,6 +26,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      actions: read
     concurrency:
       group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
       cancel-in-progress: true
@@ -34,6 +36,7 @@ jobs:
         sanitizer: [address]
     steps:
       - name: Build fuzzers (${{ matrix.sanitizer }})
+        id: build
         uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           language: rust
@@ -47,3 +50,13 @@ jobs:
           mode: code-change
           sanitizer: ${{ matrix.sanitizer }}
           output-sarif: true
+      # As in cflite_batch.yml. A fork PR's token cannot write security events, so skip it.
+      - name: Upload SARIF
+        if: >-
+          ${{ !cancelled() && steps.build.outcome == 'success'
+          && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          sarif_file: cifuzz-sarif/results.sarif
+          checkout_path: cifuzz-sarif
+          category: clusterfuzzlite-pr
