@@ -409,8 +409,7 @@ scratchsmith unpack app.oci.tar ./rootfs   # apply the layers into ./rootfs
 
 `unpack` reads an OCI-layout archive (what `pack --oci-archive` writes, or a skopeo/buildah
 export), applies each layer in order, and honors whiteouts. Combine it with `diff` to
-compare two images: unpack both, then run `scratchsmith diff old new`. If one layer fails to
-apply, pass `--keep-going` to apply the remaining layers anyway.
+compare two images: unpack both, then run `scratchsmith diff old new`.
 
 `unpack` clears the setuid and setgid bits on every file and directory it writes. An untrusted
 image cannot then plant a setuid program owned by the user who unpacks it. `unpack` prints one
