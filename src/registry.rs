@@ -16,15 +16,13 @@ use sha2::{Digest, Sha256};
 /// no HEAD check for one the registry already has. Credentials come from the local Docker config
 /// (`~/.docker/config.json`, incl. credential helpers); a localhost registry is treated as
 /// plain-HTTP (matching Docker's insecure-localhost default), which also lets CI test
-/// against a local `registry:2`. Returns the pushed image's by-digest reference
-/// (`registry/repo@sha256:…`) when the registry reports a digest — `Some` for `--sign` to
-/// sign, `None` when the response carries no digest (a plain push still succeeds). The inner
-/// `Err` is a reported digest that is not the manifest pushed: only `--sign` acts on it.
+/// against a local `registry:2`. Returns what the registry said about the pushed manifest's
+/// digest; a plain push succeeds whatever it said, and only `--sign` needs a confirmed one.
 pub fn push_to_registry(
     staged: &StagedTree,
     reference: &str,
     cfg: &ImageConfig,
-) -> Result<Result<Option<String>>> {
+) -> Result<PushedDigest> {
     // Everything cheap first. Building the image stages and gzips the whole rootfs, so a bad
     // reference, a broken credential helper or a missing trust store used to surface only
     // after all of that work — where `index` reports the same failures instantly.
@@ -92,10 +90,33 @@ pub struct IndexEntry {
 pub struct IndexOutcome {
     /// The per-arch children that were assembled, in input order.
     pub entries: Vec<IndexEntry>,
-    /// The pushed index's by-digest reference (`registry/repo@sha256:…`) when the registry
-    /// reports a digest — `Some` for `--sign`, `None` when the response carries none, `Err`
-    /// when the reported digest is not the index pushed.
-    pub digest_ref: Result<Option<String>>,
+    /// What the registry said about the pushed index's digest.
+    pub digest_ref: PushedDigest,
+}
+
+/// What a push response says about the digest of the manifest just pushed. cosign signs by
+/// digest, so `--sign` needs `Confirmed`; a plain push succeeds with any of the three.
+#[derive(Debug)]
+pub enum PushedDigest {
+    /// The by-digest reference (`registry/repo@sha256:…`) of the manifest pushed.
+    Confirmed(String),
+    /// The response named no digest.
+    Unreported,
+    /// The response named a digest other than the manifest pushed. Holds the refusal.
+    Mismatch(anyhow::Error),
+}
+
+impl PushedDigest {
+    /// The reference to sign, or why there is none. `what` names the pushed thing.
+    pub fn for_signing(self, what: &str) -> Result<String> {
+        match self {
+            Self::Confirmed(reference) => Ok(reference),
+            Self::Unreported => {
+                bail!("cannot sign: the registry did not return a digest for the pushed {what}")
+            }
+            Self::Mismatch(err) => Err(err),
+        }
+    }
 }
 
 // Manifest media types accepted when pulling a child. Both OCI and Docker single-image
@@ -350,35 +371,31 @@ fn build_index(children: &[Child]) -> Result<OciImageIndex> {
 // manifest we uploaded. cosign signs by digest, so this is what `--sign` targets — precise and
 // immune to a tag being moved after the push. The push response's manifest URL (the
 // registry's `Location` header) must name that same digest: signing the one it names would let
-// the registry pick the image our identity signs. `Ok(None)` when the URL carries no digest,
-// `Err` when it carries another. Only `--sign` consults either, so neither fails a plain push.
-fn digest_ref_from(
-    reference: &Reference,
-    manifest_url: &str,
-    pushed: &str,
-) -> Result<Option<String>> {
+// the registry pick the image our identity signs. Only `--sign` consults the result, so no
+// answer fails a plain push.
+fn digest_ref_from(reference: &Reference, manifest_url: &str, pushed: &str) -> PushedDigest {
     let Some(reported) = manifest_url
         .rsplit("/manifests/")
         .next()
         .and_then(|tail| tail.split(['?', '#']).next())
         .filter(|d| d.starts_with("sha256:"))
     else {
-        return Ok(None);
+        return PushedDigest::Unreported;
     };
     // Exact equality with our own `sha256:` + 64 lowercase hex also refuses a malformed digest.
     if reported != pushed {
-        bail!(
+        return PushedDigest::Mismatch(anyhow::anyhow!(
             "cannot sign: the registry reported digest {} for the manifest just pushed, but \
              that manifest's digest is {pushed}; refusing to sign a digest the registry chose",
             crate::resolver::escape_for_display(reported)
-        );
+        ));
     }
-    Ok(Some(format!(
+    PushedDigest::Confirmed(format!(
         "{}/{}@{}",
         reference.registry(),
         reference.repository(),
         pushed
-    )))
+    ))
 }
 
 // The digest of the manifest bytes oci-client PUTs: `push_manifest` serializes the
@@ -901,7 +918,11 @@ mod tests {
     #[test]
     fn digest_ref_from_builds_a_by_digest_reference() {
         let r: Reference = "ghcr.io/you/app:latest".parse().unwrap();
-        let at = |url: &str| digest_ref_from(&r, url, PUSHED).unwrap();
+        let at = |url: &str| match digest_ref_from(&r, url, PUSHED) {
+            PushedDigest::Confirmed(reference) => Some(reference),
+            PushedDigest::Unreported => None,
+            PushedDigest::Mismatch(err) => panic!("{err:#}"),
+        };
         let want = Some(format!("ghcr.io/you/app@{PUSHED}"));
         assert_eq!(
             at(&format!("https://ghcr.io/v2/you/app/manifests/{PUSHED}")),
@@ -931,6 +952,7 @@ mod tests {
                 &format!("https://ghcr.io/v2/you/app/manifests/{tail}"),
                 PUSHED,
             )
+            .for_signing("image")
             .expect_err("only the pushed digest may be signed");
             let msg = format!("{err:#}");
             assert!(
@@ -944,6 +966,7 @@ mod tests {
             "https://ghcr.io/v2/you/app/manifests/sha256:\nforged",
             PUSHED,
         )
+        .for_signing("image")
         .unwrap_err();
         assert!(!format!("{err:#}").contains('\n'), "got: {err:#}");
     }
@@ -1027,6 +1050,7 @@ mod tests {
         let staged = StagedTree {
             root,
             entrypoint: "/app".into(),
+            loader: None,
         };
         let push = |answer| {
             let server = mock_registry(answer, Vec::new());
@@ -1037,12 +1061,16 @@ mod tests {
         };
         for answer in [ManifestAnswer::Honest, ManifestAnswer::NoLocation] {
             let (got, host, put) = push(answer);
-            assert_eq!(got.unwrap(), Some(format!("{host}/app@{put}")));
+            assert_eq!(
+                got.for_signing("image").unwrap(),
+                format!("{host}/app@{put}")
+            );
         }
         let (got, _, put) = push(ManifestAnswer::Names(EVIL));
         let msg = format!(
             "{:#}",
-            got.expect_err("a digest the registry chose is not signed")
+            got.for_signing("image")
+                .expect_err("a digest the registry chose is not signed")
         );
         assert!(msg.contains(EVIL) && msg.contains(&put), "got: {msg}");
     }
@@ -1084,12 +1112,16 @@ mod tests {
         };
         for answer in [ManifestAnswer::Honest, ManifestAnswer::NoLocation] {
             let (got, host, put) = push(answer);
-            assert_eq!(got.unwrap(), Some(format!("{host}/app@{put}")));
+            assert_eq!(
+                got.for_signing("image").unwrap(),
+                format!("{host}/app@{put}")
+            );
         }
         let (got, _, put) = push(ManifestAnswer::Names(EVIL));
         let msg = format!(
             "{:#}",
-            got.expect_err("a digest the registry chose is not signed")
+            got.for_signing("image")
+                .expect_err("a digest the registry chose is not signed")
         );
         assert!(msg.contains(EVIL) && msg.contains(&put), "got: {msg}");
     }

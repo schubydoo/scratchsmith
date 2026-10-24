@@ -1146,6 +1146,7 @@ mod tests {
         let staged = crate::stager::StagedTree {
             root,
             entrypoint: "/app".into(),
+            loader: None,
         };
         crate::image::write_oci_archive(&staged, "t:1", &Default::default(), &archive).unwrap();
 

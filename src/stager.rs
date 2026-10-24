@@ -16,6 +16,9 @@ pub struct StagedTree {
     pub root: PathBuf,
     /// The binary's path *inside* the image — the default entrypoint.
     pub entrypoint: PathBuf,
+    /// Where the loader was placed *inside* the image: PT_INTERP resolved inside it, which can
+    /// differ from the PT_INTERP string. `None` when the binary has no PT_INTERP.
+    pub loader: Option<PathBuf>,
 }
 
 /// Optional runtime files a user can inject. Unlike the always-on NSS includes, these
@@ -736,10 +739,9 @@ pub fn strip_and_measure(
     let mut targets: Vec<(PathBuf, String)> = vec![shown(binary.clone())];
     // Measure the loader where stage_files put it (strip rewrites in place, so never the
     // raw join), but keep reporting it by its PT_INTERP string, as `interpreter` does.
-    if let Some(interp) = &resolution.interpreter {
-        let staged = under(dest, &interp_target(dest, &interp.image_path)?);
+    if let (Some(loader), Some(interp)) = (&tree.loader, &resolution.interpreter) {
         let label = display_image_path(dest, &under(dest, &interp.image_path));
-        targets.push((staged, label));
+        targets.push((under(dest, loader), label));
     }
     // Measure where the walk resolved the library, but label it by its own path, as the
     // loader is labelled above.
@@ -863,10 +865,14 @@ fn stage_files(
     }
 
     // The kernel execs PT_INTERP verbatim, so the loader must live where that path resolves.
-    if let Some(interp) = &resolution.interpreter {
-        let target = interp_target(dest, &interp.image_path)?;
-        copy_into(&interp.source, dest, &target)?;
-    }
+    let loader = match &resolution.interpreter {
+        Some(interp) => {
+            let target = interp_target(dest, &interp.image_path)?;
+            copy_into(&interp.source, dest, &target)?;
+            Some(target)
+        }
+        None => None,
+    };
 
     // Each library: place the real file, then recreate the soname symlink the loader
     // looks up when the real file name differs (the versioned-soname case).
@@ -880,6 +886,7 @@ fn stage_files(
     Ok(StagedTree {
         root: dest.to_path_buf(),
         entrypoint: binary_real,
+        loader,
     })
 }
 

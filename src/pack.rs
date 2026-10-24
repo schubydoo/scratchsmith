@@ -7,7 +7,7 @@ use crate::report::{PackReport, Timings};
 use crate::resolver::{self, Sysroot};
 use crate::stager::{self, AddFile, NssSelection, RuntimeExtras, SizeReport, StagedTree};
 use crate::supplychain::{self, SbomRequest, ScanRequest, ScanSource, ScanSummary};
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -855,15 +855,14 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackRep
     let (digest_ref, ms) = timed(|| crate::registry::push_to_registry(&s.tree, reference, &s.cfg))?;
     s.clock.timings.deliver_ms = Some(ms);
     let signed = if opts.sign {
-        let dref = digest_ref?
-            .context("cannot sign: the registry did not return a digest for the pushed image")?;
+        let dref = digest_ref.for_signing("image")?;
         let (signed, ms) = timed(|| sign_pushed(&dref, opts))?;
         s.clock.timings.sign_ms = Some(ms);
         Some(signed)
     } else {
         // Nothing reads the digest without --sign, but a registry that names a manifest other
         // than the one just pushed must not pass in silence.
-        if let Err(e) = &digest_ref {
+        if let crate::registry::PushedDigest::Mismatch(e) = &digest_ref {
             s.warnings.push(format!("{e:#}"));
         }
         None

@@ -682,6 +682,7 @@ mod tests {
         let staged = StagedTree {
             root: tmp.path().join("root"),
             entrypoint: "/app".into(),
+            loader: None,
         };
         let dir = tmp.path().join("out");
         std::fs::create_dir(&dir).unwrap();
@@ -756,6 +757,7 @@ mod tests {
         let staged = StagedTree {
             root: tmp.path().join("root"),
             entrypoint: "/app".into(),
+            loader: None,
         };
         write_oci_archive(
             &staged,
@@ -778,6 +780,7 @@ mod tests {
         let staged = StagedTree {
             root: tmp.path().join("root"),
             entrypoint: "/app".into(),
+            loader: None,
         };
         let out = tmp.path().join("img.tar");
         write_oci_archive(
