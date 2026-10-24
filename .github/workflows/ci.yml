@@ -290,10 +290,6 @@ jobs:
           components: rustfmt
           cache-workspaces: fuzz
           rustflags: ""
-      # The main `Format` step reads the root workspace only, and fuzz/ is detached, so its
-      # targets drifted from rustfmt unseen.
-      - name: Format (fuzz)
-        run: cargo fmt --manifest-path fuzz/Cargo.toml --all --check
       # -D warnings holds the harness to the main crate's clippy bar: catches warning-only drift
       # (unused import, a newly-#[deprecated] call) that a bare `check` exits 0 on. Deps are
       # --cap-lints'd by cargo, so only scratchsmith + the harness are held to it.
@@ -306,6 +302,11 @@ jobs:
           RUSTFLAGS: "-D warnings"
           CFLAGS: "-O1"
           AWS_LC_SYS_NO_JITTER_ENTROPY: "1"
+      # After the type-check, so an API break in a target is reported before a format drift.
+      # The main `Format` step reads the root workspace only, and fuzz/ is detached, so its
+      # targets drifted from rustfmt unseen.
+      - name: Format (fuzz)
+        run: cargo fmt --manifest-path fuzz/Cargo.toml --all --check
 
   semver:
     # INFORMATIONAL ONLY — deliberately NOT in ci-required-checks below, so it never

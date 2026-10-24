@@ -103,7 +103,7 @@ pub enum PushedDigest {
     Confirmed(String),
     /// The response named no digest.
     Unreported,
-    /// The response named a digest other than the manifest pushed. Holds the refusal.
+    /// The response named a digest other than the manifest pushed. Holds the two digests.
     Mismatch(anyhow::Error),
 }
 
@@ -115,7 +115,10 @@ impl PushedDigest {
             Self::Unreported => {
                 bail!("cannot sign: the registry did not return a digest for the pushed {what}")
             }
-            Self::Mismatch(err) => Err(err),
+            // The same refusal text as before the enum: the facts, framed as a refusal.
+            Self::Mismatch(err) => {
+                bail!("cannot sign: {err:#}; refusing to sign a digest the registry chose")
+            }
         }
     }
 }
@@ -385,9 +388,10 @@ fn digest_ref_from(reference: &Reference, manifest_url: &str, pushed: &str) -> P
     };
     // Exact equality with our own `sha256:` + 64 lowercase hex also refuses a malformed digest.
     if reported != pushed {
+        // The facts only: without `--sign` this is a warning, and nothing was asked to sign.
         return PushedDigest::Mismatch(anyhow::anyhow!(
-            "cannot sign: the registry reported digest {} for the manifest just pushed, but \
-             that manifest's digest is {pushed}; refusing to sign a digest the registry chose",
+            "the registry reported digest {} for the manifest just pushed, but that \
+             manifest's digest is {pushed}",
             crate::resolver::escape_for_display(reported)
         ));
     }
