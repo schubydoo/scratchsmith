@@ -27,6 +27,8 @@ reproducible layers.
   <img src="docs/demo/scratchsmith.svg" alt="Scratchsmith packing a dynamic glibc binary into a minimal FROM scratch image with an SBOM and a smoke-run, then running it" width="720">
 </p>
 
+Pass `--pilot-retry-limit <n>` to retry a failed step up to `n` times before the run exits.
+
 ## Why not just static-link + `FROM scratch`?
 
 If you can rebuild your service as a static binary (`CGO_ENABLED=0`, musl), **do that**. You
