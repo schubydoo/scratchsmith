@@ -298,12 +298,10 @@ jobs:
       # CFLAGS mirrors the optimization level the ClusterFuzzLite image forces on C deps: a
       # build script that only works at the default flags (aws-lc-sys's jitterentropy, broken
       # by a cc bump) otherwise fails first in the NON-required fuzzing run.
-      # AWS_LC_SYS_NO_JITTER_ENTROPY must match .clusterfuzzlite/build.sh.
       - run: cargo check --manifest-path fuzz/Cargo.toml
         env:
           RUSTFLAGS: "-D warnings"
           CFLAGS: "-O1"
-          AWS_LC_SYS_NO_JITTER_ENTROPY: "1"
       # fuzz-seconds in cflite_batch.yml is the budget for the WHOLE batch run, split across the
       # targets, so a new target quietly shortens every target's share. Keep 300 s each.
       - name: Fuzz budget covers every target
