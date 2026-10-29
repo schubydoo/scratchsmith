@@ -665,6 +665,36 @@ pub fn warn_about_a_used_output_dir(out_dir: &Path) {
     }
 }
 
+/// Warn on stderr that the default `--packages` selection gains `sbom` in 2.0, in the one case
+/// where that changes the result. See `packages_default_notice`.
+pub fn warn_about_the_packages_default(opts: &PackOptions) {
+    let reads_tree = opts.sbom.is_some() || opts.scan.is_some();
+    if let Some(line) = packages_default_notice(&opts.packages, reads_tree, packages::manager) {
+        eprintln!("{line}");
+    }
+}
+
+// The 2.0 default adds `sbom`, so syft and grype start to see the bundled packages. Only a
+// default selection on a pack that runs one of them can change, and only on a host with
+// dpkg or rpm: elsewhere a default selection stays quiet in 2.0 too. `probe` runs last, so
+// a pack without `--sbom` or `--scan` never asks the host.
+fn packages_default_notice(
+    selection: &PackagesSelection,
+    reads_tree: bool,
+    probe: impl FnOnce() -> Option<packages::Manager>,
+) -> Option<String> {
+    (!selection.explicit && reads_tree && probe().is_some()).then(|| {
+        format!(
+            "warning: scratchsmith 2.0 changes the default --packages from `report` to \
+             `report,sbom`, so --sbom and --scan will see the packages that own the bundled \
+             files, and a --scan-fail-on gate can find more. To keep today's result, set \
+             --packages report (or `packages = [\"report\"]` in scratchsmith.toml). To take the \
+             2.0 default now, set --packages report,sbom. See {}",
+            crate::image::DEPRECATIONS_URL
+        )
+    })
+}
+
 /// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
 pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<PackReport> {
     // No image is built here, so there is nothing to smoke-run. The CLI blocks --smoke --no-build,
@@ -998,6 +1028,34 @@ mod tests {
             assert_eq!(kept, selection);
             assert!(warnings.is_empty(), "{warnings:?}");
         }
+    }
+
+    #[test]
+    fn the_packages_default_warns_only_where_2_0_changes_the_result() {
+        use crate::packages::PackagesOutput::Report;
+        let host = || Some(packages::Manager::Dpkg);
+        let default = PackagesSelection::default();
+
+        // A default selection, a reader on, a package database on the host: 2.0 changes this.
+        let line = packages_default_notice(&default, true, host).expect("this case must warn");
+        assert!(
+            line.starts_with("warning: ")
+                && line.contains("`report,sbom`")
+                && line.contains("--packages report ")
+                && line.contains(crate::image::DEPRECATIONS_URL),
+            "{line}"
+        );
+        // The text report drops the default `report` output, and the selection stays default.
+        assert!(packages_default_notice(&default.for_text_report(), true, host).is_some());
+
+        // A selection the user named, the same as today's default included, stays quiet.
+        let named = PackagesSelection::from_outputs(&[Report]).unwrap();
+        assert!(packages_default_notice(&named, true, host).is_none());
+        // No dpkg and no rpm: a default selection is quiet in 2.0 too.
+        assert!(packages_default_notice(&default, true, || None).is_none());
+        // Without --sbom or --scan nothing reads the records, and the host is never asked.
+        let never = || -> Option<packages::Manager> { panic!("probed without a reader") };
+        assert!(packages_default_notice(&default, false, never).is_none());
     }
 
     fn resolution(sonames: &[&str]) -> resolver::Resolution {

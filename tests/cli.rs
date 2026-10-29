@@ -1304,6 +1304,58 @@ fn dpkg_host() -> bool {
 }
 
 #[test]
+fn the_packages_default_warns_where_2_0_adds_sbom() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    // The warning only fires on a host with a package database, so it has one to test on.
+    if !dpkg_host() {
+        common::skip_optional("no dpkg database on this host");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let tools = fake_tools(tmp.path(), &[("syft", FAKE_SYFT)]);
+    let cfg = tmp.path().join("scratchsmith.toml");
+    std::fs::write(&cfg, "packages = [\"report\"]\n").unwrap();
+    let notice = "changes the default --packages";
+    let pack = |name: &str, extra: &[&str]| {
+        let sbom = tmp.path().join(format!("{name}.json"));
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["pack", "--no-build", "-o"])
+            .arg(tmp.path().join(name))
+            .args(["--sbom-file", sbom.to_str().unwrap()])
+            .args(extra)
+            .arg(bin)
+            .env("PATH", &tools)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(
+            out.status.success(),
+            "{name}: the warning must not fail the pack: {stderr}"
+        );
+        stderr
+    };
+
+    // The default selection with a reader on: 2.0 changes what syft sees, so say it once.
+    let stderr = pack("default", &["--sbom"]);
+    assert_eq!(stderr.matches(notice).count(), 1, "{stderr}");
+    assert!(
+        stderr.contains("--packages report ") && stderr.contains("/latest/deprecations/"),
+        "the warning must name the way to keep today's result and the Deprecations page: {stderr}"
+    );
+    // A selection the user named, on the command line or in the config, stays quiet.
+    let stderr = pack("flag", &["--sbom", "--packages", "report"]);
+    assert!(!stderr.contains(notice), "{stderr}");
+    let stderr = pack("config", &["--sbom", "--config", cfg.to_str().unwrap()]);
+    assert!(!stderr.contains(notice), "{stderr}");
+    // Without --sbom or --scan, the 2.0 default changes nothing.
+    let stderr = pack("no-reader", &[]);
+    assert!(!stderr.contains(notice), "{stderr}");
+}
+
+#[test]
 fn the_report_names_the_packages_that_own_the_bundled_files() {
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");

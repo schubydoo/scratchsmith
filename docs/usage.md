@@ -129,6 +129,10 @@ see them. The host knows which package owns each of those paths. `--packages` re
 
 The default is `report`. The default changes no SBOM, no scan and no image.
 
+Scratchsmith 2.0 changes the default to `report,sbom`. A pack with `--sbom` or `--scan` and no
+`--packages` value prints a warning about it today. To keep the current result, set
+`--packages report`. See [Deprecations](deprecations.md#the-packages-default-adds-sbom).
+
 `sbom` needs a reader. If neither `--sbom` nor `--scan` is on, nothing reads the records.
 Scratchsmith then turns that output off, skips its lookup, and prints a warning. The pack does
 not fail.

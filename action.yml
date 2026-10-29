@@ -103,7 +103,8 @@ inputs:
       Where to record the distribution packages that own the bundled files, comma-separated
       (`report`, `sbom`, `image`, or `none`). `sbom` shows them to `sbom` and `scan`. `image`
       keeps the package records in the image. `sbom` does nothing, and warns, unless the `sbom` or
-      the `scan` input is on. Empty keeps the default (`report`).
+      the `scan` input is on. Empty keeps the default (`report`). Scratchsmith 2.0 changes the
+      default to `report,sbom`. With `sbom` or `scan` on, set `report` to keep today's result.
     required: false
     default: ""
   entrypoint:

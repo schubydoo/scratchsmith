@@ -5,7 +5,7 @@ Scratchsmith keeps the version 1.0 contract in
 Nothing on that contract disappears without notice. This page lists everything on the way out,
 and what you write instead.
 
-This page has two lists, because two different things end in a major version.
+This page has three lists, because three different things change in a major version.
 
 A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.
@@ -13,6 +13,10 @@ standard error, and exits with the same code as before. The next major version r
 A tolerance is different. Scratchsmith accepts input today that it cannot use in full, and the
 result can be an image with a part absent. The next major version reports it as an error. Each
 tolerance prints one warning line to standard error, and the exit code stays the same.
+
+A changing default is the third. The input stays valid, and the next major version gives it a
+different result. Scratchsmith prints one warning line to standard error where the result will
+change, and the exit code stays the same.
 
 ## Deprecated input shapes
 
@@ -224,3 +228,35 @@ remove the old one first:
 $ rm -rf ./rootfs
 $ scratchsmith pack --no-build --output ./rootfs ./app
 ```
+
+## Defaults changing in 2.0
+
+| Setting | Today | In 2.0 | Warns since | Keep today's result |
+|---|---|---|---|---|
+| `--packages` (the `packages` key) with no value | `report` | `report,sbom` | 1.9.0 | `--packages report` |
+
+The warning comes from `pack` only.
+
+### The `--packages` default adds `sbom`
+
+`--packages` decides where scratchsmith records the distribution packages that own the bundled
+files. Today the default is `report` alone. Then `--sbom` and `--scan` see a bare tree with no
+package database, so the SBOM names few of the libraries in the image.
+
+In 2.0 the default adds `sbom`. The SBOM and the scan then see the packages, for example glibc
+and openssl. A `--scan-fail-on` gate can then report findings in those packages, and a pack that
+passes the gate today can fail it after the upgrade.
+
+The warning appears only where the result changes. That is a pack that runs `--sbom` or
+`--scan` on a host with a dpkg or rpm database. It also needs no `--packages` value on the
+command line and no `packages` key in `scratchsmith.toml`. Any value that you set yourself stops
+the warning.
+
+To keep today's result, set the value:
+
+```console
+$ scratchsmith pack --sbom --packages report ./app
+```
+
+In `scratchsmith.toml`, write `packages = ["report"]`. To take the 2.0 default now, set
+`--packages report,sbom`.
