@@ -656,6 +656,34 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#defaults-changing-in-20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Defaults changing in 2.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Defaults changing in 2.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-packages-default-adds-sbom" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The --packages default adds sbom
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1013,6 +1041,34 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#defaults-changing-in-20" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Defaults changing in 2.0
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Defaults changing in 2.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-packages-default-adds-sbom" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The --packages default adds sbom
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1038,12 +1094,15 @@
 <a href="https://github.com/schubydoo/scratchsmith/blob/main/COMPATIBILITY.md">COMPATIBILITY.md</a>.
 Nothing on that contract disappears without notice. This page lists everything on the way out,
 and what you write instead.</p>
-<p>This page has two lists, because two different things end in a major version.</p>
+<p>This page has three lists, because three different things change in a major version.</p>
 <p>A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.</p>
 <p>A tolerance is different. Scratchsmith accepts input today that it cannot use in full, and the
 result can be an image with a part absent. The next major version reports it as an error. Each
 tolerance prints one warning line to standard error, and the exit code stays the same.</p>
+<p>A changing default is the third. The input stays valid, and the next major version gives it a
+different result. Scratchsmith prints one warning line to standard error where the result will
+change, and the exit code stays the same.</p>
 <h2 id="deprecated-input-shapes">Deprecated input shapes<a class="headerlink" href="#deprecated-input-shapes" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1250,6 +1309,45 @@ remove the old one first:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="gp">$ </span>rm<span class="w"> </span>-rf<span class="w"> </span>./rootfs
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>./rootfs<span class="w"> </span>./app
 </code></pre></div>
+<h2 id="defaults-changing-in-20">Defaults changing in 2.0<a class="headerlink" href="#defaults-changing-in-20" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Today</th>
+<th>In 2.0</th>
+<th>Warns since</th>
+<th>Keep today's result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--packages</code> (the <code>packages</code> key) with no value</td>
+<td><code>report</code></td>
+<td><code>report,sbom</code></td>
+<td>1.9.0</td>
+<td><code>--packages report</code></td>
+</tr>
+</tbody>
+</table>
+<p>The warning comes from <code>pack</code> only.</p>
+<h3 id="the-packages-default-adds-sbom">The <code>--packages</code> default adds <code>sbom</code><a class="headerlink" href="#the-packages-default-adds-sbom" title="Permanent link">&para;</a></h3>
+<p><code>--packages</code> decides where scratchsmith records the distribution packages that own the bundled
+files. Today the default is <code>report</code> alone. Then <code>--sbom</code> and <code>--scan</code> see a bare tree with no
+package database, so the SBOM names few of the libraries in the image.</p>
+<p>In 2.0 the default adds <code>sbom</code>. The SBOM and the scan then see the packages, for example glibc
+and openssl. A <code>--scan-fail-on</code> gate can then report findings in those packages, and a pack that
+passes the gate today can fail it after the upgrade.</p>
+<p>The warning appears only where the result changes. That is a pack that runs <code>--sbom</code> or
+<code>--scan</code> on a host with a dpkg or rpm database. It also needs no <code>--packages</code> value on the
+command line and no <code>packages</code> key in <code>scratchsmith.toml</code>. An empty list, <code>packages = []</code>, counts
+as no value, because 2.0 gives it the new default too. Any value that names an output stops the
+warning.</p>
+<p>To keep today's result, set the value:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--packages<span class="w"> </span>report<span class="w"> </span>./app
+</code></pre></div>
+<p>In <code>scratchsmith.toml</code>, write <code>packages = ["report"]</code>. To take the 2.0 default now, set
+<code>--packages report,sbom</code>.</p>
 
 
 

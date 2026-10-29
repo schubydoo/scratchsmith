@@ -1283,6 +1283,9 @@ see them. The host knows which package owns each of those paths. <code>--package
 </tbody>
 </table>
 <p>The default is <code>report</code>. The default changes no SBOM, no scan and no image.</p>
+<p>Scratchsmith 2.0 changes the default to <code>report,sbom</code>. A pack with <code>--sbom</code> or <code>--scan</code> and no
+<code>--packages</code> value prints a warning about it today. To keep the current result, set
+<code>--packages report</code>. See <a href="../deprecations/#the-packages-default-adds-sbom">Deprecations</a>.</p>
 <p><code>sbom</code> needs a reader. If neither <code>--sbom</code> nor <code>--scan</code> is on, nothing reads the records.
 Scratchsmith then turns that output off, skips its lookup, and prints a warning. The pack does
 not fail.</p>
