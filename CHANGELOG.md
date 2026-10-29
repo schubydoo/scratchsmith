@@ -5,6 +5,26 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 1.9.0 (2026-10-29)
+
+### Features
+
+#### A pack whose SBOM 2.0 changes now warns ([#403](https://github.com/schubydoo/scratchsmith/pull/403))
+
+For a pack with `--sbom` or `--scan` and no `--packages` value, `pack` prints one warning line
+to standard error. It does so only on a host with a dpkg or rpm database. Scratchsmith 2.0 adds `sbom` to the
+default `--packages`, so the SBOM and the scan will see the bundled packages. The run still
+succeeds and the exit code does not change.
+
+### Deprecated
+
+#### The default `--packages` gains `sbom` in 2.0 ([#403](https://github.com/schubydoo/scratchsmith/pull/403))
+
+Scratchsmith 2.0 changes the default `--packages` from `report` to `report,sbom`. A
+`--scan-fail-on` gate can then find more in the bundled packages. To keep today's result, set
+`--packages report`. The
+[Deprecations](https://schubydoo.github.io/scratchsmith/latest/deprecations/) page has the detail.
+
 ## 1.8.0 (2026-10-24)
 
 ### Features
