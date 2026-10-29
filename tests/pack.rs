@@ -604,8 +604,8 @@ fn index_in_a_container_with_no_ca_store_uses_the_bundled_roots() {
 // moving on, and the pin to it then failed with "manifest unknown". Docker Hub is expected
 // to keep an old digest of an official image.
 //
-// Docker pulls by the digest and ignores the tag. The tag is there for a reader, and for a
-// Renovate custom rule if one is written for this file: no bot moves this pin today.
+// Docker pulls by the digest and ignores the tag. The tag is there for a reader, and for the
+// Renovate regex manager in the shared `scratchsmith.json` preset, which moves this pin.
 //
 // This is Fedora 44 with rpm 6.0.2, and the script below depends on more than the pull: the
 // sqlite database at usr/lib/sysimage/rpm/rpmdb.sqlite, the `pkg:rpm/fedora/` purl prefix,
@@ -1128,6 +1128,12 @@ fn registry_digest(port: u16, repo: &str, tag: &str) -> String {
         .unwrap_or_else(|| panic!("the registry reported no digest: {resp}"))
 }
 
+// The throwaway registry for the push tests, pinned by digest like `FEDORA`: `registry:2` is a
+// tag that moves. The digest is the multi-arch index, so the pin pulls on any host arch. Same
+// pin as `action-selftest.yml`, and the same Renovate regex manager moves it.
+const REGISTRY: &str =
+    "docker.io/library/registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373";
+
 #[test]
 fn push_to_local_registry_is_pullable_and_runnable() {
     if !docker_available() {
@@ -1156,7 +1162,7 @@ fn push_to_local_registry_is_pullable_and_runnable() {
             // unauthenticated registry serves the tag the test later pulls and runs.
             "-p",
             "127.0.0.1:5099:5000",
-            "registry:2",
+            REGISTRY,
         ])
         .output()
         .unwrap();
@@ -1290,7 +1296,7 @@ fn index_assembles_a_pushed_image_into_an_index() {
             // Loopback only, as above: keep the unauthenticated registry off the LAN.
             "-p",
             "127.0.0.1:5098:5000",
-            "registry:2",
+            REGISTRY,
         ])
         .output()
         .unwrap();
