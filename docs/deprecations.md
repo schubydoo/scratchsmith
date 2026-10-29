@@ -249,8 +249,9 @@ passes the gate today can fail it after the upgrade.
 
 The warning appears only where the result changes. That is a pack that runs `--sbom` or
 `--scan` on a host with a dpkg or rpm database. It also needs no `--packages` value on the
-command line and no `packages` key in `scratchsmith.toml`. Any value that you set yourself stops
-the warning.
+command line and no `packages` key in `scratchsmith.toml`. An empty list, `packages = []`, counts
+as no value, because 2.0 gives it the new default too. Any value that names an output stops the
+warning.
 
 To keep today's result, set the value:
 
