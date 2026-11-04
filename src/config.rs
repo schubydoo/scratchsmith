@@ -133,15 +133,26 @@ impl Config {
                 (name.as_str(), inner)
             })
             .collect();
-        nested.sort();
-        let Some((name, inner)) = nested.first() else {
+        if nested.is_empty() {
             return Ok(());
+        }
+        nested.sort();
+        // Name every nested table, so one edit fixes the whole file.
+        let pairs = || {
+            nested
+                .iter()
+                .flat_map(|(o, inner)| inner.iter().map(move |i| (*o, *i)))
         };
-        let inner = inner[0];
+        let found: Vec<String> = pairs()
+            .map(|(o, i)| format!("[profile.{o}.profile.{i}]"))
+            .collect();
+        let fixes: Vec<String> = pairs().map(|(_, i)| format!("[profile.{i}]")).collect();
         bail!(
-            "{}: [profile.{name}.profile.{inner}] is not allowed: profiles cannot nest. \
-             Move it to a top-level [profile.{inner}] table and repeat the keys it relied on",
-            path.display()
+            "{}: {} not allowed: profiles cannot nest. Move it to a top-level {} table \
+             and repeat the keys it relied on",
+            path.display(),
+            found.join(", "),
+            fixes.join(", ")
         )
     }
 
@@ -330,6 +341,23 @@ mod tests {
         // A flat file still loads.
         std::fs::write(&path, "[profile.release]\nstrip = true\n").unwrap();
         assert!(Config::load(&path).is_ok());
+    }
+
+    #[test]
+    fn every_nested_profile_is_named_in_one_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scratchsmith.toml");
+        std::fs::write(
+            &path,
+            "[profile.b.profile.y]\nstrip = true\n\n[profile.a.profile.x]\nsign = true\n",
+        )
+        .unwrap();
+        let err = Config::load(&path).unwrap_err().to_string();
+        assert!(
+            err.contains("[profile.a.profile.x], [profile.b.profile.y]"),
+            "{err}"
+        );
+        assert!(err.contains("[profile.x], [profile.y]"), "{err}");
     }
 
     #[test]

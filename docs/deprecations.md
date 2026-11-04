@@ -5,7 +5,10 @@ Scratchsmith keeps the version 1.0 contract in
 Nothing on that contract disappears without notice. This page lists everything on the way out,
 and what you write instead.
 
-This page has three lists, because three different things change in a major version.
+This page has one list for each kind of change. Three kinds change only in a major version:
+deprecated input shapes, tolerances, and changing defaults. Refused input is a fourth kind,
+because a minor release can refuse input that is the attack itself. The last list, Removed in
+2.0.0, shows what version 2.0.0 now rejects, after its deprecation cycle ended.
 
 A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.
