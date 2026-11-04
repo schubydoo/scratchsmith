@@ -116,29 +116,33 @@ impl Config {
             .with_context(|| format!("reading config {}", path.display()))?;
         let cfg: Config =
             toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
-        cfg.warn_about_nested_profiles(path);
+        cfg.reject_nested_profiles(path)?;
         Ok(cfg)
     }
 
     /// `[profile.a.profile.b]` parses, because a profile has the same shape as the base config,
-    /// and then `layer` drops it. No `--profile` value can name it, so the keys inside never
-    /// apply. Warn rather than reject: rejecting a file that packs today is a tightening, which
-    /// `COMPATIBILITY.md` makes major-only. 2.0 rejects it.
-    fn warn_about_nested_profiles(&self, path: &Path) {
-        let mut names: Vec<&str> = self
+    /// but no `--profile` value can reach it. Reject it rather than drop its keys silently.
+    fn reject_nested_profiles(&self, path: &Path) -> Result<()> {
+        let mut nested: Vec<(&str, Vec<&str>)> = self
             .profile
             .iter()
-            .filter(|(_, nested)| !nested.profile.is_empty())
-            .map(|(name, _)| name.as_str())
+            .filter(|(_, p)| !p.profile.is_empty())
+            .map(|(name, p)| {
+                let mut inner: Vec<&str> = p.profile.keys().map(String::as_str).collect();
+                inner.sort();
+                (name.as_str(), inner)
+            })
             .collect();
-        names.sort();
-        for name in names {
-            eprintln!(
-                "warning: a nested profile is deprecated; {} defines one under [profile.{name}], and scratchsmith ignores it. Move it to a top-level [profile.<name>] table. scratchsmith 2.0 rejects it. See {}",
-                path.display(),
-                crate::image::DEPRECATIONS_URL
-            );
-        }
+        nested.sort();
+        let Some((name, inner)) = nested.first() else {
+            return Ok(());
+        };
+        let inner = inner[0];
+        bail!(
+            "{}: [profile.{name}.profile.{inner}] is not allowed: profiles cannot nest. \
+             Move it to a top-level [profile.{inner}] table and repeat the keys it relied on",
+            path.display()
+        )
     }
 
     /// Layer the named profile over this base config and return the result. Unknown name is a
@@ -309,6 +313,23 @@ mod tests {
     fn missing_file_is_a_clear_error() {
         let err = Config::load(Path::new("/nonexistent/scratchsmith.toml")).unwrap_err();
         assert!(err.to_string().contains("reading config"));
+    }
+
+    #[test]
+    fn a_nested_profile_is_rejected_with_the_fix() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scratchsmith.toml");
+        std::fs::write(
+            &path,
+            "[profile.release]\nstrip = true\n\n[profile.release.profile.signed]\nsign = true\n",
+        )
+        .unwrap();
+        let err = Config::load(&path).unwrap_err().to_string();
+        assert!(err.contains("[profile.release.profile.signed]"), "{err}");
+        assert!(err.contains("top-level [profile.signed]"), "{err}");
+        // A flat file still loads.
+        std::fs::write(&path, "[profile.release]\nstrip = true\n").unwrap();
+        assert!(Config::load(&path).is_ok());
     }
 
     #[test]

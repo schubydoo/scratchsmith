@@ -24,7 +24,6 @@ change, and the exit code stays the same.
 |---|---|---|---|
 | `--label NAME` with no `=` | 1.5.0 | 2.0.0 | `--label NAME=value` |
 | `--env NAME` with no `=` | 1.5.0 | 2.0.0 | `--env NAME=value` |
-| A nested `[profile.a.profile.b]` table | 1.5.0 | 2.0.0 | A top-level `[profile.b]` table |
 
 ### A label or an environment variable with no equals sign
 
@@ -49,38 +48,6 @@ $ scratchsmith pack --label build=ci --env LOG_LEVEL=info ./myapp
 ```
 
 To set an empty value on purpose, write the `=` and stop there: `--label build=`.
-
-### A nested profile table
-
-A profile is a `[profile.<name>]` table that layers over the base configuration. A profile can
-itself contain a `[profile.<name>]` table, because a profile has the same shape as the base
-configuration. Scratchsmith parses `[profile.a.profile.b]` and then drops it. No `--profile`
-value reaches it, so the keys inside it never apply.
-
-Move the inner table up to the top level:
-
-Before. The keys under `profile.release.profile.signed` never apply:
-
-```toml
-[profile.release]
-sign = true
-
-[profile.release.profile.signed]
-push = "ghcr.io/me/app:latest"
-```
-
-After. `--profile signed` now reaches them:
-
-```toml
-[profile.release]
-sign = true
-
-[profile.signed]
-sign = true
-push = "ghcr.io/me/app:latest"
-```
-
-Profiles do not inherit from each other, so repeat the keys the inner table relied on.
 
 ## Refused without a deprecation cycle
 
@@ -261,3 +228,9 @@ $ scratchsmith pack --sbom --packages report ./app
 
 In `scratchsmith.toml`, write `packages = ["report"]`. To take the 2.0 default now, set
 `--packages report,sbom`.
+
+## Removed in 2.0.0
+
+| Input | Deprecated in | Now | Write this instead |
+|---|---|---|---|
+| A nested `[profile.a.profile.b]` table | 1.5.0 | An error. `pack` exits `1` | A top-level `[profile.b]` table, with the keys it relied on repeated |
