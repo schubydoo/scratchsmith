@@ -685,7 +685,7 @@ fn assert_bare_flag_refused(flag: &str, value: &str, kind: &str) {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(2), "got: {stderr}");
     assert!(
-        stderr.contains(&format!("a {kind} needs the form `NAME=value`"))
+        stderr.contains(&format!("{kind} needs the form `NAME=value`"))
             && stderr.contains(&format!("`{value}` has no `=`")),
         "usage error should name the NAME=value form: {stderr}"
     );
@@ -694,12 +694,12 @@ fn assert_bare_flag_refused(flag: &str, value: &str, kind: &str) {
 
 #[test]
 fn a_label_without_an_equals_sign_is_a_usage_error() {
-    assert_bare_flag_refused("--label", "build", "label");
+    assert_bare_flag_refused("--label", "build", "a label");
 }
 
 #[test]
 fn an_env_entry_without_an_equals_sign_is_a_usage_error() {
-    assert_bare_flag_refused("--env", "LOG_LEVEL", "env entry");
+    assert_bare_flag_refused("--env", "LOG_LEVEL", "an env entry");
 }
 
 #[test]
@@ -709,8 +709,8 @@ fn a_bare_label_or_env_in_the_config_file_is_refused() {
         return;
     };
     for (key, value, kind) in [
-        ("label", "build", "label"),
-        ("env", "LOG_LEVEL", "env entry"),
+        ("label", "build", "a label"),
+        ("env", "LOG_LEVEL", "an env entry"),
     ] {
         let tmp = tempfile::tempdir().unwrap();
         let cfg = tmp.path().join("scratchsmith.toml");
@@ -727,7 +727,7 @@ fn a_bare_label_or_env_in_the_config_file_is_refused() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{key} should be refused: {stderr}");
         assert!(
-            stderr.contains(&format!("a {kind} needs the form `NAME=value`"))
+            stderr.contains(&format!("{kind} needs the form `NAME=value`"))
                 && stderr.contains(&format!("`{value}` has no `=`")),
             "config error should name the NAME=value form: {stderr}"
         );
@@ -737,7 +737,7 @@ fn a_bare_label_or_env_in_the_config_file_is_refused() {
 
 #[test]
 fn a_label_with_an_equals_sign_still_packs() {
-    // The warning must not fire on the shape we are steering people towards, including the
+    // The refusal must not fire on the shape we are steering people towards, including the
     // deliberate empty value `build=`.
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");

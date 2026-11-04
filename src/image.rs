@@ -427,10 +427,10 @@ fn image_config(default_entrypoint: &Path, diff_id: &str, cfg: &ImageConfig) -> 
     })
 }
 
-/// The error for a `--label` or `--env` entry with no `=`. `kind` is `label` or `env entry`.
+/// The error for a `--label` or `--env` entry with no `=`. `kind` is `a label` or `an env entry`.
 fn bare_entry_error(kind: &str, entry: &str) -> String {
     format!(
-        "a {kind} needs the form `NAME=value`, but `{entry}` has no `=`. \
+        "{kind} needs the form `NAME=value`, but `{entry}` has no `=`. \
          Write `{entry}=<value>`, or `{entry}=` for an empty value"
     )
 }
@@ -440,7 +440,7 @@ pub fn label_pair(s: &str) -> Result<String, String> {
     if s.contains('=') {
         Ok(s.to_string())
     } else {
-        Err(bare_entry_error("label", s))
+        Err(bare_entry_error("a label", s))
     }
 }
 
@@ -449,7 +449,7 @@ pub fn env_pair(s: &str) -> Result<String, String> {
     if s.contains('=') {
         Ok(s.to_string())
     } else {
-        Err(bare_entry_error("env entry", s))
+        Err(bare_entry_error("an env entry", s))
     }
 }
 
@@ -459,10 +459,10 @@ pub fn env_pair(s: &str) -> Result<String, String> {
 /// keys in `scratchsmith.toml`, and runs before staging so no sink does work first.
 pub fn require_pairs(cfg: &ImageConfig) -> anyhow::Result<()> {
     if let Some(e) = cfg.labels.iter().find(|e| !e.contains('=')) {
-        anyhow::bail!(bare_entry_error("label", e));
+        anyhow::bail!(bare_entry_error("a label", e));
     }
     if let Some(e) = cfg.env.iter().find(|e| !e.contains('=')) {
-        anyhow::bail!(bare_entry_error("env entry", e));
+        anyhow::bail!(bare_entry_error("an env entry", e));
     }
     Ok(())
 }
