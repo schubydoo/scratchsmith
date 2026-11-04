@@ -666,11 +666,8 @@ fn config_smoke_with_no_build_fails_loud() {
     );
 }
 
-#[test]
-fn a_label_without_an_equals_sign_warns_but_still_packs() {
-    // The deprecation contract: the old shape keeps working, the warning goes to stderr, and
-    // the exit code does not move. Run through the CLI because the warning is an eprintln!,
-    // not a report field. The OCI-archive sink needs no Docker.
+/// Run `pack` with a bare label or env flag and assert the usage error (clap, exit 2).
+fn assert_bare_flag_refused(flag: &str, value: &str, kind: &str) {
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");
         return;
@@ -679,49 +676,67 @@ fn a_label_without_an_equals_sign_warns_but_still_packs() {
     let archive = tmp.path().join("img.tar");
     let out = run(&[
         "pack",
-        "--label",
-        "build",
+        flag,
+        value,
         "--oci-archive",
         archive.to_str().unwrap(),
         bin,
     ]);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "pack should still succeed: {stderr}");
-    assert!(archive.exists(), "archive not written");
+    assert_eq!(out.status.code(), Some(2), "got: {stderr}");
     assert!(
-        stderr.contains("a label with no `=` is deprecated")
-            && stderr.contains("`build` lands with an empty value"),
-        "label deprecation warning missing from stderr: {stderr}"
+        stderr.contains(&format!("a {kind} needs the form `NAME=value`"))
+            && stderr.contains(&format!("`{value}` has no `=`")),
+        "usage error should name the NAME=value form: {stderr}"
     );
+    assert!(!archive.exists(), "nothing should be packed");
 }
 
 #[test]
-fn an_env_entry_without_an_equals_sign_warns_but_still_packs() {
+fn a_label_without_an_equals_sign_is_a_usage_error() {
+    assert_bare_flag_refused("--label", "build", "label");
+}
+
+#[test]
+fn an_env_entry_without_an_equals_sign_is_a_usage_error() {
+    assert_bare_flag_refused("--env", "LOG_LEVEL", "env entry");
+}
+
+#[test]
+fn a_bare_label_or_env_in_the_config_file_is_refused() {
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");
         return;
     };
-    let tmp = tempfile::tempdir().unwrap();
-    let archive = tmp.path().join("img.tar");
-    let out = run(&[
-        "pack",
-        "--env",
-        "LOG_LEVEL",
-        "--oci-archive",
-        archive.to_str().unwrap(),
-        bin,
-    ]);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "pack should still succeed: {stderr}");
-    assert!(
-        stderr.contains("an env entry with no `=` is deprecated")
-            && stderr.contains("`LOG_LEVEL` is not KEY=VALUE"),
-        "env deprecation warning missing from stderr: {stderr}"
-    );
+    for (key, value, kind) in [
+        ("label", "build", "label"),
+        ("env", "LOG_LEVEL", "env entry"),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("scratchsmith.toml");
+        std::fs::write(&cfg, format!("binary = \"{bin}\"\n{key} = [\"{value}\"]\n")).unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        let out = run(&[
+            "pack",
+            "--config",
+            cfg.to_str().unwrap(),
+            "--no-build",
+            "-o",
+            rootfs.to_str().unwrap(),
+        ]);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{key} should be refused: {stderr}");
+        assert!(
+            stderr.contains(&format!("a {kind} needs the form `NAME=value`"))
+                && stderr.contains(&format!("`{value}` has no `=`")),
+            "config error should name the NAME=value form: {stderr}"
+        );
+        assert!(!rootfs.exists(), "nothing should be staged");
+    }
 }
 
 #[test]
-fn a_label_with_an_equals_sign_is_quiet() {
+fn a_label_with_an_equals_sign_still_packs() {
     // The warning must not fire on the shape we are steering people towards, including the
     // deliberate empty value `build=`.
     let Some(bin) = small_fixture() else {
@@ -745,8 +760,8 @@ fn a_label_with_an_equals_sign_is_quiet() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "pack should succeed: {stderr}");
     assert!(
-        !stderr.contains("is deprecated"),
-        "a well-formed pair must not warn: {stderr}"
+        !stderr.contains("needs the form"),
+        "a well-formed pair must not be refused: {stderr}"
     );
 }
 
@@ -783,47 +798,6 @@ fn a_nested_profile_fails_the_pack() {
         "error should name the table and the fix: {stderr}"
     );
     assert!(!rootfs.exists(), "nothing should be staged");
-}
-
-#[test]
-fn a_bare_label_warns_on_the_rootfs_sink_too() {
-    // The rootfs sink builds no image, so an earlier placement inside the image path missed it
-    // entirely. `--label` carries no conflicts_with for --no-build, so this invocation is valid
-    // and the user is exactly the one 2.0 would break without notice.
-    let Some(bin) = small_fixture() else {
-        skip_required("no id binary to pack");
-        return;
-    };
-    let tmp = tempfile::tempdir().unwrap();
-    let rootfs = tmp.path().join("rootfs");
-    let out = run(&[
-        "pack",
-        "--label",
-        "build",
-        "--label",
-        "build",
-        "--env",
-        "PATH",
-        "--no-build",
-        "-o",
-        rootfs.to_str().unwrap(),
-        bin,
-    ]);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "pack should still succeed: {stderr}");
-    assert!(
-        stderr.matches("`build` lands with an empty value").count() == 1,
-        "a repeated entry must warn exactly once: {stderr}"
-    );
-    assert!(
-        stderr.contains("replaces the image's default PATH"),
-        "a bare PATH must say what it replaces: {stderr}"
-    );
-    // The `latest/` segment is the whole point: mike versions the site, so the bare path 404s.
-    assert!(
-        stderr.contains("https://schubydoo.github.io/scratchsmith/latest/deprecations/"),
-        "the warning must point at the versioned Deprecations page: {stderr}"
-    );
 }
 
 #[test]
