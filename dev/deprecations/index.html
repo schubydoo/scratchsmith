@@ -518,17 +518,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#a-nested-profile-table" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        A nested profile table
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -681,6 +670,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#removed-in-200" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed in 2.0.0
+      
+    </span>
+  </a>
   
 </li>
       
@@ -903,17 +903,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#a-nested-profile-table" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        A nested profile table
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -1069,6 +1058,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#removed-in-200" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed in 2.0.0
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1094,7 +1094,10 @@
 <a href="https://github.com/schubydoo/scratchsmith/blob/main/COMPATIBILITY.md">COMPATIBILITY.md</a>.
 Nothing on that contract disappears without notice. This page lists everything on the way out,
 and what you write instead.</p>
-<p>This page has three lists, because three different things change in a major version.</p>
+<p>This page has one list for each kind of change. Three kinds change only in a major version:
+deprecated input shapes, tolerances, and changing defaults. Refused input is a fourth kind,
+because a minor release can refuse input that is the attack itself. The last list, Removed in
+2.0.0, shows what version 2.0.0 now rejects, after its deprecation cycle ended.</p>
 <p>A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.</p>
 <p>A tolerance is different. Scratchsmith accepts input today that it cannot use in full, and the
@@ -1126,12 +1129,6 @@ change, and the exit code stays the same.</p>
 <td>2.0.0</td>
 <td><code>--env NAME=value</code></td>
 </tr>
-<tr>
-<td>A nested <code>[profile.a.profile.b]</code> table</td>
-<td>1.5.0</td>
-<td>2.0.0</td>
-<td>A top-level <code>[profile.b]</code> table</td>
-</tr>
 </tbody>
 </table>
 <h3 id="a-label-or-an-environment-variable-with-no-equals-sign">A label or an environment variable with no equals sign<a class="headerlink" href="#a-label-or-an-environment-variable-with-no-equals-sign" title="Permanent link">&para;</a></h3>
@@ -1149,28 +1146,6 @@ strings.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--label<span class="w"> </span><span class="nv">build</span><span class="o">=</span>ci<span class="w"> </span>--env<span class="w"> </span><span class="nv">LOG_LEVEL</span><span class="o">=</span>info<span class="w"> </span>./myapp
 </code></pre></div>
 <p>To set an empty value on purpose, write the <code>=</code> and stop there: <code>--label build=</code>.</p>
-<h3 id="a-nested-profile-table">A nested profile table<a class="headerlink" href="#a-nested-profile-table" title="Permanent link">&para;</a></h3>
-<p>A profile is a <code>[profile.&lt;name&gt;]</code> table that layers over the base configuration. A profile can
-itself contain a <code>[profile.&lt;name&gt;]</code> table, because a profile has the same shape as the base
-configuration. Scratchsmith parses <code>[profile.a.profile.b]</code> and then drops it. No <code>--profile</code>
-value reaches it, so the keys inside it never apply.</p>
-<p>Move the inner table up to the top level:</p>
-<p>Before. The keys under <code>profile.release.profile.signed</code> never apply:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">[profile.release]</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="k">[profile.release.profile.signed]</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/me/app:latest"</span>
-</code></pre></div>
-<p>After. <code>--profile signed</code> now reaches them:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">[profile.release]</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="k">[profile.signed]</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/me/app:latest"</span>
-</code></pre></div>
-<p>Profiles do not inherit from each other, so repeat the keys the inner table relied on.</p>
 <h2 id="refused-without-a-deprecation-cycle">Refused without a deprecation cycle<a class="headerlink" href="#refused-without-a-deprecation-cycle" title="Permanent link">&para;</a></h2>
 <p>Some input was the attack itself. COMPATIBILITY.md allows a minor or patch release to refuse
 such input with no deprecation cycle, and this section lists each case.</p>
@@ -1271,7 +1246,7 @@ such as <code>/opt/app/lib/$PLATFORM</code> becomes <code>/opt/app/lib/</code>, 
 library with the same name in that directory then ships in place of the correct one.</p>
 <p>The warning names the file that holds the search path. When you link that file, write the
 directory name in the search path and do not use the token:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-Wl,-rpath,/opt/app/lib/riscv64<span class="w"> </span>-o<span class="w"> </span>myapp<span class="w"> </span>main.c
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-Wl,-rpath,/opt/app/lib/riscv64<span class="w"> </span>-o<span class="w"> </span>myapp<span class="w"> </span>main.c
 </code></pre></div>
 <h3 id="a-library-found-only-through-an-inherited-rpath">A library found only through an inherited <code>RPATH</code><a class="headerlink" href="#a-library-found-only-through-an-inherited-rpath" title="Permanent link">&para;</a></h3>
 <p>A binary can list directories where the loader looks for its libraries. There are two kinds of
@@ -1288,7 +1263,7 @@ hosts the loader finds no copy at all, and the program does not start there. The
 still run, because the loader cache in the image knows where the file is. Scratchsmith 2.0
 reports the library as missing.</p>
 <p>To fix it, link the library that needs the file with a <code>RUNPATH</code> that holds the directory:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-shared<span class="w"> </span>-fPIC<span class="w"> </span>-Wl,--enable-new-dtags<span class="w"> </span>-Wl,-rpath,/opt/app/lib<span class="w"> </span>-o<span class="w"> </span>libmid.so<span class="w"> </span>mid.c<span class="w"> </span>-lleaf
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-shared<span class="w"> </span>-fPIC<span class="w"> </span>-Wl,--enable-new-dtags<span class="w"> </span>-Wl,-rpath,/opt/app/lib<span class="w"> </span>-o<span class="w"> </span>libmid.so<span class="w"> </span>mid.c<span class="w"> </span>-lleaf
 </code></pre></div>
 <h3 id="an-output-directory-that-is-not-empty">An output directory that is not empty<a class="headerlink" href="#an-output-directory-that-is-not-empty" title="Permanent link">&para;</a></h3>
 <p><code>pack --no-build --output &lt;dir&gt;</code> stages the files of the image into a directory and builds no
@@ -1306,8 +1281,8 @@ own stages no records and removes none, because nothing reads the tree.</p>
 in the directory, so the pack ends with an error.</p>
 <p>Scratchsmith 2.0 refuses a directory that is not empty. Give each pack a new directory, or
 remove the old one first:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="gp">$ </span>rm<span class="w"> </span>-rf<span class="w"> </span>./rootfs
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>./rootfs<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="gp">$ </span>rm<span class="w"> </span>-rf<span class="w"> </span>./rootfs
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>./rootfs<span class="w"> </span>./app
 </code></pre></div>
 <h2 id="defaults-changing-in-20">Defaults changing in 2.0<a class="headerlink" href="#defaults-changing-in-20" title="Permanent link">&para;</a></h2>
 <table>
@@ -1344,10 +1319,29 @@ command line and no <code>packages</code> key in <code>scratchsmith.toml</code>.
 as no value, because 2.0 gives it the new default too. Any value that names an output stops the
 warning.</p>
 <p>To keep today's result, set the value:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--packages<span class="w"> </span>report<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--packages<span class="w"> </span>report<span class="w"> </span>./app
 </code></pre></div>
 <p>In <code>scratchsmith.toml</code>, write <code>packages = ["report"]</code>. To take the 2.0 default now, set
 <code>--packages report,sbom</code>.</p>
+<h2 id="removed-in-200">Removed in 2.0.0<a class="headerlink" href="#removed-in-200" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Warned since</th>
+<th>Now</th>
+<th>Write this instead</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A nested <code>[profile.a.profile.b]</code> table</td>
+<td>1.5.0</td>
+<td>An error. <code>pack</code> exits <code>1</code></td>
+<td>A top-level <code>[profile.b]</code> table, with the keys it relied on repeated</td>
+</tr>
+</tbody>
+</table>
 
 
 
