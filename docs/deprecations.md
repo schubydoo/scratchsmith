@@ -234,6 +234,6 @@ In `scratchsmith.toml`, write `packages = ["report"]`. To take the 2.0 default n
 
 ## Removed in 2.0.0
 
-| Input | Deprecated in | Now | Write this instead |
+| Input | Warned since | Now | Write this instead |
 |---|---|---|---|
 | A nested `[profile.a.profile.b]` table | 1.5.0 | An error. `pack` exits `1` | A top-level `[profile.b]` table, with the keys it relied on repeated |
