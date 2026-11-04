@@ -751,9 +751,8 @@ fn a_label_with_an_equals_sign_is_quiet() {
 }
 
 #[test]
-fn a_nested_profile_warns_but_still_packs() {
-    // [profile.a.profile.b] parses and is then dropped, so the keys inside never apply.
-    // Warn, keep packing, leave the exit code alone.
+fn a_nested_profile_fails_the_pack() {
+    // [profile.a.profile.b] could never be reached by --profile. 2.0 rejects it and names the fix.
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");
         return;
@@ -777,12 +776,13 @@ fn a_nested_profile_warns_but_still_packs() {
         rootfs.to_str().unwrap(),
     ]);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "pack should still succeed: {stderr}");
+    assert!(!out.status.success(), "pack should fail: {stderr}");
     assert!(
-        stderr.contains("a nested profile is deprecated")
-            && stderr.contains("under [profile.release]"),
-        "nested-profile warning missing from stderr: {stderr}"
+        stderr.contains("[profile.release.profile.signed]")
+            && stderr.contains("top-level [profile.signed]"),
+        "error should name the table and the fix: {stderr}"
     );
+    assert!(!rootfs.exists(), "nothing should be staged");
 }
 
 #[test]

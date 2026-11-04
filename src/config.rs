@@ -116,29 +116,44 @@ impl Config {
             .with_context(|| format!("reading config {}", path.display()))?;
         let cfg: Config =
             toml::from_str(&text).with_context(|| format!("parsing config {}", path.display()))?;
-        cfg.warn_about_nested_profiles(path);
+        cfg.reject_nested_profiles(path)?;
         Ok(cfg)
     }
 
     /// `[profile.a.profile.b]` parses, because a profile has the same shape as the base config,
-    /// and then `layer` drops it. No `--profile` value can name it, so the keys inside never
-    /// apply. Warn rather than reject: rejecting a file that packs today is a tightening, which
-    /// `COMPATIBILITY.md` makes major-only. 2.0 rejects it.
-    fn warn_about_nested_profiles(&self, path: &Path) {
-        let mut names: Vec<&str> = self
+    /// but no `--profile` value can reach it. Reject it rather than drop its keys silently.
+    fn reject_nested_profiles(&self, path: &Path) -> Result<()> {
+        let mut nested: Vec<(&str, Vec<&str>)> = self
             .profile
             .iter()
-            .filter(|(_, nested)| !nested.profile.is_empty())
-            .map(|(name, _)| name.as_str())
+            .filter(|(_, p)| !p.profile.is_empty())
+            .map(|(name, p)| {
+                let mut inner: Vec<&str> = p.profile.keys().map(String::as_str).collect();
+                inner.sort();
+                (name.as_str(), inner)
+            })
             .collect();
-        names.sort();
-        for name in names {
-            eprintln!(
-                "warning: a nested profile is deprecated; {} defines one under [profile.{name}], and scratchsmith ignores it. Move it to a top-level [profile.<name>] table. scratchsmith 2.0 rejects it. See {}",
-                path.display(),
-                crate::image::DEPRECATIONS_URL
-            );
+        if nested.is_empty() {
+            return Ok(());
         }
+        nested.sort();
+        // Name every nested table, so one edit fixes the whole file.
+        let pairs = || {
+            nested
+                .iter()
+                .flat_map(|(o, inner)| inner.iter().map(move |i| (*o, *i)))
+        };
+        let found: Vec<String> = pairs()
+            .map(|(o, i)| format!("[profile.{o}.profile.{i}]"))
+            .collect();
+        let fixes: Vec<String> = pairs().map(|(_, i)| format!("[profile.{i}]")).collect();
+        bail!(
+            "{}: {} not allowed: profiles cannot nest. Move it to a top-level {} table \
+             and repeat the keys it relied on",
+            path.display(),
+            found.join(", "),
+            fixes.join(", ")
+        )
     }
 
     /// Layer the named profile over this base config and return the result. Unknown name is a
@@ -309,6 +324,40 @@ mod tests {
     fn missing_file_is_a_clear_error() {
         let err = Config::load(Path::new("/nonexistent/scratchsmith.toml")).unwrap_err();
         assert!(err.to_string().contains("reading config"));
+    }
+
+    #[test]
+    fn a_nested_profile_is_rejected_with_the_fix() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scratchsmith.toml");
+        std::fs::write(
+            &path,
+            "[profile.release]\nstrip = true\n\n[profile.release.profile.signed]\nsign = true\n",
+        )
+        .unwrap();
+        let err = Config::load(&path).unwrap_err().to_string();
+        assert!(err.contains("[profile.release.profile.signed]"), "{err}");
+        assert!(err.contains("top-level [profile.signed]"), "{err}");
+        // A flat file still loads.
+        std::fs::write(&path, "[profile.release]\nstrip = true\n").unwrap();
+        assert!(Config::load(&path).is_ok());
+    }
+
+    #[test]
+    fn every_nested_profile_is_named_in_one_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scratchsmith.toml");
+        std::fs::write(
+            &path,
+            "[profile.b.profile.y]\nstrip = true\n\n[profile.a.profile.x]\nsign = true\n",
+        )
+        .unwrap();
+        let err = Config::load(&path).unwrap_err().to_string();
+        assert!(
+            err.contains("[profile.a.profile.x], [profile.b.profile.y]"),
+            "{err}"
+        );
+        assert!(err.contains("[profile.x], [profile.y]"), "{err}");
     }
 
     #[test]
