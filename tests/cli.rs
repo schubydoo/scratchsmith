@@ -1212,6 +1212,70 @@ esac
 }
 
 #[test]
+fn an_rpm_without_exportdb_still_names_the_owners_for_the_default() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    // rpm 4.11 (CentOS 7, Amazon Linux 2) answers every `rpm -qf`, and its `rpmdb` has no
+    // `--exportdb`. PATH holds only these fakes, so no dpkg-query answers first.
+    let tmp = tempfile::tempdir().unwrap();
+    let db = tmp.path().join("db");
+    std::fs::create_dir_all(&db).unwrap();
+    // Only the fakes' own directory goes on PATH: the PATH `fake_tools` returns adds the host's.
+    fake_tools(
+        tmp.path(),
+        &[
+            (
+                "rpm",
+                r#"case "$*" in
+  "--eval %{_dbpath}") echo "$FAKE_DB" ;;
+  *"--whatprovides rpm") echo rpm ;;
+  "-qf "*) printf 'a\t0\t1\t1\tx\ta-1-1.src.rpm\n' ;;
+  *) echo "package $* is not installed"; exit 1 ;;
+esac"#,
+            ),
+            ("rpmdb", r#"echo "rpmdb: $1: unknown option" >&2; exit 1"#),
+            ("syft", FAKE_SYFT),
+        ],
+    );
+    let tools = tmp.path().join("tools");
+    let pack = |name: &str, extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["pack", "--no-build", "--format", "json", "--sbom", "-o"])
+            .arg(tmp.path().join(name))
+            .args(["--sbom-file"])
+            .arg(tmp.path().join(format!("{name}.json")))
+            .args(extra)
+            .arg(bin)
+            .env("PATH", &tools)
+            .env("FAKE_DB", &db)
+            .output()
+            .unwrap()
+    };
+
+    // The default `sbom` cannot get its records, so it goes without them, quietly, and the
+    // report still names the owner.
+    let out = pack("default", &[]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "the pack: {stderr}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(report["packages"][0]["name"], "a", "report: {stdout}");
+    assert_eq!(
+        report["warnings"],
+        serde_json::json!([]),
+        "report: {stdout}"
+    );
+
+    // An `sbom` the user named still fails: an SBOM without the records was not asked for.
+    let out = pack("named", &["--packages", "report,sbom"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a named sbom must fail here");
+    assert!(stderr.contains("--exportdb"), "{stderr}");
+}
+
+#[test]
 fn a_default_text_pack_runs_no_package_lookup() {
     use std::os::unix::fs::PermissionsExt;
     let Some(bin) = small_fixture() else {
@@ -1554,56 +1618,120 @@ fn dpkg_host() -> bool {
     std::path::Path::new("/var/lib/dpkg/status").exists() && common::tool_available("dpkg-query")
 }
 
+// A fake syft or grype that logs, to `$ASKED`, its name and whether the tree it was given
+// holds package records at that moment. syft also writes an empty SBOM, grype finds nothing.
+const FAKE_RECORD_READER: &str = r#"for a; do case "$a" in
+  dir:*) if [ -n "$(ls -A "${a#dir:}/var/lib/dpkg/status.d" 2>/dev/null)" ]; then seen=records; else seen=bare; fi
+         echo "${0##*/} $seen" >> "$ASKED";;
+  *=*) echo '{}' > "${a#*=}";;
+esac; done
+[ "${0##*/}" = grype ] && echo '{"matches":[]}'
+exit 0"#;
+
+// Run `pack --no-build` with fake tools on PATH, and return (stdout, stdout and stderr, what
+// the fakes logged). The pack must succeed. Report warnings go to stdout, notices to stderr.
+fn pack_with_fakes(
+    tmp: &std::path::Path,
+    tools: &std::ffi::OsStr,
+    name: &str,
+    extra: &[&str],
+) -> (String, String, String) {
+    let log = tmp.join(format!("{name}.asked"));
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["pack", "--no-build", "-o"])
+        .arg(tmp.join(name))
+        // Keep any SBOM out of the working directory.
+        .arg("--sbom-file")
+        .arg(tmp.join(format!("{name}.sbom.json")))
+        .args(extra)
+        .arg(small_fixture().unwrap())
+        .env("PATH", tools)
+        .env("ASKED", &log)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{name} {extra:?}: {stderr}");
+    let asked = std::fs::read_to_string(&log).unwrap_or_default();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let said = format!("{stdout}{stderr}");
+    (stdout, said, asked)
+}
+
 #[test]
-fn the_packages_default_warns_where_2_0_adds_sbom() {
-    let Some(bin) = small_fixture() else {
+fn the_packages_default_records_the_report_and_feeds_sbom_and_scan() {
+    if small_fixture().is_none() {
         skip_required("no id binary to pack");
         return;
-    };
-    // The warning only fires on a host with a package database, so it has one to test on.
+    }
     if !dpkg_host() {
         common::skip_optional("no dpkg database on this host");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
-    let tools = fake_tools(tmp.path(), &[("syft", FAKE_SYFT)]);
+    let tools = fake_tools(
+        tmp.path(),
+        &[("syft", FAKE_RECORD_READER), ("grype", FAKE_RECORD_READER)],
+    );
     let cfg = tmp.path().join("scratchsmith.toml");
     std::fs::write(&cfg, "packages = [\"report\"]\n").unwrap();
-    let notice = "changes the default --packages";
-    let pack = |name: &str, extra: &[&str]| {
-        let sbom = tmp.path().join(format!("{name}.json"));
-        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
-            .args(["pack", "--no-build", "-o"])
-            .arg(tmp.path().join(name))
-            .args(["--sbom-file", sbom.to_str().unwrap()])
-            .args(extra)
-            .arg(bin)
-            .env("PATH", &tools)
-            .output()
-            .unwrap();
-        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-        assert!(
-            out.status.success(),
-            "{name}: the warning must not fail the pack: {stderr}"
-        );
-        stderr
-    };
+    let pack = |name: &str, extra: &[&str]| pack_with_fakes(tmp.path(), &tools, name, extra);
 
-    // The default selection with a reader on: 2.0 changes what syft sees, so say it once.
-    let stderr = pack("default", &["--sbom"]);
-    assert_eq!(stderr.matches(notice).count(), 1, "{stderr}");
+    // No --packages value: the report names the packages, and syft sees their records.
+    let (stdout, said, asked) = pack("default", &["--format", "json", "--sbom"]);
+    assert_eq!(asked, "syft records\n", "{said}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert!(
-        stderr.contains("--packages report ") && stderr.contains("/latest/deprecations/"),
-        "the warning must name the way to keep today's result and the Deprecations page: {stderr}"
+        report["packages"].as_array().is_some_and(|p| !p.is_empty()),
+        "the default must record the report: {stdout}"
     );
-    // A selection the user named, on the command line or in the config, stays quiet.
-    let stderr = pack("flag", &["--sbom", "--packages", "report"]);
-    assert!(!stderr.contains(notice), "{stderr}");
-    let stderr = pack("config", &["--sbom", "--config", cfg.to_str().unwrap()]);
-    assert!(!stderr.contains(notice), "{stderr}");
-    // Without --sbom or --scan, the 2.0 default changes nothing.
-    let stderr = pack("no-reader", &[]);
-    assert!(!stderr.contains(notice), "{stderr}");
+    // The 1.x notice about this default is gone, and nothing else about --packages is said.
+    assert!(!said.contains("--packages"), "{said}");
+    // The records were in the tree for syft only: `image` was not asked for.
+    assert!(!tmp.path().join("default/var/lib/dpkg").exists());
+    // grype sees them too, with the text report as well.
+    let (_, said, asked) = pack("scan", &["--scan"]);
+    assert_eq!(asked, "grype records\n", "{said}");
+    assert!(!said.contains("--packages"), "{said}");
+
+    // `--packages report` keeps the 1.x result: syft and grype see a bare tree.
+    let (_, _, asked) = pack("flag", &["--sbom", "--packages", "report"]);
+    assert_eq!(asked, "syft bare\n");
+    let (_, _, asked) = pack("flag-scan", &["--scan", "--packages", "report"]);
+    assert_eq!(asked, "grype bare\n");
+    let (_, _, asked) = pack("config", &["--sbom", "--config", cfg.to_str().unwrap()]);
+    assert_eq!(asked, "syft bare\n");
+}
+
+#[test]
+fn the_packages_default_is_quiet_without_a_database_or_a_reader() {
+    if small_fixture().is_none() {
+        skip_required("no id binary to pack");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    // No dpkg and no rpm database, whatever the real host has.
+    let tools = fake_tools(
+        tmp.path(),
+        &[
+            ("dpkg-query", "exit 1"),
+            ("rpm", "exit 1"),
+            ("syft", FAKE_RECORD_READER),
+            ("grype", FAKE_RECORD_READER),
+        ],
+    );
+    let pack = |name: &str, extra: &[&str]| pack_with_fakes(tmp.path(), &tools, name, extra);
+
+    // The default `sbom` has a reader but no database: the pack works and says nothing.
+    let (stdout, said, asked) = pack("no-db", &["--format", "json", "--sbom", "--scan"]);
+    assert!(!said.contains("--packages"), "{said}");
+    assert_eq!(asked, "syft bare\n", "grype reads the SBOM here");
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(report["packages"].is_null(), "{stdout}");
+    // The default `sbom` with neither --sbom nor --scan has no reader, and does not warn.
+    let (_, said, _) = pack("no-reader", &[]);
+    assert!(!said.contains("--packages"), "{said}");
+    let (_, said, _) = pack("no-reader-json", &["--format", "json"]);
+    assert!(!said.contains("--packages"), "{said}");
 }
 
 #[test]
@@ -1752,14 +1880,16 @@ fn the_sbom_names_the_owning_packages_and_the_image_does_not_keep_the_records() 
         (count, rootfs)
     };
 
-    // The default leaves the SBOM as it always was: syft sees a bare tree with no package
-    // database. That is the gap, and closing it is the user's switch to throw, because it
-    // changes what a scan gate sees.
-    let (without, _) = deb_packages("default", &[]);
+    // Without `sbom`, syft sees a bare tree with no package database: `report` alone leaves
+    // the SBOM as `none` does.
+    let (without, _) = deb_packages("report", &["--packages", "report"]);
     let (off, _) = deb_packages("off", &["--packages", "none"]);
-    assert_eq!(without, off, "the default must not change the SBOM");
+    assert_eq!(without, off, "--packages report must not change the SBOM");
+    // The default includes `sbom`, so it names the same packages as `report,sbom`.
+    let (default, _) = deb_packages("default", &[]);
     // With `sbom`: the records are in the tree while syft runs...
     let (with, rootfs) = deb_packages("on", &["--packages", "report,sbom"]);
+    assert_eq!(default, with, "the default must give the report,sbom SBOM");
     assert!(
         with > without,
         "the SBOM must name more Debian packages with the records ({with}) than without ({without})"

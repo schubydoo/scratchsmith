@@ -127,31 +127,29 @@ see them. The host knows which package owns each of those paths. `--packages` re
 | `image` | The package records stay in the image, for any scanner that reads the image |
 | `none` | Nowhere. Scratchsmith looks nothing up. `none` must be the only value |
 
-The default is `report`. The default changes no SBOM, no scan and no image.
-
-Scratchsmith 2.0 changes the default to `report,sbom`. A pack with `--sbom` or `--scan` and no
-`--packages` value prints a warning about it today. To keep the current result, set
-`--packages report`. See [Deprecations](deprecations.md#the-packages-default-adds-sbom).
+The default is `report,sbom`. The default changes no image. Before 2.0 the default was
+`report`. To keep that result, set `--packages report`.
 
 `sbom` needs a reader. If neither `--sbom` nor `--scan` is on, nothing reads the records.
-Scratchsmith then turns that output off, skips its lookup, and prints a warning. The pack does
-not fail.
+Scratchsmith then turns that output off and skips its lookup. If you set `sbom` yourself, the
+pack prints a warning. The default `sbom` goes quietly. The pack does not fail.
 
 The text report does not show the list. So a pack with the text report, and with no `--packages`
-value and no `packages` key, skips the lookup. To run the lookup with the text report, name the
-outputs on the command line or in the configuration file.
+value and no `packages` key, drops the `report` output. It then runs the lookup only for `--sbom`
+or `--scan`. To fill the list with the text report, name the outputs on the command line or in
+the configuration file.
 
 ```sh
 scratchsmith pack --format json ./app | jq .packages       # default: the report
-scratchsmith pack --packages report,sbom --sbom --scan ./app
+scratchsmith pack --sbom --scan ./app                      # default: the SBOM and scan see them
 scratchsmith pack --packages report,sbom,image --push ghcr.io/you/app:1.0 ./app
 scratchsmith pack --packages none ./app                    # look nothing up
 ```
 
 The `sbom` output can make a scan gate fail. With `sbom`, the scan sees packages such as glibc
 and openssl that it did not see before. A pipeline that runs `--scan --scan-fail-on high` can
-pass without `--packages sbom` and fail with it. The vulnerabilities were in the image before.
-The scan did not see them.
+pass with `--packages report` and fail with the default. The vulnerabilities were in the image
+before. The scan did not see them.
 
 ### The report
 
@@ -230,7 +228,8 @@ The records depend on the package manager of the build host:
   affected.
 - The records need an rpm that has `rpmdb --exportdb`. rpm 4.11, on CentOS 7 and Amazon
   Linux 2, does not have it. On those hosts `report` works and the `image` output fails. If
-  `--sbom` or `--scan` is on, the `sbom` output fails too.
+  `--sbom` or `--scan` is on, a `sbom` that you set fails too. The default `sbom` turns off
+  quietly there. The report still names the packages, and the SBOM and the scan see none.
 - If you add a file with `--add-file` at a path that a record needs, the pack fails.
   Scratchsmith does not replace a file that you added.
 
@@ -241,7 +240,7 @@ depends on what you asked for:
 
 | You set | Result on a host with neither database |
 |---|---|
-| Nothing (the default) | `packages` is `null`. No warning |
+| Nothing (the default) | `packages` is `null`, and the SBOM and the scan see no packages. No warning |
 | `--packages report` | `packages` is `null`, with a warning |
 | `--packages` with `image` | The pack fails. Scratchsmith does not ship an image without the data that you asked for |
 | `--packages` with `sbom`, and `--sbom` or `--scan` | The pack fails. Scratchsmith does not ship an SBOM without the data that you asked for |

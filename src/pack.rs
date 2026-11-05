@@ -266,18 +266,21 @@ fn bundled_files(
 // is off, the host has no package database, or the lookup failed.
 //
 // How a host that cannot answer is treated depends on what was asked:
-// - the default selection stays quiet. It is on for every pack with a JSON report, so it must
-//   not turn a pack that worked into one that fails, or nag on a host with neither dpkg nor rpm;
+// - the default selection stays quiet. It is on for every pack with a JSON report, `--sbom` or
+//   `--scan`, so it must not turn a pack that worked into one that fails, or nag on a host with
+//   neither dpkg nor rpm;
 // - an explicit `report` gets a warning, and the report says `null`;
 // - an explicit `sbom` or `image` FAILS. The user asked for an SBOM or an image that
-//   carries the package data, and shipping one without it would look the same from outside.
+//   carries the package data, and shipping one without it would look the same from outside;
+// - a default `sbom` whose records fail (rpm 4.11 has no `rpmdb --exportdb`) is turned off,
+//   and the lookup runs again without records, so the report still names the owners.
 //
 // `manager` is a parameter so each of those is testable on any host. It is a function, so
 // `--packages none` probes nothing: "looks nothing up" includes the probe.
 fn lookup_owners(
     files: &[(PathBuf, PathBuf)],
     conventions: &[(&str, PathBuf)],
-    selection: &PackagesSelection,
+    selection: &mut PackagesSelection,
     manager: impl FnOnce() -> Option<packages::Manager>,
     warnings: &mut Vec<String>,
 ) -> Result<Option<Owners>> {
@@ -292,7 +295,7 @@ fn lookup_owners(
         "sbom"
     };
     let Some(manager) = manager() else {
-        if selection.needs_records() {
+        if selection.requires_records() {
             bail!(
                 "--packages {asked} needs a dpkg or rpm database to name the packages, and \
                  this host has neither. Remove {asked} from --packages to pack without it"
@@ -307,7 +310,18 @@ fn lookup_owners(
         }
         return Ok(None);
     };
-    match packages::owners(manager, files, conventions, selection.needs_records()) {
+    let mut found = packages::owners(manager, files, conventions, selection.needs_records());
+    // Only an explicit selection has `image`, so this is the default `sbom`. Any failure
+    // retries once: one that was not the records' fails again, and warns below.
+    if found.is_err() && selection.sbom && !selection.explicit {
+        selection.sbom = false;
+        // The text report drops a default `report`, so then nothing reads a retry.
+        if !selection.report {
+            return Ok(None);
+        }
+        found = packages::owners(manager, files, conventions, false);
+    }
+    match found {
         Ok(owners) => {
             // Not asked is not the same as not owned, and the two look alike in the list.
             if !owners.unasked.is_empty() {
@@ -326,7 +340,7 @@ fn lookup_owners(
             }
             Ok(Some(owners))
         }
-        Err(err) if selection.needs_records() => {
+        Err(err) if selection.requires_records() => {
             Err(err.context(format!("--packages {asked}: the package lookup failed")))
         }
         Err(err) => {
@@ -339,10 +353,11 @@ fn lookup_owners(
 }
 
 // `--packages sbom` has two readers, syft (`--sbom`) and grype (`--scan`). With neither on,
-// nothing reads the records, so the output is turned off and the pack says so: asking for
-// something and getting nothing must not be quiet. With `sbom` alone that also skips the
-// lookup, whose answer would go nowhere. Not an error: a configuration file can set the
-// output once, for packs that pass `--sbom` only some of the time.
+// nothing reads the records, so the output is turned off. An explicit `sbom` says so: asking
+// for something and getting nothing must not be quiet. The default `sbom` was not asked for,
+// so it goes quietly. With `sbom` alone that also skips the lookup, whose answer would go
+// nowhere. Not an error: a configuration file can set the output once, for packs that pass
+// `--sbom` only some of the time.
 //
 // Only `sbom` is ever cleared here. The report reads `report` alone, so `report_packages`
 // gives the same answer for this selection and for `opts.packages`.
@@ -352,12 +367,14 @@ fn drop_unread_sbom(
     warnings: &mut Vec<String>,
 ) -> PackagesSelection {
     if selection.sbom && !reads_tree {
-        warnings.push(
-            "--packages sbom: neither --sbom nor --scan is on, so nothing reads the package \
-             records and this output does nothing. Add --sbom or --scan, or remove sbom from \
-             --packages"
-                .to_string(),
-        );
+        if selection.explicit {
+            warnings.push(
+                "--packages sbom: neither --sbom nor --scan is on, so nothing reads the package \
+                 records and this output does nothing. Add --sbom or --scan, or remove sbom \
+                 from --packages"
+                    .to_string(),
+            );
+        }
         selection.sbom = false;
     }
     selection
@@ -602,11 +619,11 @@ fn finish_staging(
             Vec::new()
         };
     let reads_tree = opts.sbom.is_some() || opts.scan.is_some();
-    let selection = drop_unread_sbom(opts.packages, reads_tree, warnings);
+    let mut selection = drop_unread_sbom(opts.packages, reads_tree, warnings);
     let found = lookup_owners(
         &bundled,
         &conventions,
-        &selection,
+        &mut selection,
         packages::manager,
         warnings,
     )?;
@@ -664,36 +681,6 @@ pub fn warn_about_a_used_output_dir(out_dir: &Path) {
             crate::image::DEPRECATIONS_URL
         );
     }
-}
-
-/// Warn on stderr that the default `--packages` selection gains `sbom` in 2.0, in the one case
-/// where that changes the result. See `packages_default_notice`.
-pub fn warn_about_the_packages_default(opts: &PackOptions) {
-    let reads_tree = opts.sbom.is_some() || opts.scan.is_some();
-    if let Some(line) = packages_default_notice(&opts.packages, reads_tree, packages::manager) {
-        eprintln!("{line}");
-    }
-}
-
-// The 2.0 default adds `sbom`, so syft and grype start to see the bundled packages. Only a
-// default selection on a pack that runs one of them can change, and only on a host with
-// dpkg or rpm: elsewhere a default selection stays quiet in 2.0 too. `probe` runs last, so
-// a pack without `--sbom` or `--scan` never asks the host.
-fn packages_default_notice(
-    selection: &PackagesSelection,
-    reads_tree: bool,
-    probe: impl FnOnce() -> Option<packages::Manager>,
-) -> Option<String> {
-    (!selection.explicit && reads_tree && probe().is_some()).then(|| {
-        format!(
-            "warning: scratchsmith 2.0 changes the default --packages from `report` to \
-             `report,sbom`, so --sbom and --scan will see the packages that own the bundled \
-             files, and a --scan-fail-on gate can find more. To keep today's result, set \
-             --packages report (or `packages = [\"report\"]` in scratchsmith.toml). To take the \
-             2.0 default now, set --packages report,sbom. See {}",
-            crate::image::DEPRECATIONS_URL
-        )
-    })
 }
 
 /// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
@@ -956,21 +943,25 @@ mod tests {
         // No dpkg and no rpm on this "host", whatever the real one has.
         let lookup = |selection: &PackagesSelection| {
             let mut warnings = Vec::new();
-            let result = lookup_owners(&[], &[], selection, || None, &mut warnings);
+            let result = lookup_owners(&[], &[], &mut selection.clone(), || None, &mut warnings);
             (result, warnings)
         };
 
-        // The default is on for every pack with a JSON report: it must not fail one, or say
-        // anything.
-        let (result, warnings) = lookup(&PackagesSelection::default());
-        assert!(
-            matches!(result, Ok(None)) && warnings.is_empty(),
-            "{warnings:?}"
-        );
+        // The default is on for every pack with a JSON report, `--sbom` or `--scan`: it must
+        // not fail one, or say anything. Its `sbom` output included, on either report.
+        let default = PackagesSelection::default();
+        assert!(default.sbom, "the default must include sbom");
+        for selection in [default, default.for_text_report()] {
+            let (result, warnings) = lookup(&selection);
+            assert!(
+                matches!(result, Ok(None)) && warnings.is_empty(),
+                "{warnings:?}"
+            );
+        }
         // Off is off, down to the probe: `none` must not even ask whether dpkg is there.
         let mut warnings = Vec::new();
         let probe = || -> Option<packages::Manager> { panic!("--packages none probed the host") };
-        let result = lookup_owners(&[], &[], &select(&[Off]), probe, &mut warnings);
+        let result = lookup_owners(&[], &[], &mut select(&[Off]), probe, &mut warnings);
         assert!(matches!(result, Ok(None)) && warnings.is_empty());
         // An explicit report cannot be filled, and says so, and the pack goes on.
         let (result, warnings) = lookup(&select(&[Report]));
@@ -1023,40 +1014,22 @@ mod tests {
         for (selection, reads_tree) in [
             (select(&[Report, Sbom]), true),
             (select(&[Report, Image]), false),
-            (PackagesSelection::default(), false),
+            (PackagesSelection::default(), true),
         ] {
             let (kept, warnings) = drop(selection, reads_tree);
             assert_eq!(kept, selection);
             assert!(warnings.is_empty(), "{warnings:?}");
         }
-    }
 
-    #[test]
-    fn the_packages_default_warns_only_where_2_0_changes_the_result() {
-        use crate::packages::PackagesOutput::Report;
-        let host = || Some(packages::Manager::Dpkg);
+        // The default `sbom` with no reader goes too, but quietly: the user did not ask for it.
         let default = PackagesSelection::default();
-
-        // A default selection, a reader on, a package database on the host: 2.0 changes this.
-        let line = packages_default_notice(&default, true, host).expect("this case must warn");
-        assert!(
-            line.starts_with("warning: ")
-                && line.contains("`report,sbom`")
-                && line.contains("--packages report ")
-                && line.contains(crate::image::DEPRECATIONS_URL),
-            "{line}"
-        );
-        // The text report drops the default `report` output, and the selection stays default.
-        assert!(packages_default_notice(&default.for_text_report(), true, host).is_some());
-
-        // A selection the user named, the same as today's default included, stays quiet.
-        let named = PackagesSelection::from_outputs(&[Report]).unwrap();
-        assert!(packages_default_notice(&named, true, host).is_none());
-        // No dpkg and no rpm: a default selection is quiet in 2.0 too.
-        assert!(packages_default_notice(&default, true, || None).is_none());
-        // Without --sbom or --scan nothing reads the records, and the host is never asked.
-        let never = || -> Option<packages::Manager> { panic!("probed without a reader") };
-        assert!(packages_default_notice(&default, false, never).is_none());
+        assert!(default.sbom, "the default must include sbom");
+        let (kept, warnings) = drop(default, false);
+        assert!(kept.report && !kept.sbom && !kept.explicit);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        // With the text report too, so a default text pack looks nothing up.
+        let (kept, warnings) = drop(default.for_text_report(), false);
+        assert!(!kept.any() && warnings.is_empty(), "{warnings:?}");
     }
 
     fn resolution(sonames: &[&str]) -> resolver::Resolution {

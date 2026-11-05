@@ -36,18 +36,17 @@ pub enum PackagesOutput {
     None,
 }
 
-/// Where the package data goes. Built from `--packages`; the default is the report alone.
+/// Where the package data goes. Built from `--packages`; the default is `report,sbom`.
 ///
-/// The default stops there on purpose. With `sbom`, a scan starts to see the bundled glibc
-/// and openssl, so a `--scan-fail-on` gate that passes today could fail after an upgrade
-/// with nothing changed on the user's side. That is for the user to switch on.
+/// A default output runs only where it has a reader: the text report drops `report`, and a
+/// pack with neither `--sbom` nor `--scan` drops `sbom`. Neither drop warns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PackagesSelection {
     pub report: bool,
     pub sbom: bool,
     pub image: bool,
     /// The user named the outputs. A default selection stays quiet on a host with no dpkg or rpm;
-    /// an explicit one warns, or fails when it asked for records (`needs_records`).
+    /// an explicit one warns, or fails when it asked for records (`requires_records`).
     pub explicit: bool,
 }
 
@@ -55,7 +54,7 @@ impl Default for PackagesSelection {
     fn default() -> Self {
         Self {
             report: true,
-            sbom: false,
+            sbom: true,
             image: false,
             explicit: false,
         }
@@ -96,11 +95,17 @@ impl PackagesSelection {
         self.report || self.sbom || self.image
     }
 
-    /// True when the user asked for records in the SBOM or the image. Only an explicit
-    /// selection can, so a pack that cannot write them fails instead of shipping an SBOM or
-    /// an image that silently lacks what was asked for.
+    /// True when the SBOM or the image output is on, so the lookup builds records.
     pub fn needs_records(&self) -> bool {
         self.sbom || self.image
+    }
+
+    /// True when the user asked for records in the SBOM or the image. Only an explicit
+    /// selection can, so a pack that cannot write them fails instead of shipping an SBOM or
+    /// an image that silently lacks what was asked for. For the default `sbom`, a host that
+    /// cannot name the packages or build their records turns the output off instead.
+    pub fn requires_records(&self) -> bool {
+        self.explicit && self.needs_records()
     }
 }
 
@@ -740,12 +745,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_selection_defaults_to_the_report_alone_and_none_stands_alone() {
+    fn a_selection_defaults_to_report_and_sbom_and_none_stands_alone() {
         let default = PackagesSelection::from_outputs(&[]).unwrap();
-        assert!(default.report && !default.sbom && !default.image && !default.explicit);
+        assert!(default.report && default.sbom && !default.image && !default.explicit);
         assert!(
-            !default.needs_records(),
-            "the default must never have to fail a pack"
+            default.needs_records() && !default.requires_records(),
+            "the default builds records, and a host without them must not fail the pack"
         );
 
         let all = PackagesSelection::from_outputs(&[
@@ -755,7 +760,7 @@ mod tests {
         ])
         .unwrap();
         assert!(all.report && all.sbom && all.image && all.explicit && all.any());
-        assert!(all.needs_records());
+        assert!(all.needs_records() && all.requires_records());
 
         let image = PackagesSelection::from_outputs(&[PackagesOutput::Image]).unwrap();
         assert!(image.image && !image.report && !image.sbom);
@@ -763,8 +768,9 @@ mod tests {
         let none = PackagesSelection::from_outputs(&[PackagesOutput::None]).unwrap();
         assert!(!none.any() && none.explicit);
 
-        // A text report shows no list, so only a selection that the user named survives it.
-        assert!(!default.for_text_report().any());
+        // A text report shows no list, so it drops the default `report` and keeps `sbom`.
+        let text = default.for_text_report();
+        assert!(!text.report && text.sbom && !text.explicit);
         assert_eq!(all.for_text_report(), all);
         let report = PackagesSelection::from_outputs(&[PackagesOutput::Report]).unwrap();
         assert_eq!(report.for_text_report(), report);
