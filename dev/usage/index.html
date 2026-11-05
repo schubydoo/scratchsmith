@@ -1402,10 +1402,12 @@ advisory.</p>
   Linux 2, does not have it. On those hosts <code>report</code> works and the <code>image</code> output fails. If
   <code>--sbom</code> or <code>--scan</code> is on, a <code>sbom</code> that you set fails too. The default <code>sbom</code> turns off
   quietly there. The report still names the packages, and the SBOM and the scan see none.</li>
-<li>If you add a file with <code>--add-file</code> at a path that a record needs, scratchsmith keeps your
-  file and does not replace it. A <code>sbom</code> or <code>image</code> that you set then fails the pack. The
-  default <code>sbom</code> leaves the records out and prints a warning, and the pack goes on. The SBOM
-  and the scan then see no package records.</li>
+<li>If the pack stages a file, a link or a directory at a path that a record needs, scratchsmith
+  keeps it and does not replace or remove it. It can be a file that you add with <code>--add-file</code>.
+  When the host keeps the program or a library at that path, it can be that file too. A
+  <code>sbom</code> or <code>image</code> that you set then fails the pack, and the error says which output to
+  remove. The default <code>sbom</code> leaves the records out and prints a warning, and the pack goes
+  on. The SBOM and the scan then see no package records.</li>
 </ul>
 <h3 id="hosts-with-no-package-database">Hosts with no package database<a class="headerlink" href="#hosts-with-no-package-database" title="Permanent link">&para;</a></h3>
 <p><code>--packages</code> works on a host with a dpkg or an rpm database. What happens on another host

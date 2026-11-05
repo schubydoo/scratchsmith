@@ -1008,8 +1008,13 @@ and what you write instead.</p>
 deprecated input shapes and tolerances. Refused input is a third kind, because a minor release
 can refuse input that is the attack itself. The last list, Removed in 2.0.0, shows what version
 2.0.0 changed after its deprecation cycle ended. Most inputs there now fail, and one gets a new
-default. It also shows three changes in 2.0.0 with no warning first: an exit code, an output
-directory that cannot be listed, and an <code>--include</code> file that is not a regular file.</p>
+default. It also shows four changes in 2.0.0 with no warning first:</p>
+<ul>
+<li>an exit code</li>
+<li>an output directory that cannot be listed</li>
+<li>an <code>--include</code> file that is not a regular file</li>
+<li>a program or a library at a package record path</li>
+</ul>
 <p>A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.</p>
 <p>A tolerance is different. Scratchsmith accepts input today that it cannot use in full, and the
@@ -1140,6 +1145,12 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.<
 <td>1.8.0</td>
 <td>An error. <code>pack</code> and <code>graph</code> exit <code>1</code> and name the file</td>
 <td>Replace the damaged loader with an intact copy</td>
+</tr>
+<tr>
+<td>An explicit <code>sbom</code> or <code>image</code> in <code>--packages</code>, with the program or an <code>--include</code> library at a package record path on the host</td>
+<td>Not warned</td>
+<td>An error. <code>pack</code> exits <code>1</code> and names the path. 1.x exited 0, and the record replaced the file</td>
+<td>Remove <code>sbom</code> and <code>image</code> from <code>--packages</code>, or move the file on the host</td>
 </tr>
 </tbody>
 </table>
