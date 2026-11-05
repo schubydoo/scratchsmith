@@ -23,8 +23,9 @@ scratchsmith pack --no-build --output ./rootfs ./app
 ```
 
 Give `--output` a new directory or an empty one. Scratchsmith does not empty the directory, so
-a pack into a directory that holds an earlier pack merges with it and prints a warning. The
-[Deprecations](deprecations.md#an-output-directory-that-is-not-empty) page has the detail.
+a directory that holds anything is an error, and nothing is staged. A file is an error
+too. A directory that scratchsmith cannot list is an error, because it cannot prove the directory
+is empty. Remove the old directory first, or choose another.
 
 Or write a **daemonless OCI archive** (loadable by skopeo/buildah, and pushable to a registry with
 no Docker daemon):
@@ -213,8 +214,7 @@ The records depend on the package manager of the build host:
 | rpm (Fedora, RHEL and their relatives) | One rpm database that holds only the owning packages, at the host's database path |
 
 - With `sbom`, those files are in the staged tree only while the SBOM and the scan run. The
-  image does not contain them. With `--no-build`, an `/etc/os-release` that is already in the
-  output directory stays there.
+  image does not contain them.
 - With `image`, they stay, and they count toward `--max-size`. Your image then has an
   `/etc/os-release` that names the build host's distribution. If you add your own
   `/etc/os-release` with `--add-file`, scratchsmith keeps yours. An SBOM of that image names
@@ -493,8 +493,7 @@ halfway does not end the watch.
 - `--push`, and a `push` key from the configuration file. A registry is not the place for an
   image from every save.
 - `--no-build`. That sink stages into one directory, and a second pack into the same directory
-  merges with the files from the first. The [Deprecations](deprecations.md#an-output-directory-that-is-not-empty)
-  page has the detail.
+  is an error, because the directory is no longer empty.
 - `--format json`. Each pack prints a text report.
 
 `--watch` is a command-line flag only. It has no key in the configuration file and no input on

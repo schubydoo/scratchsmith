@@ -522,10 +522,6 @@ fn dispatch(cli: Cli) -> Result<()> {
                         .into()
                 ));
             }
-            // A deprecation line like the one above, printed here for the same reasons.
-            if let crate::pack::Sink::Rootfs(dir) = &sink {
-                crate::pack::warn_about_a_used_output_dir(dir);
-            }
             let pack_once = || -> Result<()> {
                 let report = crate::pack::pack(&binary, &opts, sink.clone())?;
                 match format {

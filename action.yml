@@ -26,7 +26,7 @@ inputs:
     required: false
     default: ""
   output:
-    description: If set, stage the rootfs into this directory instead of building an image (`--no-build`).
+    description: If set, stage the rootfs into this directory instead of building an image (`--no-build`). The directory must be new or empty.
     required: false
     default: ""
   user:

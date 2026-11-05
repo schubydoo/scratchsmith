@@ -256,10 +256,15 @@ fn a_bad_locale_name_is_a_usage_error() {
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
-    for (locale, needle) in [("", "must not be empty"), ("a/b", "not a path")] {
+    // A refused pack can leave staged files behind, and `--no-build` refuses a used directory,
+    // so each case gets its own.
+    for (i, (locale, needle)) in [("", "must not be empty"), ("a/b", "not a path")]
+        .into_iter()
+        .enumerate()
+    {
         let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
             .args(["pack", "--no-build", "--packages", "none", "-o"])
-            .arg(tmp.path().join("rootfs"))
+            .arg(tmp.path().join(format!("rootfs-{i}")))
             .args(["--locale", locale, bin])
             .output()
             .unwrap();
@@ -299,24 +304,6 @@ fn a_locale_already_in_the_tree_is_not_a_usage_error() {
         "en_US.UTF-8",
     );
     assert_eq!(code, Some(1), "--add-file into the locale: {stderr}");
-    assert!(stderr.contains("already in the image"), "{stderr}");
-    // A reused --no-build output dir still holds the locale from the first pack.
-    let Some(host) = std::fs::read_dir("/usr/lib/locale")
-        .into_iter()
-        .flatten()
-        .flatten()
-        .find(|e| e.path().is_dir())
-    else {
-        skip_required("no locale directory under /usr/lib/locale");
-        return;
-    };
-    let name = host.file_name();
-    let name = name.to_str().unwrap();
-    let rootfs = tmp.path().join("rootfs-reused");
-    let (code, stderr) = pack(&rootfs, &[], name);
-    assert_eq!(code, Some(0), "first pack: {stderr}");
-    let (code, stderr) = pack(&rootfs, &[], name);
-    assert_eq!(code, Some(1), "second pack into the same dir: {stderr}");
     assert!(stderr.contains("already in the image"), "{stderr}");
 }
 
@@ -1077,49 +1064,156 @@ fn a_nested_profile_fails_the_pack() {
     assert!(!rootfs.exists(), "nothing should be staged");
 }
 
+fn pack_no_build_into(bin: &str, out: &std::path::Path) -> std::process::Output {
+    run(&["pack", "--no-build", "-o", out.to_str().unwrap(), bin])
+}
+
 #[test]
-fn a_second_pack_into_the_same_directory_warns_and_replaces_a_read_only_file() {
+fn a_second_pack_into_the_same_directory_is_refused_before_any_staging() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let rootfs = tmp.path().join("rootfs");
+
+    let first = pack_no_build_into(bin, &rootfs);
+    assert!(
+        first.status.success(),
+        "the first pack: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let count = |d: &std::path::Path| walkdir_count(d);
+    let before = count(&rootfs);
+
+    let second = pack_no_build_into(bin, &rootfs);
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    // A pack failure (1), not a usage error (2): the command line is fine, the directory is not.
+    assert_eq!(
+        second.status.code(),
+        Some(1),
+        "the second pack must fail: {stderr}"
+    );
+    assert!(
+        stderr.contains("is not empty") && stderr.contains("choose another directory"),
+        "the error must name the problem and the fix: {stderr}"
+    );
+    assert_eq!(before, count(&rootfs), "a refused pack must write nothing");
+}
+
+fn walkdir_count(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| {
+            let p = e.unwrap().path();
+            1 + if p.is_dir() && !p.is_symlink() {
+                walkdir_count(&p)
+            } else {
+                0
+            }
+        })
+        .sum()
+}
+
+#[test]
+fn an_empty_or_absent_output_directory_still_works() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let empty = tmp.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    let absent = tmp.path().join("absent");
+    for dir in [&empty, &absent] {
+        let out = pack_no_build_into(bin, dir);
+        assert!(
+            out.status.success(),
+            "{}: {}",
+            dir.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(dir.join("etc").exists() || dir.read_dir().unwrap().next().is_some());
+    }
+}
+
+#[test]
+fn a_symlinked_output_dir_is_judged_by_its_target_and_a_file_is_refused() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    // 1.x followed the link and stayed quiet when the target was empty, so that still packs.
+    let empty = tmp.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    let to_empty = tmp.path().join("to-empty");
+    std::os::unix::fs::symlink(&empty, &to_empty).unwrap();
+    let out = pack_no_build_into(bin, &to_empty);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        empty.join("etc").is_dir(),
+        "the pack stages into the target"
+    );
+
+    let used = tmp.path().join("used");
+    std::fs::create_dir(&used).unwrap();
+    std::fs::write(used.join("old"), b"x").unwrap();
+    let to_used = tmp.path().join("to-used");
+    std::os::unix::fs::symlink(&used, &to_used).unwrap();
+    for out_dir in [
+        to_used.display().to_string(),
+        format!("{}/", to_used.display()),
+    ] {
+        let out = run(&["pack", "--no-build", "-o", &out_dir, bin]);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{out_dir} must be refused");
+        assert!(stderr.contains("is not empty"), "{out_dir}: {stderr}");
+        assert_eq!(
+            used.read_dir().unwrap().count(),
+            1,
+            "nothing may be staged through {out_dir}"
+        );
+    }
+
+    let file = tmp.path().join("file");
+    std::fs::write(&file, b"x").unwrap();
+    let out = pack_no_build_into(bin, &file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a file must be refused");
+    assert!(stderr.contains("not a directory"), "{stderr}");
+}
+
+#[test]
+fn an_output_directory_that_cannot_be_listed_is_refused() {
     use std::os::unix::fs::PermissionsExt;
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");
         return;
     };
-    // A binary with no write bit stages a copy with no write bit, which is the file a second
-    // pack has to replace.
     let tmp = tempfile::tempdir().unwrap();
-    let read_only = tmp.path().join("app");
-    std::fs::copy(bin, &read_only).unwrap();
-    std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o555)).unwrap();
-    let rootfs = tmp.path().join("rootfs");
-    let pack = || {
-        run(&[
-            "pack",
-            "--no-build",
-            "-o",
-            rootfs.to_str().unwrap(),
-            read_only.to_str().unwrap(),
-        ])
-    };
-
-    let first = pack();
-    let stderr = String::from_utf8_lossy(&first.stderr);
-    assert!(first.status.success(), "the first pack: {stderr}");
+    let dir = tmp.path().join("locked");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o300)).unwrap();
+    // Root reads any directory, so the mode proves nothing there.
+    if dir.read_dir().is_ok() {
+        common::skip_optional("this user can list a mode 0300 directory (root)");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let out = pack_no_build_into(bin, &dir);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
     assert!(
-        !stderr.contains("is not empty"),
-        "a new directory must stay quiet: {stderr}"
+        stderr.contains("cannot read the output directory"),
+        "{stderr}"
     );
-
-    let second = pack();
-    let stderr = String::from_utf8_lossy(&second.stderr);
-    assert!(second.status.success(), "the second pack: {stderr}");
-    assert!(
-        stderr.contains("is not empty") && stderr.contains("scratchsmith 2.0 rejects it"),
-        "a directory with an earlier pack in it must warn: {stderr}"
-    );
-    assert!(
-        stderr.contains("https://schubydoo.github.io/scratchsmith/latest/deprecations/"),
-        "the warning must point at the versioned Deprecations page: {stderr}"
-    );
+    assert_eq!(dir.read_dir().unwrap().count(), 0, "nothing may be staged");
 }
 
 #[test]
@@ -1846,11 +1940,6 @@ fn the_report_names_the_packages_that_own_the_bundled_files() {
     // `none` must stand alone. That is a usage error.
     let out = run(&["pack", "--packages", "none,sbom", "-n", "-o", "/tmp/x", bin]);
     assert_eq!(out.status.code(), Some(2));
-
-    // A second pack into the same directory, the shape `--no-build` invites, must not trip
-    // over the records the first one kept.
-    let (_, rootfs) = pack("image", &["--packages", "image"]);
-    assert!(rootfs.join("var/lib/dpkg/status.d").join(name).is_file());
 }
 
 #[test]
@@ -1921,21 +2010,6 @@ fn the_sbom_names_the_owning_packages_and_the_image_does_not_keep_the_records() 
     assert!(
         !rootfs.join("etc/os-release").exists(),
         "os-release must not stay"
-    );
-
-    // The same promise when an earlier `image` pack left its records in this directory:
-    // an `sbom` pack replaces them for the scan and must then take them away.
-    let (_, rootfs) = deb_packages("reused", &["--packages", "image"]);
-    let records = rootfs.join("var/lib/dpkg/status.d");
-    assert!(
-        std::fs::read_dir(&records).unwrap().count() > 0,
-        "image keeps them"
-    );
-    deb_packages("reused", &["--packages", "report,sbom"]);
-    assert_eq!(
-        std::fs::read_dir(&records).map_or(0, |d| d.count()),
-        0,
-        "an sbom pack must not leave an earlier pack's records in the image"
     );
 }
 
@@ -2201,12 +2275,24 @@ fn a_write_error_while_staging_the_default_records_fails_the_pack() {
         common::skip_optional("root ignores directory permissions");
         return;
     }
-    // A reused `--no-build` output dir whose record directory takes no new file.
+    // The output dir must be new, so the record directory that takes no new file is made
+    // mid-pack: a dpkg-query wrapper creates it read-only during the owner lookup, after the
+    // tree is staged and before the records are.
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|d| d.join("dpkg-query"))
+        .find(|p| p.is_file())
+        .unwrap();
+    let wrapper = format!(
+        r#"for a; do [ "$a" = -S ] && mkdir -p "$OUT/var/lib/dpkg/status.d" && chmod 555 "$OUT/var/lib/dpkg/status.d"; done
+exec '{}' "$@""#,
+        real.display()
+    );
     let tmp = tempfile::tempdir().unwrap();
-    let tools = fake_tools(tmp.path(), &[("syft", FAKE_RECORD_READER)]);
+    let tools = fake_tools(
+        tmp.path(),
+        &[("syft", FAKE_RECORD_READER), ("dpkg-query", &wrapper)],
+    );
     let status_d = tmp.path().join("out/var/lib/dpkg/status.d");
-    std::fs::create_dir_all(&status_d).unwrap();
-    std::fs::set_permissions(&status_d, std::fs::Permissions::from_mode(0o555)).unwrap();
 
     // A broken output tree is not a record the default can skip: the pack fails.
     let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
@@ -2217,11 +2303,20 @@ fn a_write_error_while_staging_the_default_records_fails_the_pack() {
         .arg(bin)
         .env("PATH", &tools)
         .env("ASKED", tmp.path().join("out.asked"))
+        .env("OUT", tmp.path().join("out"))
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("writing "), "{stderr}");
+    assert!(
+        stderr.contains(&format!("writing {}", status_d.display())),
+        "{stderr}"
+    );
+    assert_eq!(
+        std::fs::metadata(&status_d).unwrap().permissions().mode() & 0o777,
+        0o555,
+        "the wrapper must have made the record directory read-only"
+    );
 }
 
 #[test]

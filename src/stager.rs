@@ -1033,8 +1033,8 @@ fn under(root: &Path, abs: &Path) -> PathBuf {
 }
 
 /// The host path of `image` inside the staging root `dest`, with every staged link on the way
-/// read inside the image (`image_dir`). A reused `--no-build --output DIR` can hold a link such
-/// as `lib -> /usr/lib`, and a plain join would let the host follow it to its own `/usr/lib`.
+/// read inside the image (`image_dir`). A link staged earlier in this pack, such as an
+/// `--add-file` link `lib -> /usr/lib`, would let a plain join follow it to the host's `/usr/lib`.
 /// `create` makes the missing directories. The final name is not resolved: a caller that
 /// writes replaces it by a rename (`copy_into`, `write_into`), never writes through it.
 pub(crate) fn staged_path(dest: &Path, image: &Path, create: bool) -> Result<PathBuf> {
@@ -1086,7 +1086,7 @@ fn copy_into(src: &Path, root: &Path, abs_target: &Path) -> Result<()> {
     }
     let target = staged_path(root, abs_target, true)?;
     // Copy to a sibling and rename it over the name, as `packages::write_record` does. A
-    // file that an earlier pack into this directory left is replaced, never written into:
+    // file already at the name is replaced, never written into:
     // `fs::copy` opens its target for writing, so a read-only copy (a 0444 CA bundle) fails
     // for anyone but root, and a hard link or a symlink would carry the write elsewhere.
     let dir = target.parent().context("a staged file has no directory")?;
@@ -1377,7 +1377,7 @@ mod tests {
         let dest = tmp.path().join("dest");
         let binary = make_file(&tmp.path().join("src/app"), b"binary");
         let loader = make_file(&tmp.path().join("src/real-ld.so"), b"LOADER");
-        // An output directory reused from an earlier pack, with a merged-usr style link.
+        // A tree that already holds a merged-usr style link.
         fs::create_dir_all(dest.join("usr/lib")).unwrap();
         std::os::unix::fs::symlink("usr/lib", dest.join("lib")).unwrap();
 
@@ -1602,7 +1602,7 @@ mod tests {
         let dest = tmp.path().join("dest");
         let binary = make_file(&tmp.path().join("src/app"), b"binary");
         let real = make_file(&tmp.path().join("src/lib/libfoo.so.1.2.3"), b"FOO");
-        // An output directory reused from an earlier pack, with a merged-usr style link.
+        // A tree that already holds a merged-usr style link.
         fs::create_dir_all(dest.join("usr/lib")).unwrap();
         fs::create_dir_all(dest.join("usr/x")).unwrap();
         std::os::unix::fs::symlink("usr/lib", dest.join("lib")).unwrap();
@@ -1671,7 +1671,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reused_output_dir_with_an_absolute_link_keeps_every_write_inside_it() {
+    fn an_absolute_staged_link_keeps_every_write_inside_the_root() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("dest");
         let outside = tmp.path().join("outside");
@@ -1679,7 +1679,7 @@ mod tests {
         let binary = make_file(&tmp.path().join("src/app"), b"binary");
         let real = make_file(&tmp.path().join("src/lib/libfoo.so.1.2.3"), b"FOO");
         // A directory the library's image path passes through is a link to a HOST path, as
-        // an earlier run or a hostile tree can leave in a reused `--no-build --output DIR`.
+        // an `--add-file` or `--symlinks preserve` link staged earlier in the pack can be.
         let src_dir = real.parent().unwrap().parent().unwrap();
         let link = under(&dest, src_dir);
         fs::create_dir_all(link.parent().unwrap()).unwrap();
@@ -2320,7 +2320,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("dest");
         let src = make_file(&tmp.path().join("src/ca.pem"), b"new");
-        // What an earlier pack left: a read-only file, with a second name on the same inode.
+        // A file already in the tree: read-only, with a second name on the same inode.
         // The second name fails this test for root too, who can write into a read-only file.
         let staged = make_file(&dest.join("etc/ca.pem"), b"old");
         let other_name = tmp.path().join("other-name");

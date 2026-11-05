@@ -564,8 +564,7 @@ fn is_package_name(s: &str) -> bool {
 /// the `sbom` output shows the packages to syft and grype without changing the image; call
 /// `keep` for the `image` output.
 ///
-/// A record that was already there (a second pack into the same `--output` directory) is
-/// replaced, and it is removed like the rest: it can only be one an earlier pack kept, and
+/// A record that was already there is replaced, and it is removed like the rest, because
 /// the `sbom` promise is that the image does not carry the records. Directories are removed
 /// only when this call created them, and an os-release that was already there is not
 /// touched, because that one can be the user's.
@@ -979,8 +978,8 @@ mod tests {
         stage_records(rootfs, &owners, &[]).unwrap().keep();
         assert!(rootfs.join("var/lib/dpkg/status.d/libc6").is_file());
 
-        // A second `image` pack into the same directory finds the kept record. It is
-        // replaced, not refused.
+        // A second call on a tree that already holds the kept record replaces it, not
+        // refuses it.
         let newer = Owners {
             records: Records::Dpkg(vec![(
                 "libc6".into(),
@@ -993,8 +992,8 @@ mod tests {
             std::fs::read_to_string(rootfs.join("var/lib/dpkg/status.d/libc6")).unwrap(),
             "Package: libc6\nVersion: 2\n"
         );
-        // An `sbom`-only pack into that directory must not leave the record behind: the
-        // guard removes it although an earlier pack, not this call, created it.
+        // An `sbom`-only call must not leave the record behind: the guard removes it
+        // although an earlier call, not this one, created it.
         drop(stage_records(rootfs, &newer, &[]).unwrap());
         assert!(!rootfs.join("var/lib/dpkg/status.d/libc6").exists());
     }
@@ -1046,7 +1045,7 @@ mod tests {
         let err = stage_records(rootfs, &owners, &protected).unwrap_err();
         assert!(format!("{err:#}").contains("--add-file"), "{err:#}");
         assert_eq!(std::fs::read(&record).unwrap(), b"the user's own file");
-        // The same file with no such claim is an earlier pack's record, and is replaced.
+        // The same file with no such claim is treated as a stale record, and is replaced.
         stage_records(rootfs, &owners, &[]).unwrap().keep();
         assert_eq!(std::fs::read(&record).unwrap(), b"Package: libc6\n");
     }

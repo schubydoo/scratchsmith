@@ -9,8 +9,8 @@ This page has one list for each kind of change. Three kinds change only in a maj
 deprecated input shapes, tolerances, and changing defaults. Refused input is a fourth kind,
 because a minor release can refuse input that is the attack itself. The last list, Removed in
 2.0.0, shows what version 2.0.0 changed after its deprecation cycle ended. Most inputs there now
-fail, and one gets a new default. It also shows one exit code that changed in 2.0.0 with no
-cycle, and it says why.
+fail, and one gets a new default. It also shows two changes in 2.0.0 with no warning first: an
+exit code, and an output directory that cannot be listed. It says why for each.
 
 A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.
@@ -82,10 +82,9 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.
 |---|---|---|---|
 | A program interpreter that starts like an ELF and cannot be parsed | 1.8.0 | 2.0.0 | Replace the damaged file |
 | `$PLATFORM` in a search path, on an architecture with no value for it | 1.6.0 | 2.0.0 | Write the directory name in the path |
-| `--no-build` into an output directory that is not empty | 1.6.0 | 2.0.0 | Use a new directory, or empty it first |
 
-The first two warnings come from `pack` and from `graph`, because both resolve the same
-dependency tree. The last one comes from `pack` only.
+These warnings come from `pack` and from `graph`, because both resolve the same
+dependency tree.
 
 The interpreter warning stays only when no library lists the loader as `DT_NEEDED`. On a usual
 glibc sysroot `libc.so.6` lists it, so the dependency walk reads the loader as a library and the
@@ -108,33 +107,6 @@ directory name in the search path and do not use the token:
 $ cc -Wl,-rpath,/opt/app/lib/riscv64 -o myapp main.c
 ```
 
-### An output directory that is not empty
-
-`pack --no-build --output <dir>` stages the files of the image into a directory and builds no
-image. Scratchsmith does not empty that directory first. A second pack into the same directory
-merges with the files from the first.
-
-A file that the second pack stages replaces the old copy. A file that the second pack does not
-stage stays in the directory. For example, pack once with `--ca-certs` and once without it, and
-the certificate file is still there. The directory then holds more than the flags describe, and
-an SBOM or a scan of it includes the old file.
-
-One case goes the other way. Pack once with `--packages image`, and the package records are in
-the directory. Pack again with `--packages sbom --sbom`, and scratchsmith removes those records
-after the SBOM run, because that output never leaves them in the tree. `--packages sbom` on its
-own stages no records and removes none, because nothing reads the tree.
-
-Two flags stop a second pack. `--add-file` and `--locale` do not replace a file that is already
-in the directory, so the pack ends with an error.
-
-Scratchsmith 2.0 refuses a directory that is not empty. Give each pack a new directory, or
-remove the old one first:
-
-```console
-$ rm -rf ./rootfs
-$ scratchsmith pack --no-build --output ./rootfs ./app
-```
-
 ## Removed in 2.0.0
 
 | Input | Warned since | Now | Write this instead |
@@ -147,6 +119,8 @@ $ scratchsmith pack --no-build --output ./rootfs ./app
 | A library found only through an inherited `RPATH`, by an object that has `RUNPATH` | 1.6.0 | Reported as missing, and `pack` and `graph` fail | Give that object the directory in its own `RUNPATH` |
 | A command line refused after the parse, such as `--watch --format json` | Not warned | A usage error, exit code 2. 1.x exited 1 | Fix the command line. A script that tests for exactly `1` must also accept `2` |
 | `--packages` (the `packages` key) with no value | 1.9.0 | The default is `report,sbom`, so `--sbom` and `--scan` see the packages and a `--scan-fail-on` gate can find more | `--packages report` (or `packages = ["report"]`) for the 1.x result |
+| `pack --no-build --output DIR` into a `DIR` that is not empty | 1.6.0 | An error before any file is staged. `pack` exits `1` | A new or empty directory, or `rm -rf DIR` first |
+| `pack --no-build --output DIR` into a `DIR` that cannot be listed | Not warned | An error. `pack` exits `1` | A directory that you can read, or a new one |
 
 ### A library found only through an inherited `RPATH`
 
@@ -170,3 +144,10 @@ pack, and printed no warning about a change. In 2.0.0 they exit `2`, the same co
 argument-parse error. This change had no deprecation cycle, because the 1.x contract promised
 only a non-zero code for these refusals. A script that tests for exactly `1` must also accept
 `2`.
+
+### An output directory that cannot be listed
+
+`pack --no-build --output DIR` checks that `DIR` is empty. In 1.x the check skipped a `DIR`
+that it had no permission to list, so it printed no warning and packed into it. Version 2.0.0 refuses
+that `DIR`, because it cannot prove that the directory is empty. This change had no warning
+before 2.0. Give the pack a directory that you can read, or a new one.
