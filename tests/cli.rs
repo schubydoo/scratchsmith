@@ -35,9 +35,9 @@ fn help_lists_all_subcommands() {
 
 #[test]
 fn exit_codes_follow_the_v1_contract() {
-    // The exit-code contract (COMPATIBILITY.md): 0 on success, 2 on an argument-parse error
-    // (clap), non-zero on any other failure. Pinned here so a change is deliberate — a script
-    // gating on `$?` must not break on an upgrade.
+    // The exit-code contract (COMPATIBILITY.md): 0 on success, 2 on a usage error (a clap parse
+    // error, or a refusal of the command line after the parse), 1 on any other failure. Pinned
+    // here so a change is deliberate — a script gating on `$?` must not break on an upgrade.
     assert!(run(&["--version"]).status.success(), "0: --version");
     assert!(run(&["--help"]).status.success(), "0: --help");
     assert!(run(&["doctor"]).status.success(), "0: doctor");
@@ -52,14 +52,291 @@ fn exit_codes_follow_the_v1_contract() {
         Some(2),
         "2: unknown flag"
     );
-    // A real runtime failure (missing binary) is non-zero, and specifically not a usage error.
+    // A refusal made after the parse is a usage error too (2.0).
+    assert_eq!(
+        run(&["pack"]).status.code(),
+        Some(2),
+        "2: pack with no binary"
+    );
+    // A real runtime failure (missing binary) exits 1, and specifically not 2.
     let missing = run(&["pack", "/nonexistent/scratchsmith-xyz"])
         .status
         .code();
-    assert!(
-        matches!(missing, Some(c) if c != 0 && c != 2),
-        "non-zero (not 2) on a runtime failure, got {missing:?}"
+    assert_eq!(missing, Some(1), "1 on a runtime failure");
+}
+
+#[test]
+fn post_parse_usage_refusals_exit_2() {
+    // Each refusal here needs the config or another flag, so clap cannot make it, and dispatch
+    // or the sink makes it before any pack work starts. The binary need not exist.
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = |name: &str, body: &str| {
+        let path = tmp.path().join(name);
+        std::fs::write(&path, body).unwrap();
+        path.to_str().unwrap().to_string()
+    };
+    let bin = "/nonexistent/scratchsmith-xyz";
+    let archive = tmp.path().join("x.oci.tar");
+    let archive = archive.to_str().unwrap();
+    let rootfs = tmp.path().join("rootfs");
+    let rootfs = rootfs.to_str().unwrap();
+    let profiles = cfg("profiles.toml", "[profile.ci]\nstrip = true\n");
+    let sign = cfg("sign.toml", &format!("binary = \"{bin}\"\nsign = true\n"));
+    let push = cfg(
+        "push.toml",
+        &format!("binary = \"{bin}\"\npush = \"localhost:5000/x:1\"\n"),
     );
+    let smoke = cfg("smoke.toml", &format!("binary = \"{bin}\"\nsmoke = true\n"));
+    let max_size = cfg(
+        "size.toml",
+        &format!("binary = \"{bin}\"\nmax-size = \"9zz\"\n"),
+    );
+    let bare_label = cfg(
+        "label.toml",
+        &format!("binary = \"{bin}\"\nlabel = [\"build\"]\n"),
+    );
+    let dup_add_file = cfg(
+        "add-file.toml",
+        &format!("binary = \"{bin}\"\nadd-file = [\"./a.conf:/etc/x\", \"./b.conf:/etc/x\"]\n"),
+    );
+    let bad_push = cfg(
+        "bad-push.toml",
+        &format!("binary = \"{bin}\"\npush = \"localhost:5000/Bad:1\"\n"),
+    );
+    let cases: &[(&str, Vec<&str>, &str)] = &[
+        (
+            "completions with a subcommand",
+            vec!["--completions", "bash", "doctor"],
+            "--completions cannot be combined",
+        ),
+        ("pack with no binary", vec!["pack"], "no binary to pack"),
+        (
+            "unknown --profile",
+            vec!["pack", "--config", &profiles, "--profile", "prod", bin],
+            "unknown --profile 'prod'",
+        ),
+        (
+            "--add-file with a relative image path",
+            vec!["pack", "--add-file", "./a.conf:etc/a.conf", bin],
+            "the image path must be absolute",
+        ),
+        (
+            "--add-file with '..'",
+            vec!["pack", "--add-file", "./a.conf:/etc/../x", bin],
+            "must not contain '..'",
+        ),
+        (
+            "--add-file with an empty half",
+            vec!["pack", "--add-file", "./a.conf:", bin],
+            "both non-empty",
+        ),
+        (
+            "--nss none with a module",
+            vec!["pack", "--nss", "none,files", bin],
+            "--nss none cannot be combined",
+        ),
+        (
+            "--max-size with a bad unit",
+            vec!["pack", "--max-size", "10furlongs", bin],
+            "invalid size unit",
+        ),
+        (
+            "--max-size that is not a number",
+            vec!["pack", "--max-size", "big", bin],
+            "invalid size 'big'",
+        ),
+        (
+            "max-size from the config",
+            vec!["pack", "--config", &max_size],
+            "invalid size unit",
+        ),
+        (
+            "--packages none with an output",
+            vec!["pack", "--packages", "none,report", bin],
+            "--packages none cannot be combined",
+        ),
+        (
+            "sign from the config with no push target",
+            vec!["pack", "--config", &sign, "--oci-archive", archive],
+            "--sign needs a push target",
+        ),
+        (
+            "--watch with push from the config",
+            vec!["pack", "--watch", "--config", &push],
+            "--watch cannot push",
+        ),
+        (
+            "--watch --format json",
+            vec!["pack", "--watch", "--format", "json", bin],
+            "cannot be used with --format json",
+        ),
+        (
+            "smoke from the config with --no-build",
+            vec!["pack", "--config", &smoke, "--no-build", "-o", rootfs],
+            "isn't supported with --no-build",
+        ),
+        (
+            "--smoke --oci-archive",
+            vec!["pack", "--smoke", "--oci-archive", archive, bin],
+            "isn't supported with --oci-archive",
+        ),
+        (
+            "--smoke --push",
+            vec!["pack", "--smoke", "--push", "localhost:5000/x:1", bin],
+            "isn't supported with --push",
+        ),
+        (
+            "--locale given twice",
+            vec!["pack", "--locale", "C.utf8", "--locale", "C.utf8", bin],
+            "given more than once",
+        ),
+        // `/etc//x` is the same image path as `/etc/x`, so the check compares paths, not text.
+        (
+            "--add-file with one image path twice",
+            vec![
+                "pack",
+                "--add-file",
+                "./a.conf:/etc/x",
+                "--add-file",
+                "./b.conf:/etc//x",
+                bin,
+            ],
+            "/etc/x is given more than once",
+        ),
+        (
+            "add-file with one image path twice from the config",
+            vec!["pack", "--config", &dup_add_file],
+            "/etc/x is given more than once",
+        ),
+        (
+            "label with no = from the config",
+            vec!["pack", "--config", &bare_label],
+            "needs the form `NAME=value`",
+        ),
+        // A bad reference fails before staging, so the missing binary is never reached.
+        (
+            "--push with a bad reference",
+            vec!["pack", "--push", "localhost:5000/Bad:1", bin],
+            "invalid image reference",
+        ),
+        (
+            "push with a bad reference from the config",
+            vec!["pack", "--config", &bad_push],
+            "invalid image reference",
+        ),
+        (
+            "index with a bad target reference",
+            vec!["index", "localhost:5000/Bad:1", "localhost:5000/x:1"],
+            "invalid target reference",
+        ),
+        (
+            "index with a bad source reference",
+            vec!["index", "localhost:5000/x:1", "localhost:5000/Bad:1"],
+            "invalid source reference",
+        ),
+        (
+            "index with a source in another repository",
+            vec!["index", "localhost:5000/app:1", "localhost:5000/other:1"],
+            "target's repository",
+        ),
+    ];
+    for (name, args, needle) in cases {
+        let out = run(args);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{name}: {stderr}");
+        assert!(stderr.contains(needle), "{name}: {stderr}");
+    }
+}
+
+#[test]
+fn a_bad_locale_name_is_a_usage_error() {
+    // The locale name is checked while staging, so this one needs a binary that resolves.
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    for (locale, needle) in [("", "must not be empty"), ("a/b", "not a path")] {
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["pack", "--no-build", "--packages", "none", "-o"])
+            .arg(tmp.path().join("rootfs"))
+            .args(["--locale", locale, bin])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "--locale {locale:?}: {stderr}");
+        assert!(stderr.contains(needle), "--locale {locale:?}: {stderr}");
+    }
+}
+
+#[test]
+fn a_locale_already_in_the_tree_is_not_a_usage_error() {
+    // The command line names the locale once. Something else put it in the tree first, so the
+    // refusal is a pack failure (1), not a usage error (2).
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let pack = |rootfs: &std::path::Path, extra: &[&str], locale: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["pack", "--no-build", "--packages", "none", "-o"])
+            .arg(rootfs)
+            .args(extra)
+            .args(["--locale", locale, bin])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        (out.status.code(), stderr)
+    };
+    // An --add-file into the locale path is staged first.
+    let src = tmp.path().join("LC_CTYPE");
+    std::fs::write(&src, b"ctype").unwrap();
+    let add = format!("{}:/usr/lib/locale/en_US.UTF-8/LC_CTYPE", src.display());
+    let (code, stderr) = pack(
+        &tmp.path().join("rootfs-add"),
+        &["--add-file", &add],
+        "en_US.UTF-8",
+    );
+    assert_eq!(code, Some(1), "--add-file into the locale: {stderr}");
+    assert!(stderr.contains("already in the image"), "{stderr}");
+    // A reused --no-build output dir still holds the locale from the first pack.
+    let Some(host) = std::fs::read_dir("/usr/lib/locale")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .find(|e| e.path().is_dir())
+    else {
+        skip_required("no locale directory under /usr/lib/locale");
+        return;
+    };
+    let name = host.file_name();
+    let name = name.to_str().unwrap();
+    let rootfs = tmp.path().join("rootfs-reused");
+    let (code, stderr) = pack(&rootfs, &[], name);
+    assert_eq!(code, Some(0), "first pack: {stderr}");
+    let (code, stderr) = pack(&rootfs, &[], name);
+    assert_eq!(code, Some(1), "second pack into the same dir: {stderr}");
+    assert!(stderr.contains("already in the image"), "{stderr}");
+}
+
+#[test]
+fn a_config_file_that_does_not_parse_exits_1() {
+    // The rule: a config value that parses and is then refused is a usage error (2). A file
+    // that cannot be read or parsed, such as a wrong-type value or an unknown key, exits 1.
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = "/nonexistent/scratchsmith-xyz";
+    for (name, body, needle) in [
+        ("wrong type", "strip = \"yes\"\n", "parsing config"),
+        ("unknown key", "bogus_key = 1\n", "parsing config"),
+    ] {
+        let path = tmp.path().join("c.toml");
+        std::fs::write(&path, body).unwrap();
+        let out = run(&["pack", "--config", path.to_str().unwrap(), bin]);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{name}: {stderr}");
+        assert!(stderr.contains(needle), "{name}: {stderr}");
+    }
 }
 
 #[test]
@@ -1187,7 +1464,7 @@ fn watch_refuses_the_sinks_and_formats_it_cannot_serve() {
     // the first pack.
     let out = run(&["pack", "--watch", "--format", "json", bin]);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
     assert!(
         stderr.contains("cannot be used with --format json"),
         "{stderr}"
@@ -1203,7 +1480,7 @@ fn watch_refuses_the_sinks_and_formats_it_cannot_serve() {
     .unwrap();
     let out = run(&["pack", "--watch", "--config", cfg.to_str().unwrap()]);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("--watch cannot push"), "{stderr}");
 }
 
@@ -1419,9 +1696,9 @@ fn the_report_names_the_packages_that_own_the_bundled_files() {
     assert!(report["packages"].is_null());
     assert!(!rootfs.join("var/lib/dpkg").exists());
 
-    // `none` must stand alone.
+    // `none` must stand alone. That is a usage error.
     let out = run(&["pack", "--packages", "none,sbom", "-n", "-o", "/tmp/x", bin]);
-    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(out.status.code(), Some(2));
 
     // A second pack into the same directory, the shape `--no-build` invites, must not trip
     // over the records the first one kept.

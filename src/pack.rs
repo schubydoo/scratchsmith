@@ -701,7 +701,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
     // No image is built here, so there is nothing to smoke-run. The CLI blocks --smoke --no-build,
     // but `smoke` can also arrive from the config/profile — fail loud rather than silently drop it.
     if opts.smoke {
-        bail!("--smoke needs a built image, so it isn't supported with --no-build; drop --smoke, or set `smoke = false` in the profile");
+        bail!(crate::cli::UsageError("--smoke needs a built image, so it isn't supported with --no-build; drop --smoke, or set `smoke = false` in the profile".into()));
     }
     let StagedRootfs {
         tree,
@@ -850,7 +850,7 @@ pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
 /// contacted; `docker load` / `skopeo copy oci-archive:<out>` accept the result.
 fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackReport> {
     if opts.smoke {
-        bail!("--smoke needs a running image, so it isn't supported with --oci-archive; load the archive (docker load / skopeo) and run it separately, or drop --smoke");
+        bail!(crate::cli::UsageError("--smoke needs a running image, so it isn't supported with --oci-archive; load the archive (docker load / skopeo) and run it separately, or drop --smoke".into()));
     }
     let mut s = stage_for_image(binary, opts)?;
     let ((), ms) = timed(|| image::write_oci_archive(&s.tree, &s.tag, &s.cfg, out))?;
@@ -878,7 +878,7 @@ fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackR
 /// makes no HEAD check first).
 fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackReport> {
     if opts.smoke {
-        bail!("--smoke needs a running image, so it isn't supported with --push; pull the pushed image and run it separately, or drop --smoke");
+        bail!(crate::cli::UsageError("--smoke needs a running image, so it isn't supported with --push; pull the pushed image and run it separately, or drop --smoke".into()));
     }
     let mut s = stage_for_image(binary, opts)?;
     // The push returns the pushed image's digest when the registry reports one; a plain push
