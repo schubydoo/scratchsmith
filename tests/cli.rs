@@ -966,6 +966,27 @@ fn an_env_entry_without_an_equals_sign_is_a_usage_error() {
     assert_bare_flag_refused("--env", "LOG_LEVEL", "an env entry");
 }
 
+/// Write `toml` (after a `binary` line) to a scratchsmith.toml, run `pack --config` on it with
+/// `extra` args into a fresh rootfs, and assert nothing was staged. Returns (exit code, stderr,
+/// config path).
+fn pack_bare_config(bin: &str, toml: &str, extra: &[&str]) -> (Option<i32>, String, String) {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("scratchsmith.toml");
+    std::fs::write(&cfg, format!("binary = \"{bin}\"\n{toml}")).unwrap();
+    let rootfs = tmp.path().join("rootfs");
+    let cfg = cfg.to_str().unwrap().to_string();
+    let mut args = vec!["pack", "--config", cfg.as_str()];
+    args.extend_from_slice(extra);
+    args.extend(["--no-build", "-o", rootfs.to_str().unwrap()]);
+    let out = run(&args);
+    assert!(!rootfs.exists(), "nothing should be staged");
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        cfg,
+    )
+}
+
 #[test]
 fn a_bare_label_or_env_in_the_config_file_is_refused() {
     let Some(bin) = small_fixture() else {
@@ -976,26 +997,130 @@ fn a_bare_label_or_env_in_the_config_file_is_refused() {
         ("label", "build", "a label"),
         ("env", "LOG_LEVEL", "an env entry"),
     ] {
+        let (code, stderr, cfg) = pack_bare_config(bin, &format!("{key} = [\"{value}\"]\n"), &[]);
+        assert_eq!(code, Some(2), "{key} should be a usage error: {stderr}");
+        assert!(
+            stderr.contains(&format!("{cfg}: {kind} needs the form `NAME=value`"))
+                && stderr.contains(&format!("`{value}` has no `=`")),
+            "config error should name the file and the NAME=value form: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn a_bare_label_in_the_selected_profile_names_the_profile() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    // The profile's list replaces the base's, so the bad entry comes from the profile.
+    let toml = "label = [\"role=api\"]\n\n[profile.ci]\nlabel = [\"build\"]\n";
+    let (code, stderr, cfg) = pack_bare_config(bin, toml, &["--profile", "ci"]);
+    assert_eq!(code, Some(2), "got: {stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "{cfg} [profile.ci]: a label needs the form `NAME=value`, but `build` has no `=`"
+        )),
+        "error should name the file and the profile: {stderr}"
+    );
+}
+
+#[test]
+fn each_bad_list_names_its_own_source_under_a_profile() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    // The profile sets `label` but not `env`, so only the label comes from the profile.
+    let toml = "env = [\"LOG_LEVEL\"]\n\n[profile.ci]\nlabel = [\"build\"]\n";
+    let (code, stderr, cfg) = pack_bare_config(bin, toml, &["--profile", "ci"]);
+    assert_eq!(code, Some(2), "got: {stderr}");
+    assert!(
+        stderr.contains(&format!("{cfg} [profile.ci]: a label needs the form"))
+            && stderr.contains(&format!("\n  {cfg}: an env entry needs the form")),
+        "each entry should name its own source: {stderr}"
+    );
+
+    // A selected profile that sets neither list: the bad entry comes from the base.
+    let toml = "label = [\"build\"]\n\n[profile.ci]\nuser = \"1000\"\n";
+    let (code, stderr, cfg) = pack_bare_config(bin, toml, &["--profile", "ci"]);
+    assert_eq!(code, Some(2), "got: {stderr}");
+    assert!(
+        stderr.contains(&format!("error: {cfg}: a label needs the form"))
+            && !stderr.contains("[profile."),
+        "a base entry should not name the profile: {stderr}"
+    );
+}
+
+#[test]
+fn the_multi_entry_header_names_only_the_kinds_it_lists() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    for (toml, header) in [
+        ("label = [\"a\", \"b\"]\n", "2 label entries need the form"),
+        ("env = [\"A\", \"\"]\n", "2 env entries need the form"),
+    ] {
+        let (code, stderr, _) = pack_bare_config(bin, toml, &[]);
+        assert_eq!(code, Some(2), "got: {stderr}");
+        assert!(stderr.contains(header), "want `{header}`: {stderr}");
+    }
+}
+
+#[test]
+fn every_bare_label_and_env_entry_is_named_in_one_error() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let toml = "label = [\"build\", \"ok=1\"]\nenv = [\"LOG_LEVEL\"]\n";
+    let (code, stderr, cfg) = pack_bare_config(bin, toml, &[]);
+    assert_eq!(code, Some(2), "got: {stderr}");
+    assert!(
+        stderr.contains("2 label and env entries need the form `NAME=value`")
+            && stderr.contains(&format!(
+                "{cfg}: a label needs the form `NAME=value`, but `build`"
+            ))
+            && stderr.contains(&format!(
+                "{cfg}: an env entry needs the form `NAME=value`, but `LOG_LEVEL`"
+            )),
+        "both bad entries should be named: {stderr}"
+    );
+}
+
+#[test]
+fn an_empty_label_or_env_entry_hint_does_not_suggest_an_empty_name() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    for entry in ["", "  "] {
+        let (code, stderr, _) = pack_bare_config(bin, &format!("env = [\"{entry}\"]\n"), &[]);
+        assert_eq!(code, Some(2), "got: {stderr}");
         let tmp = tempfile::tempdir().unwrap();
-        let cfg = tmp.path().join("scratchsmith.toml");
-        std::fs::write(&cfg, format!("binary = \"{bin}\"\n{key} = [\"{value}\"]\n")).unwrap();
         let rootfs = tmp.path().join("rootfs");
-        let out = run(&[
+        let flag = run(&[
             "pack",
-            "--config",
-            cfg.to_str().unwrap(),
+            "--label",
+            entry,
             "--no-build",
             "-o",
             rootfs.to_str().unwrap(),
+            bin,
         ]);
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(!out.status.success(), "{key} should be refused: {stderr}");
-        assert!(
-            stderr.contains(&format!("{kind} needs the form `NAME=value`"))
-                && stderr.contains(&format!("`{value}` has no `=`")),
-            "config error should name the NAME=value form: {stderr}"
-        );
-        assert!(!rootfs.exists(), "nothing should be staged");
+        let flag_stderr = String::from_utf8_lossy(&flag.stderr);
+        assert_eq!(flag.status.code(), Some(2), "got: {flag_stderr}");
+        for err in [&stderr, &*flag_stderr] {
+            assert!(
+                err.contains("needs the form `NAME=value`") && err.contains("has no name"),
+                "the error should say the entry has no name: {err}"
+            );
+            assert!(
+                !err.contains(&format!("`{entry}=")),
+                "the hint must not suggest an empty name: {err}"
+            );
+        }
     }
 }
 

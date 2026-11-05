@@ -422,6 +422,13 @@ fn image_config(default_entrypoint: &Path, diff_id: &str, cfg: &ImageConfig) -> 
 
 /// The error for a `--label` or `--env` entry with no `=`. `kind` is `a label` or `an env entry`.
 fn bare_entry_error(kind: &str, entry: &str) -> String {
+    // `{entry}=<value>` would suggest an empty name for an empty or blank entry.
+    if entry.trim().is_empty() {
+        return format!(
+            "{kind} needs the form `NAME=value`, but an entry has no name. \
+             Write `NAME=value`, or remove the entry"
+        );
+    }
     format!(
         "{kind} needs the form `NAME=value`, but `{entry}` has no `=`. \
          Write `{entry}=<value>`, or `{entry}=` for an empty value"
@@ -446,18 +453,37 @@ pub fn env_pair(s: &str) -> Result<String, String> {
     }
 }
 
-/// Refuse a label or env entry with no `=` in the effective config.
+/// Refuse every label or env entry with no `=` in the effective config, in one error.
 ///
 /// clap checks the CLI flags already. This covers the same strings from the `label` and `env`
 /// keys in `scratchsmith.toml`, and runs before staging so no sink does work first.
-pub fn require_pairs(cfg: &ImageConfig) -> anyhow::Result<()> {
-    if let Some(e) = cfg.labels.iter().find(|e| !e.contains('=')) {
-        anyhow::bail!(bare_entry_error("a label", e));
+/// `label_from` and `env_from` name where each list came from, to prefix each entry's error.
+pub fn require_pairs(cfg: &ImageConfig, label_from: &str, env_from: &str) -> anyhow::Result<()> {
+    let bad_in = |kind: &str, entries: &[String], from: &str| -> Vec<String> {
+        entries
+            .iter()
+            .filter(|e| !e.contains('='))
+            .map(|e| format!("{from}: {}", bare_entry_error(kind, e)))
+            .collect()
+    };
+    let labels = bad_in("a label", &cfg.labels, label_from);
+    let env = bad_in("an env entry", &cfg.env, env_from);
+    let kinds = match (labels.is_empty(), env.is_empty()) {
+        (false, false) => "label and env entries",
+        (false, true) => "label entries",
+        _ => "env entries",
+    };
+    // Two blank entries give two identical lines: they are two entries to fix.
+    let all = [labels, env].concat();
+    match all.as_slice() {
+        [] => Ok(()),
+        [one] => anyhow::bail!("{one}"),
+        all => anyhow::bail!(
+            "{} {kinds} need the form `NAME=value`:\n  {}",
+            all.len(),
+            all.join("\n  ")
+        ),
     }
-    if let Some(e) = cfg.env.iter().find(|e| !e.contains('=')) {
-        anyhow::bail!(bare_entry_error("an env entry", e));
-    }
-    Ok(())
 }
 
 /// True when an image user string denotes root (uid 0 or `root`), so the caller can
