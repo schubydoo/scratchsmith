@@ -6,3 +6,4 @@ extend-exclude = ["docs/demo/scratchsmith.svg"]
 # Allow-list for crate/tech names that look like typos.
 [default.extend-words]
 flate = "flate" # flate2 (the gzip crate) tokenizes to "flate"
+intoto = "intoto" # the in-toto provenance file, scratchsmith.intoto.jsonl

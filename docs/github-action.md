@@ -70,14 +70,14 @@ the `packages` input to `none`.
 | `output` | | Stage the rootfs into this directory instead of building an image (`--no-build`). The directory must be new or empty. |
 | `entrypoint` | *(the binary's path)* | Image `ENTRYPOINT`. |
 | `cmd` | | Default arguments appended to the entrypoint, one per line. |
-| `env` | | Image environment entries, one `KEY=VALUE` per line. |
+| `env` | | Image environment entries, one `KEY=VALUE` per line. A line with no `=` fails the pack. Write `KEY=` for an empty value. |
 | `workdir` | | Image `WORKDIR`. |
 | `user` | `65532` | Image user `UID[:GID]`. `0` warns. |
-| `label` | | OCI image labels, one `KEY=VALUE` per line. |
+| `label` | | OCI image labels, one `KEY=VALUE` per line. A line with no `=` fails the pack. Write `KEY=` for an empty value. |
 | `healthcheck` | | `HEALTHCHECK` in exec form, one token per line. It must name an executable in the image. |
 | `strip` | `false` | Strip symbols from the binary and libraries. |
 | `upx` | `false` | Compress the binary with UPX (needs `upx` on the runner). |
-| `smoke` | `false` | After the build, run the image once. If the binary cannot start, the job fails. |
+| `smoke` | `false` | After the build, run the image once. If the binary cannot start, the job fails. It cannot be combined with `output`, because `output` builds no image. |
 | `sbom` | `false` | Generate an SBOM of the packed rootfs (needs `syft` on the runner). |
 | `sbom-file` | `sbom.json` | SBOM output path. Requires `sbom`, and is ignored on its own. |
 | `sbom-format` | `cyclonedx-json` | SBOM format: `cyclonedx-json` or `spdx-json`. |

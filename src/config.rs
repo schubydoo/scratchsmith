@@ -83,7 +83,7 @@ pub struct Config {
     #[serde(default)]
     pub nss: Vec<crate::stager::NssModule>,
     /// Where the owning-package data goes (`report`, `sbom`, `image`, or `none`); empty =
-    /// report.
+    /// report,sbom.
     #[serde(default)]
     pub packages: Vec<crate::packages::PackagesOutput>,
     /// Fail the pack if any of these libraries (by soname) is staged (`--deny`).

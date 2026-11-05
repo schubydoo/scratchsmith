@@ -6,6 +6,9 @@ Each release also ships a CycloneDX SBOM of Scratchsmith's own dependency graph.
 provenance cover it too. It reflects the full `Cargo.lock` graph, so it includes build- and
 dev-dependencies, not only the crates that link into the shipped binary.
 
+The release also carries `scratchsmith.intoto.jsonl`, the SLSA provenance bundle. You do not need
+to download it, because `gh attestation verify` reads the attestation from GitHub.
+
 Replace `<ver>` with the bare version you downloaded, no leading `v` (the tarball adds the
 `v` prefix, but the image tag does not).
 

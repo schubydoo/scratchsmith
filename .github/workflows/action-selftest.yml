@@ -232,7 +232,7 @@ jobs:
           [ -n "$ROOTFS" ] || { echo "::error::nss=none pack produced no rootfs — is --nss wired in action.yml?"; exit 1; }
           test ! -e "$ROOTFS/etc/nsswitch.conf" || { echo "::error::nss=none staged an nsswitch.conf — the --nss value did not reach the stager"; exit 1; }
           echo "nss input wired (none staged no nsswitch.conf)"
-      # packages=image keeps the dpkg records in the staged tree, and the default (report) keeps
+      # packages=image keeps the dpkg records in the staged tree, and the default (report,sbom) keeps
       # none. So the records fail this if the input is dropped, and a mangled value fails the
       # pack, which leaves no rootfs. The runner is Ubuntu, so the host has a dpkg database.
       - name: Pack with packages=image → rootfs

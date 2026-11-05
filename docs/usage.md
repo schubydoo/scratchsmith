@@ -25,7 +25,9 @@ scratchsmith pack --no-build --output ./rootfs ./app
 Give `--output` a new directory or an empty one. Scratchsmith does not empty the directory, so
 a directory that holds anything is an error, and nothing is staged. A file is an error
 too. A directory that scratchsmith cannot list is an error, because it cannot prove the directory
-is empty. Remove the old directory first, or choose another.
+is empty. Remove the old directory first, or choose another. A pack that fails after it starts
+to stage, for example on `--deny`, leaves the partial tree in the directory. Remove the directory
+before you run the pack again.
 
 Or write a **daemonless OCI archive** (loadable by skopeo/buildah, and pushable to a registry with
 no Docker daemon):
@@ -165,6 +167,7 @@ Each entry names one package and the files in the image that it owns:
   "type": "deb",
   "files": [
     "/lib64/ld-linux-x86-64.so.2",
+    "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
     "/usr/lib/x86_64-linux-gnu/libc.so.6"
   ]
 }
@@ -323,7 +326,7 @@ scratchsmith pack --symlinks preserve /usr/bin/python3
 
 | Mode | What a named symlink becomes |
 |---|---|
-| `copy-all` | The target's content. An `--add-file` source gets it at the named path. The packed binary gets it at its real path, with nothing at the named path. This is the default, and what every earlier release did. |
+| `copy-all` | The target's content. An `--add-file` source gets it at the named path. The packed binary gets it at its real path, with nothing at the named path. This is the default, and the only behavior before 1.4.0. |
 | `preserve` | A link. A target outside the image makes it dangle, and the pack warns. |
 | `copy-unsafe` | A link for a target inside the image. The target's content for a target outside it. |
 | `skip-unsafe` | A link for a target inside the image. Nothing at all for a target outside it, and the pack warns. |
@@ -377,7 +380,8 @@ scratchsmith graph --include libplugin.so.1 ./app   # add a dlopen'd library, li
 
 The tree shows each library in full the first time. A later repeat is marked `(*)`, so
 a shared dependency or a cycle does not print twice. A dependency that does not resolve is
-shown as `(missing)`. The last line names the loader (`PT_INTERP`).
+shown as `(missing)`, and `graph` then exits with code 1 after it prints the tree. If the binary
+has a loader (`PT_INTERP`), the last line names it.
 
 ## Gate on libraries
 
@@ -464,6 +468,9 @@ command. So `--healthcheck /app --healthcheck --health` is the one command `["/a
 not two healthchecks. It is the same as `healthcheck = ["/app", "--health"]` in the
 [configuration file](configuration.md).
 
+Each `--env` and `--label` entry needs an `=`. An entry with no `=` is an error with exit code 2.
+To set an empty value, end the entry with `=`, as in `--label build=`.
+
 ## Pack again on every change
 
 While you develop the program that you pack, `--watch` packs it again after each build. It
@@ -510,7 +517,8 @@ see **[GitHub Action](github-action.md)**.
 
 The `FROM scratch` release image carries the binary and nothing else: no shell, no tools, and no
 certificate store. It runs every subcommand that needs no external tool. That is `lint`,
-`doctor`, `graph`, `diff`, `unpack`, and `index`, plus the `--version` and `--completions` flags.
+`doctor`, `graph`, `diff`, `unpack`, and `index` without `--sign`, plus the `--version` and
+`--completions` flags.
 `doctor` is the one that looks like an exception: it probes for each external tool and reports
 every one as missing, which is the right answer on an image that carries none.
 
@@ -535,8 +543,9 @@ One subcommand does not run there. `pack` needs ldconfig, strip, and the SBOM to
 
 The **`:toolbox`** image bundles the `pack` toolchain (ldconfig, strip, syft, grype, cosign,
 upx, tini, the docker CLI) on a Wolfi base. With it, `pack` itself runs inside a container.
-That image has no dpkg and no rpm database, so `--packages` has no data there: `packages` is
-`null`, and the `sbom` and `image` outputs fail.
+That image has no dpkg and no rpm database, so `--packages` has no data there. The `packages`
+field is `null`. An `image` output that you set fails. If `--sbom` or `--scan` is on, a `sbom`
+output that you set fails too. The default stays quiet.
 
 ```sh
 # Daemonless — no socket needed; write an OCI archive or push straight to a registry.

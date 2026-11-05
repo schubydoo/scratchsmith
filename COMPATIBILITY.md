@@ -7,8 +7,8 @@ upgrade, and how we change it**.
 
 ## What is a stable contract (frozen within a major version)
 
-A breaking change to any of these requires a new **major** version. See the
-[Architecture → Stability](docs/architecture.md) reference for the authoritative list.
+A breaking change to any of these requires a new **major** version. This page is the full list.
+[Architecture → Stability](docs/architecture.md#stability) has a short summary.
 
 - **CLI surface**: the names and meaning of `pack` / `lint` / `doctor` / `index` / `graph` /
   `diff` / `unpack` flags and positionals, and the top-level `--completions`. The contract
@@ -59,7 +59,7 @@ deprecation cycle:
    warning: --old-flag is deprecated; use --new-flag instead. It will be removed in 3.0.
    ```
    The **exit code is unchanged**. A deprecated-but-successful run still exits `0`.
-2. The deprecation is announced in the **CHANGELOG** (a `Deprecated:` entry) and listed in a
+2. The deprecation is announced in the **CHANGELOG**, in a **Deprecated** section, and listed in a
    **Deprecations** section of the docs, with the migration path.
 3. It stays for a real window: **at minimum the rest of the current major line.**
 4. It is removed only in the **next major version**, called out in the migration notes.
@@ -86,7 +86,9 @@ change:
 
 - **CLI surface**: a golden snapshot of the whole flag tree, `tests/cli_surface.rs` →
   `tests/cli_surface.txt`. Any surface change fails until the golden is regenerated
-  (`BLESS=1 cargo test --test cli_surface`).
+  (`BLESS=1 cargo test --test cli_surface`). The golden records clap defaults only. A default
+  that the code sets, such as the `--packages` default, does not change the golden, so review
+  such a change by hand.
 - **Config keys**: `parses_a_full_config` exercises every key, and `#[serde(deny_unknown_fields)]`
   rejects a renamed/removed key.
 - **`--format json`**: `json_report_schema_is_stable`, `index_report_schema_is_stable`,
@@ -136,8 +138,8 @@ The [Deprecations](docs/deprecations.md) page lists what to write instead.
   regular file, such as a FIFO, and starts like an ELF now fails `graph` too. 1.x did not warn
   for it.
 - The packed program or an `--include` library can be at a package record path on the host, such
-  as `/var/lib/dpkg/status.d/libc6`. An explicit `--packages` value with `sbom` or `image` then
-  fails, with exit code 1. Before, the pack exited 0, but the record replaced the file,
+  as `/var/lib/dpkg/status.d/libc6`. An explicit `image` in `--packages`, or an explicit `sbom`
+  with `--sbom` or `--scan`, then fails, with exit code 1. Before, the pack exited 0, but the record replaced the file,
   and with `sbom` the pack then deleted it. 1.x did not warn for it. Remove `sbom` and `image`
   from `--packages`, or move the file on the host.
 - A library that the program or a library needs (`DT_NEEDED`) can sit only in a directory whose

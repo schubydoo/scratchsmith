@@ -1,8 +1,8 @@
 # Deprecations
 
-Scratchsmith keeps the version 1.0 contract in
+Scratchsmith keeps its contract in
 [COMPATIBILITY.md](https://github.com/schubydoo/scratchsmith/blob/main/COMPATIBILITY.md).
-Nothing on that contract disappears without notice. This page lists everything on the way out,
+Only a major version can change it, and nothing on it disappears without notice. This page lists everything on the way out,
 and what you write instead.
 
 This page has one list for each kind of change. Two kinds change only in a major version:
@@ -92,9 +92,9 @@ No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list
 |---|---|---|---|
 | A nested `[profile.a.profile.b]` table | 1.5.0 | An error. `pack` exits `1` | A top-level `[profile.b]` table, with the keys it relied on repeated |
 | `--label NAME` with no `=` | 1.5.0 | A usage error, exit code 2 | `--label NAME=value`, or `--label NAME=` for an empty value |
-| `--env NAME` with no `=` | 1.5.0 | A usage error, exit code 2 | `--env NAME=value` |
-| A `label` or `env` entry with no `=` in `scratchsmith.toml` | 1.5.0 | A usage error, exit code 2 | `"NAME=value"` |
-| A library that starts like an ELF and cannot be parsed | 1.6.0 | An error. `pack` and `graph` exit `1` and name the file. 1.x did not warn for a file that is not a regular file, such as a FIFO named with `--include`, so that case fails now with no earlier warning | Replace the damaged file with an intact copy |
+| `--env NAME` with no `=` | 1.5.0 | A usage error, exit code 2 | `--env NAME=value`, or `--env NAME=` for an empty value |
+| A `label` or `env` entry with no `=` in `scratchsmith.toml` | 1.5.0 | A usage error, exit code 2 | `"NAME=value"`, or `"NAME="` for an empty value |
+| A library that starts like an ELF and cannot be parsed | 1.6.0 | An error. `pack` and `graph` exit `1` and name the file. 1.x did not warn for a file that is not a regular file, such as a FIFO named with `--include`. `graph` now fails on it with no earlier warning. `pack` already refused it in 1.x | Replace the damaged file with an intact copy |
 | A library found only through an inherited `RPATH`, by an object that has `RUNPATH` | 1.6.0 | Reported as missing, and `pack` and `graph` fail | Give that object the directory in its own `RUNPATH` |
 | A command line refused after the parse, such as `--watch --format json` | Not warned | A usage error, exit code 2. 1.x exited 1 | Fix the command line. A script that tests for exactly `1` must also accept `2` |
 | `--packages` (the `packages` key) with no value | 1.9.0 | The default is `report,sbom`, so `--sbom` and `--scan` see the packages and a `--scan-fail-on` gate can find more | `--packages report` (or `packages = ["report"]`) for the 1.x result |
@@ -102,7 +102,7 @@ No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list
 | `pack --no-build --output DIR` into a `DIR` that cannot be listed | Not warned | An error. `pack` exits `1` | A directory that you can read, or a new one |
 | `$PLATFORM` in a search path, on an architecture with no value for it | 1.6.0 | An error. `pack` and `graph` exit `1` and name the file that holds the search path | Write the directory name in the path |
 | A program interpreter (`PT_INTERP`) that starts like an ELF and cannot be parsed | 1.8.0 | An error. `pack` and `graph` exit `1` and name the file | Replace the damaged loader with an intact copy |
-| An explicit `sbom` or `image` in `--packages`, with the program or an `--include` library at a package record path on the host | Not warned | An error. `pack` exits `1` and names the path. 1.x exited 0, and the record replaced the file | Remove `sbom` and `image` from `--packages`, or move the file on the host |
+| The program or an `--include` library at a package record path on the host. This applies to an explicit `image` in `--packages`, or an explicit `sbom` with `--sbom` or `--scan` | Not warned | An error. `pack` exits `1` and names the path. 1.x exited 0, and the record replaced the file | Remove `sbom` and `image` from `--packages`, or move the file on the host |
 | A `DT_NEEDED` library only in a directory whose name holds `:`, which `ldconfig` does not cache | Not warned | Missing. `pack` and `graph` exit `1`, and a `note:` line names the directory. 1.x exited 0, and the image exited 127 at start. An `--include` file there still stages | Move the library to a directory with no `:` in its name |
 
 ### A library found only through an inherited `RPATH`
