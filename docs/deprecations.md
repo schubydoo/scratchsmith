@@ -5,12 +5,12 @@ Scratchsmith keeps the version 1.0 contract in
 Nothing on that contract disappears without notice. This page lists everything on the way out,
 and what you write instead.
 
-This page has one list for each kind of change. Three kinds change only in a major version:
-deprecated input shapes, tolerances, and changing defaults. Refused input is a fourth kind,
-because a minor release can refuse input that is the attack itself. The last list, Removed in
-2.0.0, shows what version 2.0.0 changed after its deprecation cycle ended. Most inputs there now
-fail, and one gets a new default. It also shows two changes in 2.0.0 with no warning first: an
-exit code, and an output directory that cannot be listed. It says why for each.
+This page has one list for each kind of change. Two kinds change only in a major version:
+deprecated input shapes and tolerances. Refused input is a third kind, because a minor release
+can refuse input that is the attack itself. The last list, Removed in 2.0.0, shows what version
+2.0.0 changed after its deprecation cycle ended. Most inputs there now fail, and one gets a new
+default. It also shows three changes in 2.0.0 with no warning first: an exit code, an output
+directory that cannot be listed, and an `--include` file that is not a regular file.
 
 A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.
@@ -78,8 +78,8 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.
 
 ## Tolerances ending in 2.0
 
-| Input | Warns since | Error in | What to do |
-|---|---|---|---|
+No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list
+[Removed in 2.0.0](#removed-in-200) names each one.
 
 ## Removed in 2.0.0
 

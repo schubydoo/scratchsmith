@@ -100,8 +100,9 @@ change:
 ## Breaking changes in 2.0.0
 
 Each item below warned on stderr before 2.0, from the release that the Deprecations page names,
-with two exceptions. The `--no-build` output directory that cannot be listed had no warning, and
-the last item changed an exit code with no warning.
+with three exceptions. The `--no-build` output directory that cannot be listed had no warning.
+An `--include` file that is not a regular file and starts like an ELF had no warning. The last
+item changed an exit code with no warning.
 The [Deprecations](docs/deprecations.md) page lists what to write instead.
 
 - A library that sits only in an inherited `RPATH` directory, needed by an object that has
@@ -126,6 +127,11 @@ The [Deprecations](docs/deprecations.md) page lists what to write instead.
 - A program interpreter (`PT_INTERP`) that starts like an ELF and cannot be parsed is now an
   error, with exit code 1. Before, `pack` and `graph` warned and went on. Replace the damaged
   loader with an intact copy.
+- A library that starts like an ELF and cannot be parsed is now an error, with exit code 1.
+  Before, `pack` and `graph` warned and kept it, and the libraries that it needs did not reach
+  the image. Replace the damaged file with an intact copy. An `--include` file that is not a
+  regular file, such as a FIFO, and starts like an ELF now fails `graph` too. 1.x did not warn
+  for it.
 - A command line that scratchsmith refuses only after the parse now exits 2, not 1. Examples are
   `--watch --format json`, `pack` with no binary, and one `--add-file` image path given twice.
   This had no warning before 2.0. A script that tests for exactly `1` must also accept `2`.
