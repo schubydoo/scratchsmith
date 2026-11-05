@@ -67,7 +67,7 @@ the `packages` input to `none`.
 |---|---|---|
 | `binary` | *(required)* | Path to the dynamically linked glibc ELF binary to pack. |
 | `version` | *(the pinned tag, else `latest`)* | Which scratchsmith release to download: a tag like `v1.0.0`, or `latest`. |
-| `output` | | Stage the rootfs into this directory instead of building an image (`--no-build`). |
+| `output` | | Stage the rootfs into this directory instead of building an image (`--no-build`). The directory must be new or empty. |
 | `entrypoint` | *(the binary's path)* | Image `ENTRYPOINT`. |
 | `cmd` | | Default arguments appended to the entrypoint, one per line. |
 | `env` | | Image environment entries, one `KEY=VALUE` per line. |

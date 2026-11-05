@@ -564,8 +564,7 @@ fn is_package_name(s: &str) -> bool {
 /// the `sbom` output shows the packages to syft and grype without changing the image; call
 /// `keep` for the `image` output.
 ///
-/// A record that was already there (a second pack into the same `--output` directory) is
-/// replaced, and it is removed like the rest: it can only be one an earlier pack kept, and
+/// A record that was already there is replaced, and it is removed like the rest, because
 /// the `sbom` promise is that the image does not carry the records. Directories are removed
 /// only when this call created them, and an os-release that was already there is not
 /// touched, because that one can be the user's.

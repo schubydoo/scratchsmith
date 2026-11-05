@@ -646,8 +646,6 @@ scratchsmith pack -n -o sbom --packages report,sbom --sbom --sbom-file /tmp/sbom
 echo "SBOM $(grep -o 'pkg:rpm/fedora/glibc@[^"?]*' sbom.json | head -1)"
 echo "SBOM_LEFT $(find sbom -name 'rpmdb*' | wc -l) $(test -e sbom/etc/os-release && echo os-release || echo none)"
 scratchsmith pack -n -o image --packages image --ca-certs /usr/bin/id > /dev/null
-# The CA bundle is staged read-only, like its source, and the second pack replaces it.
-scratchsmith pack -n -o image --packages image --ca-certs /usr/bin/id > /dev/null
 scratchsmith pack -n -o again --packages image --ca-certs /usr/bin/id > /dev/null
 echo "IMAGE_FILES $(cd image && find . -path '*rpm*' -type f | sort | tr '\n' ' ')"
 echo "IMAGE_DB $(rpm --root /tmp/image -qa --qf '%{NAME}\n' | sort | tr '\n' ' ')"
@@ -722,8 +720,7 @@ if scratchsmith pack -n -o clash --packages image --add-file /tmp/mine/db:/usr/l
         db.split_whitespace().count() < 12,
         "only the owning packages: {db}"
     );
-    // A second pack into the same directory replaces the first database. If it added to it,
-    // every package would be there twice.
+    // The database holds each package once.
     assert_eq!(line("IMAGE_DUPLICATES "), "0", "{stdout}");
     // Two packs give the same database, byte for byte: one distinct checksum.
     assert_eq!(line("SAME_BYTES "), "1", "{stdout}");

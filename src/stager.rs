@@ -1033,8 +1033,8 @@ fn under(root: &Path, abs: &Path) -> PathBuf {
 }
 
 /// The host path of `image` inside the staging root `dest`, with every staged link on the way
-/// read inside the image (`image_dir`). A reused `--no-build --output DIR` can hold a link such
-/// as `lib -> /usr/lib`, and a plain join would let the host follow it to its own `/usr/lib`.
+/// read inside the image (`image_dir`). A link staged earlier in this pack, such as an
+/// `--add-file` link `lib -> /usr/lib`, would let a plain join follow it to the host's `/usr/lib`.
 /// `create` makes the missing directories. The final name is not resolved: a caller that
 /// writes replaces it by a rename (`copy_into`, `write_into`), never writes through it.
 pub(crate) fn staged_path(dest: &Path, image: &Path, create: bool) -> Result<PathBuf> {
@@ -1086,7 +1086,7 @@ fn copy_into(src: &Path, root: &Path, abs_target: &Path) -> Result<()> {
     }
     let target = staged_path(root, abs_target, true)?;
     // Copy to a sibling and rename it over the name, as `packages::write_record` does. A
-    // file that an earlier pack into this directory left is replaced, never written into:
+    // file already at the name is replaced, never written into:
     // `fs::copy` opens its target for writing, so a read-only copy (a 0444 CA bundle) fails
     // for anyone but root, and a hard link or a symlink would carry the write elsewhere.
     let dir = target.parent().context("a staged file has no directory")?;

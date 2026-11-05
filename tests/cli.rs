@@ -1077,49 +1077,115 @@ fn a_nested_profile_fails_the_pack() {
     assert!(!rootfs.exists(), "nothing should be staged");
 }
 
+fn pack_no_build_into(bin: &str, out: &std::path::Path) -> std::process::Output {
+    run(&["pack", "--no-build", "-o", out.to_str().unwrap(), bin])
+}
+
 #[test]
-fn a_second_pack_into_the_same_directory_warns_and_replaces_a_read_only_file() {
-    use std::os::unix::fs::PermissionsExt;
+fn a_second_pack_into_the_same_directory_is_refused_before_any_staging() {
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");
         return;
     };
-    // A binary with no write bit stages a copy with no write bit, which is the file a second
-    // pack has to replace.
     let tmp = tempfile::tempdir().unwrap();
-    let read_only = tmp.path().join("app");
-    std::fs::copy(bin, &read_only).unwrap();
-    std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o555)).unwrap();
     let rootfs = tmp.path().join("rootfs");
-    let pack = || {
-        run(&[
-            "pack",
-            "--no-build",
-            "-o",
-            rootfs.to_str().unwrap(),
-            read_only.to_str().unwrap(),
-        ])
-    };
 
-    let first = pack();
-    let stderr = String::from_utf8_lossy(&first.stderr);
-    assert!(first.status.success(), "the first pack: {stderr}");
+    let first = pack_no_build_into(bin, &rootfs);
     assert!(
-        !stderr.contains("is not empty"),
-        "a new directory must stay quiet: {stderr}"
+        first.status.success(),
+        "the first pack: {}",
+        String::from_utf8_lossy(&first.stderr)
     );
+    let count = |d: &std::path::Path| walkdir_count(d);
+    let before = count(&rootfs);
 
-    let second = pack();
+    let second = pack_no_build_into(bin, &rootfs);
     let stderr = String::from_utf8_lossy(&second.stderr);
-    assert!(second.status.success(), "the second pack: {stderr}");
+    assert!(!second.status.success(), "the second pack must fail");
     assert!(
-        stderr.contains("is not empty") && stderr.contains("scratchsmith 2.0 rejects it"),
-        "a directory with an earlier pack in it must warn: {stderr}"
+        stderr.contains("is not empty") && stderr.contains("choose another directory"),
+        "the error must name the problem and the fix: {stderr}"
     );
+    assert_eq!(before, count(&rootfs), "a refused pack must write nothing");
+}
+
+fn walkdir_count(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| {
+            let p = e.unwrap().path();
+            1 + if p.is_dir() && !p.is_symlink() {
+                walkdir_count(&p)
+            } else {
+                0
+            }
+        })
+        .sum()
+}
+
+#[test]
+fn an_empty_or_absent_output_directory_still_works() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let empty = tmp.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    let absent = tmp.path().join("absent");
+    for dir in [&empty, &absent] {
+        let out = pack_no_build_into(bin, dir);
+        assert!(
+            out.status.success(),
+            "{}: {}",
+            dir.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(dir.join("etc").exists() || dir.read_dir().unwrap().next().is_some());
+    }
+}
+
+#[test]
+fn an_output_path_that_is_a_symlink_or_a_file_is_refused() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let out = pack_no_build_into(bin, &link);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a symlink must be refused");
+    assert!(stderr.contains("symbolic link"), "{stderr}");
     assert!(
-        stderr.contains("https://schubydoo.github.io/scratchsmith/latest/deprecations/"),
-        "the warning must point at the versioned Deprecations page: {stderr}"
+        real.read_dir().unwrap().next().is_none(),
+        "nothing may be written through the link"
     );
+    // A trailing slash makes a path lookup follow the link, so it must not slip past the check.
+    let out = run(&[
+        "pack",
+        "--no-build",
+        "-o",
+        &format!("{}/", link.display()),
+        bin,
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "`link/` must be refused");
+    assert!(stderr.contains("symbolic link"), "{stderr}");
+    assert!(
+        real.read_dir().unwrap().next().is_none(),
+        "nothing may be written through `link/`"
+    );
+
+    let file = tmp.path().join("file");
+    std::fs::write(&file, b"x").unwrap();
+    let out = pack_no_build_into(bin, &file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a file must be refused");
+    assert!(stderr.contains("not a directory"), "{stderr}");
 }
 
 #[test]
@@ -1846,11 +1912,6 @@ fn the_report_names_the_packages_that_own_the_bundled_files() {
     // `none` must stand alone. That is a usage error.
     let out = run(&["pack", "--packages", "none,sbom", "-n", "-o", "/tmp/x", bin]);
     assert_eq!(out.status.code(), Some(2));
-
-    // A second pack into the same directory, the shape `--no-build` invites, must not trip
-    // over the records the first one kept.
-    let (_, rootfs) = pack("image", &["--packages", "image"]);
-    assert!(rootfs.join("var/lib/dpkg/status.d").join(name).is_file());
 }
 
 #[test]
@@ -1921,21 +1982,6 @@ fn the_sbom_names_the_owning_packages_and_the_image_does_not_keep_the_records() 
     assert!(
         !rootfs.join("etc/os-release").exists(),
         "os-release must not stay"
-    );
-
-    // The same promise when an earlier `image` pack left its records in this directory:
-    // an `sbom` pack replaces them for the scan and must then take them away.
-    let (_, rootfs) = deb_packages("reused", &["--packages", "image"]);
-    let records = rootfs.join("var/lib/dpkg/status.d");
-    assert!(
-        std::fs::read_dir(&records).unwrap().count() > 0,
-        "image keeps them"
-    );
-    deb_packages("reused", &["--packages", "report,sbom"]);
-    assert_eq!(
-        std::fs::read_dir(&records).map_or(0, |d| d.count()),
-        0,
-        "an sbom pack must not leave an earlier pack's records in the image"
     );
 }
 

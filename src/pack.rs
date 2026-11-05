@@ -586,7 +586,8 @@ fn finish_staging(
     warnings.extend(locale_env_warning(&opts.locales, &opts.image.env));
     // Everything a package can own is in the tree now, so this is where the owners are
     // asked for: the files the flags above copied in, on top of the binary and its libraries.
-    // Read inside the image: a link in a reused output directory must not answer from the host.
+    // Read inside the image: a link this pack staged (an `--add-file` link) must not answer
+    // from the host.
     let staged_meta = |image: &Path| {
         stager::staged_path(dest, image, false)
             .ok()
@@ -685,19 +686,49 @@ fn finish_staging(
     })
 }
 
-/// Warn on stderr when the `--no-build` output directory already holds something. The pack
-/// merges into whatever is there, so a file it does not stage stays in the tree. stderr,
-/// like every tolerance: stdout carries the `--format json` report.
-pub fn warn_about_a_used_output_dir(out_dir: &Path) {
-    if out_dir
+/// Refuse a `--no-build` output directory that is not new or empty, before anything is staged.
+/// Staging merges into what is there, so a file from an earlier pack would stay in the tree.
+/// A symlink is refused even when it points at an empty directory: a write could leave the
+/// tree through it. A path that exists but is not a directory is refused too. An absent
+/// directory is created here, so the pack owns it before any file is staged.
+fn check_output_dir(out_dir: &Path) -> Result<()> {
+    // `components()` drops a trailing `/` (and `/.`), which would make the lookup follow a link.
+    let out_dir: PathBuf = out_dir.components().collect();
+    let shown = out_dir.display();
+    let meta = match std::fs::symlink_metadata(&out_dir) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return claim_output_dir(&out_dir),
+        Err(e) => bail!("cannot inspect the output directory {shown}: {e}"),
+    };
+    if meta.file_type().is_symlink() {
+        bail!("the output directory {shown} is a symbolic link. Pass the real directory, or a new one");
+    }
+    if !meta.is_dir() {
+        bail!("the output path {shown} exists and is not a directory. Choose another path");
+    }
+    let mut entries = out_dir
         .read_dir()
-        .is_ok_and(|mut entries| entries.next().is_some())
-    {
-        eprintln!(
-            "warning: the output directory {} is not empty. This pack merges into it, and a file from an earlier pack that this pack does not stage stays in the tree. scratchsmith 2.0 rejects it. See {}",
-            out_dir.display(),
-            crate::image::DEPRECATIONS_URL
-        );
+        .map_err(|e| anyhow::anyhow!("cannot read the output directory {shown}: {e}"))?;
+    if entries.next().is_some() {
+        bail!("the output directory {shown} is not empty. Empty or remove it, or choose another directory");
+    }
+    Ok(())
+}
+
+/// Create the absent output directory. `create_dir` on the last name fails when something
+/// made it after the check, so a race cannot slip a used directory in.
+fn claim_output_dir(out_dir: &Path) -> Result<()> {
+    let shown = out_dir.display();
+    if let Some(parent) = out_dir.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow::anyhow!("cannot create the parent of {shown}: {e}"))?;
+    }
+    match std::fs::create_dir(out_dir) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => bail!(
+            "the output directory {shown} was created by something else after the check. Choose another directory"
+        ),
+        Err(e) => bail!("cannot create the output directory {shown}: {e}"),
     }
 }
 
@@ -708,6 +739,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
     if opts.smoke {
         bail!(crate::cli::UsageError("--smoke needs a built image, so it isn't supported with --no-build; drop --smoke, or set `smoke = false` in the profile".into()));
     }
+    check_output_dir(out_dir)?;
     let StagedRootfs {
         tree,
         size,
@@ -953,6 +985,30 @@ fn image_tag(binary: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_symlinked_output_dir_is_refused_with_a_trailing_slash_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        for out in [link.clone(), PathBuf::from(format!("{}/", link.display()))] {
+            let err = check_output_dir(&out).unwrap_err().to_string();
+            assert!(err.contains("symbolic link"), "{}: {err}", out.display());
+        }
+    }
+
+    #[test]
+    fn an_absent_output_dir_is_created_and_one_that_appears_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("a/b/rootfs");
+        check_output_dir(&out).unwrap();
+        assert!(out.is_dir(), "the check claims an absent directory");
+        // What a racing writer leaves between the lookup and the claim.
+        let err = claim_output_dir(&out).unwrap_err().to_string();
+        assert!(err.contains("Choose another directory"), "{err}");
+    }
 
     #[test]
     fn a_host_that_cannot_name_packages_fails_only_what_asked_for_records() {
