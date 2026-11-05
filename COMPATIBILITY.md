@@ -86,6 +86,20 @@ change:
 - **Library API**: a non-blocking `cargo-semver-checks` CI job surfaces `pub`-API changes as a
   heads-up. It is not a gate, because the library is out of contract.
 
+## Breaking changes in 2.0.0
+
+Each item below warned on stderr before 2.0, from the release that the Deprecations page names.
+The [Deprecations](docs/deprecations.md) page lists what to write instead.
+
+- A library that sits only in an inherited `RPATH` directory, needed by an object that has
+  `RUNPATH`, is now reported as missing. `pack` and `graph` fail, as the loader does.
+- A nested `[profile.a.profile.b]` table in `scratchsmith.toml` is now an error, with exit code 1.
+  Before, scratchsmith warned and ignored the table. Move it to a top-level `[profile.b]` table.
+- `--label NAME` and `--env NAME` with no `=` are now a usage error, with exit code 2. Before,
+  they warned and packed anyway. Write `NAME=value`, or `NAME=` for an empty value.
+- A `label` or `env` entry with no `=` in `scratchsmith.toml` is now an error, with exit code 1.
+  Write each entry as `NAME=value`.
+
 ## Reporting a compatibility regression
 
 If an upgrade within a major version breaks a documented CLI flag, config key, JSON field, or
