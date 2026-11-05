@@ -5,7 +5,9 @@
 //! ELF, and `resolve_with` turns each soname into a real path by searching DT_RPATH (the
 //! object's own, then its ancestors' — RPATH is transitive, and all of it is ignored when
 //! the object also declares RUNPATH), then its own DT_RUNPATH, then the sysroot default dirs.
-//! `$ORIGIN`, `$LIB` and `$PLATFORM` are expanded inside those entries, not searched.
+//! Each RPATH or RUNPATH string is split on ':' into entries, and `$ORIGIN`, `$LIB` and
+//! `$PLATFORM` are expanded inside each entry, not searched. After all split entries miss, a
+//! string that holds ':' is also tried whole as one directory, before the default dirs.
 
 use anyhow::{bail, Context, Result};
 use std::collections::{HashSet, VecDeque};
@@ -446,7 +448,8 @@ pub fn resolve_with(
     }
 
     // Breadth-first walk. Each item carries the transitive RPATH dirs contributed
-    // by its ancestors — RPATH is inherited down the tree, RUNPATH is not.
+    // by its ancestors — RPATH is inherited down the tree, RUNPATH is not. The two lists are
+    // the split entries and the whole-string fallbacks (see `literal_dirs`).
     let mut visited = HashSet::new();
     visited.insert(root_path.clone());
     let mut queue = VecDeque::new();
@@ -455,11 +458,13 @@ pub fn resolve_with(
     queue.push_back((
         root_path,
         root_info.clone(),
-        Vec::<PathBuf>::new(),
+        (Vec::<PathBuf>::new(), Vec::<PathBuf>::new()),
         declared_needed,
     ));
 
-    while let Some((obj_path, obj, inherited_rpaths, declared)) = queue.pop_front() {
+    while let Some((obj_path, obj, (inherited_rpaths, inherited_literals), declared)) =
+        queue.pop_front()
+    {
         let obj_dir = obj_path.parent().unwrap_or(Path::new("/"));
 
         // One glibc rule, read twice below: an object that declares RUNPATH searches NO
@@ -475,8 +480,8 @@ pub fn resolve_with(
         // An RPATH entry is also handed to every child, so any DT_NEEDED at all is enough.
         if root_info.platform().is_empty() {
             let bare_soname = obj.needed.iter().any(|n| !n.contains('/'));
-            let rpaths = used_rpaths.iter().filter(|_| !obj.needed.is_empty());
-            let runpaths = obj.runpaths.iter().filter(|_| bare_soname);
+            let rpaths = search_entries(used_rpaths).filter(|_| !obj.needed.is_empty());
+            let runpaths = search_entries(&obj.runpaths).filter(|_| bare_soname);
             for entry in rpaths.chain(runpaths) {
                 if entry.contains("$PLATFORM") || entry.contains("${PLATFORM}") {
                     bail!(
@@ -494,16 +499,24 @@ pub fn resolve_with(
         }
         let own_rpaths = build_dirs(used_rpaths, obj_dir, &sysroot.root, &root_info);
         let runpath_dirs = build_dirs(&obj.runpaths, obj_dir, &sysroot.root, &root_info);
+        let own_literals = literal_dirs(used_rpaths, obj_dir, &sysroot.root, &root_info);
+        let runpath_literals = literal_dirs(&obj.runpaths, obj_dir, &sysroot.root, &root_info);
 
         // Search order: RPATH (own, then ancestors' — transitive) -> RUNPATH (this
-        // object only) -> default dirs. LD_LIBRARY_PATH is deliberately omitted, and so is
-        // the host's /etc/ld.so.cache: resolution never trusts the host's loader state.
+        // object only) -> the whole-string fallbacks, in the same order -> default dirs.
+        // LD_LIBRARY_PATH is deliberately omitted, and so is the host's /etc/ld.so.cache:
+        // resolution never trusts the host's loader state.
         let mut search: Vec<PathBuf> = Vec::new();
         search.extend(own_rpaths.iter().cloned());
         if searches_rpath {
             search.extend(inherited_rpaths.iter().cloned());
         }
         search.extend(runpath_dirs);
+        search.extend(own_literals.iter().cloned());
+        if searches_rpath {
+            search.extend(inherited_literals.iter().cloned());
+        }
+        search.extend(runpath_literals);
         search.extend(sysroot.default_dirs.iter().cloned());
 
         // Children inherit the RPATH view this object searched (own + ancestors'), never its
@@ -514,6 +527,13 @@ pub fn resolve_with(
         // DT_RPATH entry there, so no later ancestor walk sees it. Measured on glibc 2.41.
         let mut child_rpaths = own_rpaths;
         child_rpaths.extend(inherited_rpaths.iter().cloned());
+        let mut child_literals = own_literals;
+        child_literals.extend(inherited_literals.iter().cloned());
+        let inherited_all: Vec<PathBuf> = inherited_rpaths
+            .iter()
+            .chain(&inherited_literals)
+            .cloned()
+            .collect();
 
         for (i, soname) in obj.needed.iter().enumerate() {
             let Some(found) = find_lib(soname, &search, obj_dir, &sysroot.root) else {
@@ -521,7 +541,7 @@ pub fn resolve_with(
                 // there, say so, so the user is not told only that it is missing. The probe
                 // names the cause and nothing more: the soname stays missing.
                 if !searches_rpath {
-                    if let Some(hit) = find_lib(soname, &inherited_rpaths, obj_dir, &sysroot.root) {
+                    if let Some(hit) = find_lib(soname, &inherited_all, obj_dir, &sysroot.root) {
                         let dir = hit.parent().unwrap_or(Path::new("/"));
                         push_unique(
                             &mut resolution.hints,
@@ -603,7 +623,12 @@ pub fn resolve_with(
                 }
                 Some(child) => {
                     let declared = child.needed.len();
-                    queue.push_back((real, child, child_rpaths.clone(), declared));
+                    queue.push_back((
+                        real,
+                        child,
+                        (child_rpaths.clone(), child_literals.clone()),
+                        declared,
+                    ));
                 }
                 // The name came out of an ELF: a path, or a bare name found through a search
                 // path the ELF set, can point at any host file, which would then ship in the
@@ -638,20 +663,51 @@ fn expand_tokens(raw: &str, origin_dir: &Path, root: &ElfInfo) -> String {
         .replace("$PLATFORM", root.platform())
 }
 
-// Turn raw RPATH/RUNPATH entries into concrete directories: expand tokens, root
+// The entries of RPATH or RUNPATH strings, in order. ld joins several -rpath flags into one
+// string, and ld.so splits it on ':' (`decompose_rpath`). An empty entry in a list is the
+// working directory at run time to ld.so, which a build cannot know, so it is skipped. A
+// string with no ':' stays one entry, exactly as before the split.
+fn search_entries(raw: &[String]) -> impl Iterator<Item = &str> {
+    raw.iter().flat_map(|list| {
+        let is_list = list.contains(':');
+        list.split(':')
+            .filter(move |entry| !(is_list && entry.is_empty()))
+    })
+}
+
+// Turn raw RPATH/RUNPATH strings into concrete directories: split them, expand tokens, root
 // absolute paths inside the sysroot, and treat anything relative as origin-relative.
 fn build_dirs(raw: &[String], origin_dir: &Path, root: &Path, root_info: &ElfInfo) -> Vec<PathBuf> {
-    raw.iter()
-        .map(|entry| {
-            let expanded = expand_tokens(entry, origin_dir, root_info);
-            let p = Path::new(&expanded);
-            if p.is_absolute() {
-                reroot(root, p)
-            } else {
-                origin_dir.join(p)
-            }
-        })
+    search_entries(raw)
+        .map(|entry| entry_dir(entry, origin_dir, root, root_info))
         .collect()
+}
+
+// Each string that holds a ':', read whole as one directory, as 1.x read it. ld.so never
+// searches that directory, but the staged ld.so.cache lists every directory a library came
+// from, and ldconfig keeps a `:` in a directory name. So a library found only there loads from
+// the cache, after RPATH and RUNPATH miss. Measured with a v1.9.0 image on glibc 2.41.
+fn literal_dirs(
+    raw: &[String],
+    origin_dir: &Path,
+    root: &Path,
+    root_info: &ElfInfo,
+) -> Vec<PathBuf> {
+    raw.iter()
+        .filter(|list| list.contains(':'))
+        .map(|list| entry_dir(list, origin_dir, root, root_info))
+        .collect()
+}
+
+// One search-path entry as a concrete directory.
+fn entry_dir(entry: &str, origin_dir: &Path, root: &Path, root_info: &ElfInfo) -> PathBuf {
+    let expanded = expand_tokens(entry, origin_dir, root_info);
+    let p = Path::new(&expanded);
+    if p.is_absolute() {
+        reroot(root, p)
+    } else {
+        origin_dir.join(p)
+    }
 }
 
 // Find the first search dir containing `soname`. A soname with a slash is a path,
@@ -1789,9 +1845,9 @@ mod tests {
         assert!(resolve_as(riscv, &["/opt/${PLATFORM}"], &[]).is_err());
 
         // The entry is text from an untrusted binary. It must not reach the terminal raw.
-        let e = resolve_as(riscv, &[], &["/opt/$PLATFORM\nwarning: forged\x1b[2J"]).unwrap_err();
+        let e = resolve_as(riscv, &[], &["/opt/$PLATFORM\nwarning forged\x1b[2J"]).unwrap_err();
         assert!(!e.contains('\n') && !e.contains('\x1b'), "{e}");
-        assert!(e.contains("\\nwarning: forged\\u{1b}[2J"), "{e}");
+        assert!(e.contains("\\nwarning forged\\u{1b}[2J"), "{e}");
 
         // No bare soname means no search: nothing is needed, or the one entry is a path.
         let tokened = ["/opt/$PLATFORM/lib"];
@@ -2019,6 +2075,210 @@ mod tests {
             .map(|l| l.path.clone());
         assert_eq!(leaf_path, Some(canonical(&leaf)));
         assert!(res.missing.is_empty(), "{:?}", res.missing);
+    }
+
+    // Where one direct dep of app/exe resolved to, for the colon-list tests below.
+    fn resolve_one(root: &Path, rpaths: &[&str], runpaths: &[&str]) -> Option<PathBuf> {
+        let exe = root.join("app/exe");
+        touch(&exe);
+        let mut infos =
+            HashMap::from([(canonical(&exe), elf(&["libfoo.so"], rpaths, runpaths, None))]);
+        // Every copy the tests place is a parsable leaf.
+        for dir in ["app", "app/a", "app/b", "app/x86_64", "app/x", "app/x:y"] {
+            infos.insert(
+                canonical(&root.join(dir).join("libfoo.so")),
+                elf(&[], &[], &[], None),
+            );
+        }
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        res.libs.first().map(|l| l.path.clone())
+    }
+
+    #[test]
+    fn each_colon_entry_of_rpath_and_runpath_is_searched_in_order() {
+        // ld joins several -rpath flags into one string, and ld.so splits it on ':'
+        // (`decompose_rpath`). A missing first entry does not hide a later one.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let a = root.join("app/a/libfoo.so");
+        touch(&a);
+        for list in [
+            "/opt/none:$ORIGIN/a",
+            "$ORIGIN/a:/opt/none",
+            "${ORIGIN}/a/:/x",
+        ] {
+            assert_eq!(
+                resolve_one(root, &[list], &[]),
+                Some(canonical(&a)),
+                "RPATH {list}"
+            );
+            assert_eq!(
+                resolve_one(root, &[], &[list]),
+                Some(canonical(&a)),
+                "RUNPATH {list}"
+            );
+        }
+        // A library in two entries comes from the first, as the loader takes it.
+        let b = root.join("app/b/libfoo.so");
+        touch(&b);
+        for (list, first) in [("$ORIGIN/a:$ORIGIN/b", &a), ("$ORIGIN/b:$ORIGIN/a", &b)] {
+            assert_eq!(
+                resolve_one(root, &[list], &[]),
+                Some(canonical(first)),
+                "{list}"
+            );
+            assert_eq!(
+                resolve_one(root, &[], &[list]),
+                Some(canonical(first)),
+                "{list}"
+            );
+        }
+        // Each entry expands its own tokens: `$PLATFORM` here, `$ORIGIN` in the next one.
+        let arch = root.join("app/x86_64/libfoo.so");
+        touch(&arch);
+        let list = "/opt/none:$ORIGIN/$PLATFORM:$ORIGIN/a";
+        assert_eq!(resolve_one(root, &[], &[list]), Some(canonical(&arch)));
+    }
+
+    #[test]
+    fn an_empty_colon_entry_is_not_searched() {
+        // To ld.so an empty entry (a leading, trailing or doubled ':') is the working
+        // directory the program starts in, which a build cannot know. So it is skipped, and
+        // in particular it does not stand for the object's own directory.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let beside = root.join("app/libfoo.so");
+        touch(&beside);
+        for list in [":/opt/none", "/opt/none:", "/opt/none::/x", ":"] {
+            assert_eq!(resolve_one(root, &[list], &[]), None, "RPATH {list}");
+            assert_eq!(resolve_one(root, &[], &[list]), None, "RUNPATH {list}");
+        }
+        // The entries around an empty one are still searched.
+        let a = root.join("app/a/libfoo.so");
+        touch(&a);
+        for list in [":$ORIGIN/a", "$ORIGIN/a:", "/opt/none::$ORIGIN/a"] {
+            assert_eq!(
+                resolve_one(root, &[list], &[]),
+                Some(canonical(&a)),
+                "RPATH {list}"
+            );
+            assert_eq!(
+                resolve_one(root, &[], &[list]),
+                Some(canonical(&a)),
+                "RUNPATH {list}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_platform_token_is_judged_per_colon_entry() {
+        // The `$PLATFORM` refusal names the one entry that holds the token, not the list.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        touch(&exe);
+        let resolve_riscv = |rpaths: &[&str], runpaths: &[&str]| {
+            let mut info = elf(&["libx.so"], rpaths, runpaths, None);
+            info.machine = goblin::elf::header::EM_RISCV;
+            let infos = HashMap::from([(canonical(&exe), info)]);
+            resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos })
+                .map(|_| ())
+                .map_err(|e| format!("{e:#}"))
+        };
+        for (rpaths, runpaths) in [
+            (&["/opt/plain:/opt/$PLATFORM/lib"][..], &[][..]),
+            (&[][..], &["/opt/plain:/opt/$PLATFORM/lib:$ORIGIN"][..]),
+        ] {
+            let e = resolve_riscv(rpaths, runpaths).unwrap_err();
+            assert!(
+                e.contains("search path `/opt/$PLATFORM/lib` in") && e.contains("as `/opt//lib`"),
+                "{e}"
+            );
+        }
+        // A list with no token in any entry is not refused.
+        assert!(resolve_riscv(&[], &["/opt/plain:$ORIGIN::"]).is_ok());
+    }
+
+    #[test]
+    fn an_inherited_rpath_list_is_split_too() {
+        // Graph: exe (RPATH "/opt/none:$ORIGIN/libs") -> libmid -> libleaf, both in app/libs.
+        // The child searches the split list it inherits. With RUNPATH on libmid it searches
+        // none of it, and the hint names the one directory that holds the library.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        let mid = root.join("app/libs/libmid.so");
+        let leaf = root.join("app/libs/libleaf.so");
+        for p in [&exe, &mid, &leaf] {
+            touch(p);
+        }
+        let graph = |mid_runpaths: &[&str]| {
+            HashMap::from([
+                (
+                    canonical(&exe),
+                    elf(&["libmid.so"], &["/opt/none:$ORIGIN/libs"], &[], None),
+                ),
+                (
+                    canonical(&mid),
+                    elf(&["libleaf.so"], &[], mid_runpaths, None),
+                ),
+                (canonical(&leaf), elf(&[], &[], &[], None)),
+            ])
+        };
+        let resolve = |infos| resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos });
+
+        let res = resolve(graph(&[])).unwrap();
+        assert!(has(&res, "libleaf.so") && res.missing.is_empty(), "{res:?}");
+
+        let res = resolve(graph(&["/opt/a:/opt/b"])).unwrap();
+        assert_eq!(res.missing, ["libleaf.so"]);
+        let libs_dir = canonical(root).join("app/libs").display().to_string();
+        assert_eq!(res.hints.len(), 1, "{:?}", res.hints);
+        assert!(
+            res.hints[0].contains(&format!("is in {libs_dir},")),
+            "{}",
+            res.hints[0]
+        );
+    }
+
+    #[test]
+    fn a_directory_named_with_a_colon_is_still_found_after_the_split_misses() {
+        // ld.so splits `$ORIGIN/x:y` into `$ORIGIN/x` and `y`, but the image's ld.so.cache
+        // lists the staged `x:y` directory, so 1.x images with it start. Keep that result.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let colon = root.join("app/x:y/libfoo.so");
+        touch(&colon);
+        let list = "$ORIGIN/x:y";
+        assert_eq!(
+            resolve_one(root, &[list], &[]),
+            Some(canonical(&colon)),
+            "RPATH"
+        );
+        assert_eq!(
+            resolve_one(root, &[], &[list]),
+            Some(canonical(&colon)),
+            "RUNPATH"
+        );
+        // A copy that a split entry reaches comes first, as the loader takes it.
+        let split = root.join("app/x/libfoo.so");
+        touch(&split);
+        assert_eq!(resolve_one(root, &[], &[list]), Some(canonical(&split)));
+
+        // An inherited RPATH keeps the whole-string reading for the child too.
+        let exe = root.join("app/exe");
+        let mid = root.join("app/x:y/libmid.so");
+        let leaf = root.join("app/x:y/libleaf.so");
+        for p in [&mid, &leaf] {
+            touch(p);
+        }
+        let infos = HashMap::from([
+            (canonical(&exe), elf(&["libmid.so"], &[list], &[], None)),
+            (canonical(&mid), elf(&["libleaf.so"], &[], &[], None)),
+            (canonical(&leaf), elf(&[], &[], &[], None)),
+        ]);
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert!(has(&res, "libleaf.so") && res.missing.is_empty(), "{res:?}");
     }
 
     #[test]

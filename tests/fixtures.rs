@@ -533,6 +533,108 @@ fn a_platform_search_path_on_an_unnamed_arch_fails_both_graph_and_pack() {
 }
 
 #[test]
+fn a_colon_separated_search_path_resolves_like_the_loader() {
+    // ld joins several -rpath flags into one RPATH or RUNPATH string, and ld.so searches
+    // each ':' entry in order. A missing first entry must not hide `$ORIGIN`.
+    if !cc_available() {
+        skip_required("no C compiler");
+        return;
+    }
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    for dtags in ["-Wl,--enable-new-dtags", "-Wl,--disable-new-dtags"] {
+        for list in ["/opt/none:$ORIGIN", "$ORIGIN:/opt/none"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let dir = tmp.path();
+            std::fs::write(dir.join("foo.c"), "int foo(void){return 42;}").unwrap();
+            std::fs::write(
+                dir.join("main.c"),
+                "extern int foo(void); int main(void){return foo()==42?0:1;}",
+            )
+            .unwrap();
+            let p = |name: &str| dir.join(name).to_str().unwrap().to_string();
+            cc(&["-shared", "-fPIC", "-o", &p("libfoo.so"), &p("foo.c")]);
+            cc(&[
+                dtags,
+                &format!("-Wl,-rpath,{list}"),
+                "-o",
+                &p("app"),
+                &p("main.c"),
+                &format!("-L{}", dir.display()),
+                "-lfoo",
+            ]);
+            // The real loader is the reference: the program starts, from another directory.
+            let run = Command::new(p("app"))
+                .current_dir("/")
+                .env_remove("LD_LIBRARY_PATH")
+                .output()
+                .unwrap();
+            assert!(run.status.success(), "{dtags} {list}: the loader runs it");
+
+            let graph = Command::new(bin)
+                .args(["graph", "--format", "json", &p("app")])
+                .output()
+                .expect("run");
+            let stderr = String::from_utf8_lossy(&graph.stderr);
+            assert!(graph.status.success(), "{dtags} {list}: graph: {stderr}");
+            let report: serde_json::Value = serde_json::from_slice(&graph.stdout).unwrap();
+            assert!(report.to_string().contains("libfoo.so"), "{report}");
+
+            let rootfs = dir.join("rootfs");
+            let pack = Command::new(bin)
+                .args(["pack", "-n", "-o", rootfs.to_str().unwrap(), &p("app")])
+                .output()
+                .expect("run");
+            let stderr = String::from_utf8_lossy(&pack.stderr);
+            assert!(pack.status.success(), "{dtags} {list}: pack: {stderr}");
+            assert!(walk_contains(&rootfs, "libfoo.so"), "{dtags} {list}");
+        }
+    }
+}
+
+#[test]
+fn a_library_in_a_directory_named_with_a_colon_still_packs() {
+    // RUNPATH `$ORIGIN/x:y` with libfoo in a directory literally named `x:y`. ld.so splits the
+    // string and misses it, but the staged ld.so.cache lists `x:y`, so a 1.9 image of this
+    // program starts. The split must not turn that pack into a failure.
+    if !cc_available() {
+        skip_required("no C compiler");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let libdir = dir.join("x:y");
+    std::fs::create_dir(&libdir).unwrap();
+    std::fs::write(dir.join("foo.c"), "int foo(void){return 42;}").unwrap();
+    std::fs::write(
+        dir.join("main.c"),
+        "extern int foo(void); int main(void){return foo()==42?0:1;}",
+    )
+    .unwrap();
+    let p = |name: &str| dir.join(name).to_str().unwrap().to_string();
+    cc(&["-shared", "-fPIC", "-o", &p("x:y/libfoo.so"), &p("foo.c")]);
+    cc(&[
+        "-Wl,--enable-new-dtags",
+        "-Wl,-rpath,$ORIGIN/x:y",
+        "-o",
+        &p("app"),
+        &p("main.c"),
+        &format!("-L{}", libdir.display()),
+        "-lfoo",
+    ]);
+
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let rootfs = dir.join("rootfs");
+    let pack = Command::new(bin)
+        .args(["pack", "-n", "-o", rootfs.to_str().unwrap(), &p("app")])
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&pack.stderr);
+    assert!(pack.status.success(), "pack: {stderr}");
+    let staged = rootfs.join(libdir.canonicalize().unwrap().strip_prefix("/").unwrap());
+    assert!(staged.join("libfoo.so").is_file(), "{stderr}");
+}
+
+#[test]
 fn a_truncated_program_interpreter_gives_graph_and_pack_the_same_error() {
     // libc.so.6 lists the host loader as DT_NEEDED, not this copy, so only PT_INTERP reaches it.
     if !cc_available() {

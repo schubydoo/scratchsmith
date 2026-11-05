@@ -1,6 +1,7 @@
 #![no_main]
-//! Fuzz the ld.so-faithful resolution engine (`resolve_with`): RPATH/RUNPATH/$ORIGIN token
-//! expansion, the search-order BFS (RPATH is inherited, RUNPATH is not), and soname lookup.
+//! Fuzz the ld.so-faithful resolution engine (`resolve_with`): the ':' split of RPATH/RUNPATH,
+//! $ORIGIN token expansion, the search-order BFS (RPATH is inherited, RUNPATH is not), and
+//! soname lookup.
 //! `parse_elf_info` only reaches the parse surface; the resolution core needs a filesystem and a
 //! link-info source, so this harness scripts a dependency graph over a throwaway sysroot (mirroring
 //! the resolver's own unit tests) and asserts it never panics on an adversarial graph.
@@ -19,12 +20,54 @@ struct Facts {
     needed: Vec<String>,
     rpaths: Vec<String>,
     runpaths: Vec<String>,
+    // More RPATH and RUNPATH strings, each a list of entries joined with ':' as ld joins
+    // several -rpath flags. An arbitrary string rarely puts a ':' next to a token or a real
+    // directory, so the split and its empty entries would stay unreached without these.
+    rpath_lists: Vec<Vec<Entry>>,
+    runpath_lists: Vec<Vec<Entry>>,
     soname: Option<String>,
     is_64: bool,
     machine: u16,
     // Not a shared object, so the refusal of an ET_EXEC library is reachable. A raw u16
     // would almost never be ET_DYN and would cut every graph short.
     not_shared: bool,
+}
+
+// One entry of a ':' list: empty, a token, a directory the harness fills, or anything.
+#[derive(Arbitrary, Debug)]
+enum Entry {
+    Empty,
+    OriginLibs,
+    OriginBraced,
+    OriginPlatform,
+    Lib,
+    Dir(LibDir),
+    Missing,
+    Raw(String),
+}
+
+impl Entry {
+    fn text(&self) -> &str {
+        match self {
+            Entry::Empty => "",
+            Entry::OriginLibs => "$ORIGIN/libs",
+            Entry::OriginBraced => "${ORIGIN}/",
+            Entry::OriginPlatform => "$ORIGIN/$PLATFORM",
+            Entry::Lib => "/$LIB",
+            Entry::Dir(dir) => dir.abs(),
+            Entry::Missing => "/opt/none",
+            Entry::Raw(raw) => raw,
+        }
+    }
+}
+
+// Join each list with ':', after the plain strings.
+fn with_lists(mut plain: Vec<String>, lists: Vec<Vec<Entry>>) -> Vec<String> {
+    plain.extend(lists.iter().take(8).map(|list| {
+        let entries: Vec<&str> = list.iter().take(16).map(Entry::text).collect();
+        entries.join(":")
+    }));
+    plain
 }
 
 impl Facts {
@@ -34,8 +77,8 @@ impl Facts {
         ElfInfo {
             interpreter: self.interpreter,
             needed: cap(self.needed),
-            rpaths: cap(self.rpaths),
-            runpaths: cap(self.runpaths),
+            rpaths: cap(with_lists(self.rpaths, self.rpath_lists)),
+            runpaths: cap(with_lists(self.runpaths, self.runpath_lists)),
             soname: self.soname,
             is_64: self.is_64,
             machine: self.machine,
@@ -74,6 +117,18 @@ enum LibDir {
     UsrLib,
     LibGnu,
     AppLibs,
+}
+
+impl LibDir {
+    // The bucket as an absolute search-path entry. The resolver reroots it under the sysroot.
+    fn abs(&self) -> &'static str {
+        match self {
+            LibDir::Lib64 => "/lib64",
+            LibDir::UsrLib => "/usr/lib",
+            LibDir::LibGnu => "/lib/x86_64-linux-gnu",
+            LibDir::AppLibs => "/app/libs",
+        }
+    }
 }
 
 #[derive(Arbitrary, Debug)]
@@ -203,12 +258,7 @@ fuzz_target!(|scn: Scenario| {
         let Some(name) = safe_name(&lib.name) else {
             continue;
         };
-        let sub = match lib.dir {
-            LibDir::Lib64 => "lib64",
-            LibDir::UsrLib => "usr/lib",
-            LibDir::LibGnu => "lib/x86_64-linux-gnu",
-            LibDir::AppLibs => "app/libs",
-        };
+        let sub = lib.dir.abs().trim_start_matches('/');
         let path = root.join(sub).join(&name);
         let magic: &[u8] = if lib.non_elf { b"data" } else { b"\x7fELF" };
         if write(&path, magic).is_err() {
