@@ -20,3 +20,10 @@
 # literals that shape stays unreached.
 "ld-fuzz.so.2"
 "/lib64/ld-fuzz.so.2"
+# RPATH and RUNPATH strings are ':' lists. An empty entry is a leading, trailing or doubled ':'.
+":"
+"::"
+":$ORIGIN"
+"$ORIGIN:"
+"$ORIGIN/libs"
+"/opt/none:"
