@@ -688,21 +688,16 @@ fn finish_staging(
 
 /// Refuse a `--no-build` output directory that is not new or empty, before anything is staged.
 /// Staging merges into what is there, so a file from an earlier pack would stay in the tree.
-/// A symlink is refused even when it points at an empty directory: a write could leave the
-/// tree through it. A path that exists but is not a directory is refused too. An absent
-/// directory is created here, so the pack owns it before any file is staged.
+/// A symlink is followed, as 1.x did, so a link to an empty directory packs. A path that
+/// exists but is not a directory is refused too. An absent directory is created here, so
+/// the pack owns it before any file is staged.
 fn check_output_dir(out_dir: &Path) -> Result<()> {
-    // `components()` drops a trailing `/` (and `/.`), which would make the lookup follow a link.
-    let out_dir: PathBuf = out_dir.components().collect();
     let shown = out_dir.display();
-    let meta = match std::fs::symlink_metadata(&out_dir) {
+    let meta = match std::fs::metadata(out_dir) {
         Ok(meta) => meta,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return claim_output_dir(&out_dir),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return claim_output_dir(out_dir),
         Err(e) => bail!("cannot inspect the output directory {shown}: {e}"),
     };
-    if meta.file_type().is_symlink() {
-        bail!("the output directory {shown} is a symbolic link. Pass the real directory, or a new one");
-    }
     if !meta.is_dir() {
         bail!("the output path {shown} exists and is not a directory. Choose another path");
     }
@@ -716,7 +711,7 @@ fn check_output_dir(out_dir: &Path) -> Result<()> {
 }
 
 /// Create the absent output directory. `create_dir` on the last name fails when something
-/// made it after the check, so a race cannot slip a used directory in.
+/// made it after the check, or when it is a dangling link, so neither slips a used tree in.
 fn claim_output_dir(out_dir: &Path) -> Result<()> {
     let shown = out_dir.display();
     if let Some(parent) = out_dir.parent() {
@@ -725,9 +720,9 @@ fn claim_output_dir(out_dir: &Path) -> Result<()> {
     }
     match std::fs::create_dir(out_dir) {
         Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => bail!(
-            "the output directory {shown} was created by something else after the check. Choose another directory"
-        ),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            bail!("the output path {shown} already exists. Choose another directory")
+        }
         Err(e) => bail!("cannot create the output directory {shown}: {e}"),
     }
 }
@@ -987,15 +982,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_symlinked_output_dir_is_refused_with_a_trailing_slash_too() {
+    fn a_symlinked_output_dir_is_refused_only_when_its_target_is_not_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let real = tmp.path().join("real");
         std::fs::create_dir(&real).unwrap();
         let link = tmp.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
-        for out in [link.clone(), PathBuf::from(format!("{}/", link.display()))] {
-            let err = check_output_dir(&out).unwrap_err().to_string();
-            assert!(err.contains("symbolic link"), "{}: {err}", out.display());
+        let with_slash = PathBuf::from(format!("{}/", link.display()));
+        for out in [&link, &with_slash] {
+            check_output_dir(out).unwrap();
+        }
+        std::fs::write(real.join("old"), b"x").unwrap();
+        for out in [&link, &with_slash] {
+            let err = check_output_dir(out).unwrap_err().to_string();
+            assert!(err.contains("is not empty"), "{}: {err}", out.display());
         }
     }
 

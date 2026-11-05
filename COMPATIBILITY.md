@@ -115,9 +115,9 @@ The [Deprecations](docs/deprecations.md) page lists what to write instead.
   1.9, scratchsmith warned when `--sbom` or `--scan` ran with no `--packages` value on a host with
   a dpkg or rpm database. Now the SBOM and the scan see the packages, and a `--scan-fail-on` gate
   can find more. Write `--packages report` for the 1.x result.
-- `pack --no-build --output DIR` into a `DIR` that is not empty, a symbolic link, or a file is
-  now an error, with exit code 1. The error comes before any file is staged. Before,
-  scratchsmith warned and merged into the old tree. Use a new or empty directory.
+- `pack --no-build --output DIR` into a `DIR` that is not empty is now an error, with exit code 1.
+  The error comes before any file is staged. Before, scratchsmith warned and merged into the old
+  tree. Use a new or empty directory.
 - A command line that scratchsmith refuses only after the parse now exits 2, not 1. Examples are
   `--watch --format json`, `pack` with no binary, and one `--add-file` image path given twice.
   This had no warning before 2.0. A script that tests for exactly `1` must also accept `2`.

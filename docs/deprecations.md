@@ -119,7 +119,7 @@ $ cc -Wl,-rpath,/opt/app/lib/riscv64 -o myapp main.c
 | A library found only through an inherited `RPATH`, by an object that has `RUNPATH` | 1.6.0 | Reported as missing, and `pack` and `graph` fail | Give that object the directory in its own `RUNPATH` |
 | A command line refused after the parse, such as `--watch --format json` | Not warned | A usage error, exit code 2. 1.x exited 1 | Fix the command line. A script that tests for exactly `1` must also accept `2` |
 | `--packages` (the `packages` key) with no value | 1.9.0 | The default is `report,sbom`, so `--sbom` and `--scan` see the packages and a `--scan-fail-on` gate can find more | `--packages report` (or `packages = ["report"]`) for the 1.x result |
-| `pack --no-build --output DIR` into a `DIR` that is not empty | 1.6.0 | An error before any file is staged. A `DIR` that is a symbolic link, or a path that is a file, is an error too | A new or empty directory, or `rm -rf DIR` first |
+| `pack --no-build --output DIR` into a `DIR` that is not empty | 1.6.0 | An error before any file is staged. `pack` exits `1` | A new or empty directory, or `rm -rf DIR` first |
 
 ### A library found only through an inherited `RPATH`
 

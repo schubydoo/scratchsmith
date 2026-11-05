@@ -1377,7 +1377,7 @@ mod tests {
         let dest = tmp.path().join("dest");
         let binary = make_file(&tmp.path().join("src/app"), b"binary");
         let loader = make_file(&tmp.path().join("src/real-ld.so"), b"LOADER");
-        // An output directory reused from an earlier pack, with a merged-usr style link.
+        // A tree that already holds a merged-usr style link.
         fs::create_dir_all(dest.join("usr/lib")).unwrap();
         std::os::unix::fs::symlink("usr/lib", dest.join("lib")).unwrap();
 
@@ -1602,7 +1602,7 @@ mod tests {
         let dest = tmp.path().join("dest");
         let binary = make_file(&tmp.path().join("src/app"), b"binary");
         let real = make_file(&tmp.path().join("src/lib/libfoo.so.1.2.3"), b"FOO");
-        // An output directory reused from an earlier pack, with a merged-usr style link.
+        // A tree that already holds a merged-usr style link.
         fs::create_dir_all(dest.join("usr/lib")).unwrap();
         fs::create_dir_all(dest.join("usr/x")).unwrap();
         std::os::unix::fs::symlink("usr/lib", dest.join("lib")).unwrap();
@@ -1671,7 +1671,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reused_output_dir_with_an_absolute_link_keeps_every_write_inside_it() {
+    fn an_absolute_staged_link_keeps_every_write_inside_the_root() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("dest");
         let outside = tmp.path().join("outside");
@@ -1679,7 +1679,7 @@ mod tests {
         let binary = make_file(&tmp.path().join("src/app"), b"binary");
         let real = make_file(&tmp.path().join("src/lib/libfoo.so.1.2.3"), b"FOO");
         // A directory the library's image path passes through is a link to a HOST path, as
-        // an earlier run or a hostile tree can leave in a reused `--no-build --output DIR`.
+        // an `--add-file` or `--symlinks preserve` link staged earlier in the pack can be.
         let src_dir = real.parent().unwrap().parent().unwrap();
         let link = under(&dest, src_dir);
         fs::create_dir_all(link.parent().unwrap()).unwrap();
@@ -2320,7 +2320,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("dest");
         let src = make_file(&tmp.path().join("src/ca.pem"), b"new");
-        // What an earlier pack left: a read-only file, with a second name on the same inode.
+        // A file already in the tree: read-only, with a second name on the same inode.
         // The second name fails this test for root too, who can write into a read-only file.
         let staged = make_file(&dest.join("etc/ca.pem"), b"old");
         let other_name = tmp.path().join("other-name");

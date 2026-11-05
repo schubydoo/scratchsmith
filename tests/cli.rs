@@ -1146,39 +1146,47 @@ fn an_empty_or_absent_output_directory_still_works() {
 }
 
 #[test]
-fn an_output_path_that_is_a_symlink_or_a_file_is_refused() {
+fn a_symlinked_output_dir_is_judged_by_its_target_and_a_file_is_refused() {
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
-    let real = tmp.path().join("real");
-    std::fs::create_dir(&real).unwrap();
-    let link = tmp.path().join("link");
-    std::os::unix::fs::symlink(&real, &link).unwrap();
-    let out = pack_no_build_into(bin, &link);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "a symlink must be refused");
-    assert!(stderr.contains("symbolic link"), "{stderr}");
+    // 1.x followed the link and stayed quiet when the target was empty, so that still packs.
+    let empty = tmp.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    let to_empty = tmp.path().join("to-empty");
+    std::os::unix::fs::symlink(&empty, &to_empty).unwrap();
+    let out = pack_no_build_into(bin, &to_empty);
     assert!(
-        real.read_dir().unwrap().next().is_none(),
-        "nothing may be written through the link"
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    // A trailing slash makes a path lookup follow the link, so it must not slip past the check.
-    let out = run(&[
-        "pack",
-        "--no-build",
-        "-o",
-        &format!("{}/", link.display()),
-        bin,
-    ]);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "`link/` must be refused");
-    assert!(stderr.contains("symbolic link"), "{stderr}");
     assert!(
-        real.read_dir().unwrap().next().is_none(),
-        "nothing may be written through `link/`"
+        empty.join("etc").is_dir(),
+        "the pack stages into the target"
     );
+
+    let used = tmp.path().join("used");
+    std::fs::create_dir(&used).unwrap();
+    std::fs::write(used.join("old"), b"x").unwrap();
+    let to_used = tmp.path().join("to-used");
+    std::os::unix::fs::symlink(&used, &to_used).unwrap();
+    for out_dir in [
+        to_used.display().to_string(),
+        format!("{}/", to_used.display()),
+    ] {
+        let out = run(&["pack", "--no-build", "-o", &out_dir, bin]);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{out_dir} must be refused");
+        assert!(stderr.contains("is not empty"), "{out_dir}: {stderr}");
+        assert_eq!(
+            used.read_dir().unwrap().count(),
+            1,
+            "nothing may be staged through {out_dir}"
+        );
+    }
 
     let file = tmp.path().join("file");
     std::fs::write(&file, b"x").unwrap();

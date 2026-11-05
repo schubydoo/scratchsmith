@@ -23,8 +23,8 @@ scratchsmith pack --no-build --output ./rootfs ./app
 ```
 
 Give `--output` a new directory or an empty one. Scratchsmith does not empty the directory, so
-a directory that holds anything is an error, and nothing is staged. A symbolic link or a file
-is an error too. Remove the old directory first, or choose another.
+a directory that holds anything is an error, and nothing is staged. A file is an error
+too. Remove the old directory first, or choose another.
 
 Or write a **daemonless OCI archive** (loadable by skopeo/buildah, and pushable to a registry with
 no Docker daemon):
