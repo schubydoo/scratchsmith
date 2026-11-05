@@ -111,6 +111,10 @@ The [Deprecations](docs/deprecations.md) page lists what to write instead.
   they warned and packed anyway. Write `NAME=value`, or `NAME=` for an empty value.
 - A `label` or `env` entry with no `=` in `scratchsmith.toml` is now a usage error, with exit code 2.
   Write each entry as `NAME=value`.
+- The default `--packages` selection (the `packages` key) is now `report,sbom`, not `report`. In
+  1.9, scratchsmith warned when `--sbom` or `--scan` ran with no `--packages` value on a host with
+  a dpkg or rpm database. Now the SBOM and the scan see the packages, and a `--scan-fail-on` gate
+  can find more. Write `--packages report` for the 1.x result.
 - A command line that scratchsmith refuses only after the parse now exits 2, not 1. Examples are
   `--watch --format json`, `pack` with no binary, and one `--add-file` image path given twice.
   This had no warning before 2.0. A script that tests for exactly `1` must also accept `2`.
