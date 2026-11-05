@@ -1209,7 +1209,7 @@ fn an_output_directory_that_cannot_be_listed_is_refused() {
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o300)).unwrap();
     // Root reads any directory, so the mode proves nothing there.
     if dir.read_dir().is_ok() {
-        eprintln!("skipping: this user can list a mode 0300 directory (root)");
+        common::skip_optional("this user can list a mode 0300 directory (root)");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         return;
     }
