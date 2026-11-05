@@ -2186,6 +2186,45 @@ fn an_added_file_on_a_record_path_wins_over_the_default_records() {
 }
 
 #[test]
+fn a_write_error_while_staging_the_default_records_fails_the_pack() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    if !dpkg_host() {
+        common::skip_optional("needs a dpkg host");
+        return;
+    }
+    // root writes through any mode, so the directory below would not stop it.
+    if std::fs::metadata("/proc/self").unwrap().uid() == 0 {
+        common::skip_optional("root ignores directory permissions");
+        return;
+    }
+    // A reused `--no-build` output dir whose record directory takes no new file.
+    let tmp = tempfile::tempdir().unwrap();
+    let tools = fake_tools(tmp.path(), &[("syft", FAKE_RECORD_READER)]);
+    let status_d = tmp.path().join("out/var/lib/dpkg/status.d");
+    std::fs::create_dir_all(&status_d).unwrap();
+    std::fs::set_permissions(&status_d, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    // A broken output tree is not a record the default can skip: the pack fails.
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["pack", "--no-build", "--sbom", "-o"])
+        .arg(tmp.path().join("out"))
+        .arg("--sbom-file")
+        .arg(tmp.path().join("out.sbom.json"))
+        .arg(bin)
+        .env("PATH", &tools)
+        .env("ASKED", tmp.path().join("out.asked"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("writing "), "{stderr}");
+}
+
+#[test]
 fn a_file_dpkg_would_read_as_a_pattern_is_named_as_not_looked_up() {
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");

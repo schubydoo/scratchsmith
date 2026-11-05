@@ -607,6 +607,25 @@ impl Drop for StagedRecords {
     }
 }
 
+/// A `stage_records` error that is not a write to the output tree: an `--add-file` on a
+/// record path, no host os-release, or an rpm database that rpm could not build. The default
+/// selection packs on without the records for these. A write error still fails it, because
+/// the rest of the pack writes to the same tree.
+#[derive(Debug)]
+pub struct RecordsSkipped(anyhow::Error);
+
+impl std::fmt::Display for RecordsSkipped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.0)
+    }
+}
+
+impl std::error::Error for RecordsSkipped {}
+
+fn skipped(err: anyhow::Error) -> anyhow::Error {
+    RecordsSkipped(err).into()
+}
+
 /// Write `owners`' records under `rootfs/var/lib/dpkg/status.d/`, and the host's os-release
 /// to `rootfs/etc/os-release` unless the rootfs already has one.
 ///
@@ -624,11 +643,11 @@ pub fn stage_records(
     let write = |path: &Path, bytes: &[u8]| -> Result<()> {
         let image = Path::new("/").join(path.strip_prefix(rootfs).unwrap_or(path));
         if protected.contains(&image) {
-            bail!(
+            return Err(skipped(anyhow::anyhow!(
                 "cannot record packages: {} is a file you added with --add-file, and the \
                  package records need that path",
                 image.display()
-            );
+            )));
         }
         write_record(path, bytes)
     };
@@ -647,14 +666,18 @@ pub fn stage_records(
         // an empty list means the export and the report disagreed. An image or an SBOM that
         // was asked to carry the packages must not go out with none.
         Records::Rpm(headers) if headers.is_empty() => {
-            bail!("cannot record packages: rpm named owners and exported no header for them")
+            return Err(skipped(anyhow::anyhow!(
+                "cannot record packages: rpm named owners and exported no header for them"
+            )));
         }
         Records::Rpm(headers) => {
             // rpm builds the database in a directory of its own, and only its bytes come
             // here. They are placed like any other record, at the host's database path: no
             // write goes through a link, and an earlier database is replaced by a rename.
-            let files = crate::rpm::build_database(headers)?;
-            let db = crate::rpm::db_path().context("asking rpm where its database lives")?;
+            let files = crate::rpm::build_database(headers).map_err(skipped)?;
+            let db = crate::rpm::db_path()
+                .context("asking rpm where its database lives")
+                .map_err(skipped)?;
             let db_dir = rootfs.join(db.strip_prefix("/").unwrap_or(&db));
             create_dirs(rootfs, &db_dir, &mut staged.dirs)?;
             for (name, bytes) in files {
@@ -671,7 +694,8 @@ pub fn stage_records(
         let host = ["/etc/os-release", "/usr/lib/os-release"]
             .iter()
             .find_map(|p| std::fs::read(p).ok())
-            .context("reading the host's os-release, which names the distribution")?;
+            .context("reading the host's os-release, which names the distribution")
+            .map_err(skipped)?;
         create_dirs(rootfs, &rootfs.join("etc"), &mut staged.dirs)?;
         write(&os_release, &host)?;
         staged.files.push(os_release);
