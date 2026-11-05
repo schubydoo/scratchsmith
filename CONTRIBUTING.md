@@ -40,9 +40,8 @@ that loses a tool then reports a green suite having run nothing.
 
 Eight tools are strict in CI: `cc`, `strip`, `upx`, Docker, `getent`, `/usr/bin/id`, `syft` and
 `unshare -r`. A missing one **fails** the test instead of skipping it. The workflow installs or
-guarantees all eight, so a
-miss there is a broken runner. If the `CI` environment variable holds anything other than an opt-out
-word, the strict gate turns on. The opt-out words are `0`, `false`, `no`, `off` and the empty
+guarantees all eight, so a miss there is a broken runner. If the `CI` environment variable holds
+anything other than an opt-out word, the strict gate turns on. The opt-out words are `0`, `false`, `no`, `off` and the empty
 string, in any case.
 
 `musl-gcc`, `tini`, the `registry:2` pull, the host locale sources, a dpkg database and the host
