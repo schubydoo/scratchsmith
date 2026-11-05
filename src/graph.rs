@@ -15,6 +15,7 @@ use std::path::Path;
 pub fn build(binary: &Path, includes: &[String]) -> Result<DepGraphReport> {
     let resolution = resolver::resolve_with_includes(binary, &Sysroot::new("/"), includes)?;
     resolution.warn_about_tolerances();
+    resolution.print_hints();
 
     // The resolver canonicalizes the binary; its edges' `from` uses that path, so match it.
     let root_id = std::fs::canonicalize(binary)

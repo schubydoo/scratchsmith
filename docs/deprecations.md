@@ -186,7 +186,8 @@ In `scratchsmith.toml`, write `packages = ["report"]`. To take the 2.0 default n
 An `RPATH` is inherited: a library that the program loads also searches the program's `RPATH`.
 A library that has its own `RUNPATH` does not search any inherited `RPATH` for the libraries
 that it needs. Scratchsmith now applies that rule with no fallback, so the library is missing,
-as it is for the loader. To fix it, link the library that needs the file with a `RUNPATH` that
+as it is for the loader. A `note:` line on stderr names the directory and the library that
+needs the file. To fix it, link the library that needs the file with a `RUNPATH` that
 holds the directory:
 
 ```console

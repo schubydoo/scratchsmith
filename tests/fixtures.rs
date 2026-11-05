@@ -394,9 +394,18 @@ fn a_library_with_runpath_resolves_like_the_loader_not_through_an_inherited_rpat
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "an incomplete graph must fail");
     assert!(
-        !stderr.contains("inherited"),
+        !stderr.contains("rejects it"),
         "no fallback warning: {stderr}"
     );
+    // Both commands name the cause and the fix, not only "missing".
+    let real_libs = std::fs::canonicalize(&libs).unwrap();
+    let hint = format!(
+        "note: `libleaf.so` is in {}, an RPATH that {} inherits from a parent.",
+        real_libs.display(),
+        real_libs.join("libmid.so").display()
+    );
+    let fix = format!("a RUNPATH that lists {}.", real_libs.display());
+    assert!(stderr.contains(&hint) && stderr.contains(&fix), "{stderr}");
     let graph: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let missing: Vec<&str> = graph["nodes"]
         .as_array()
@@ -419,6 +428,7 @@ fn a_library_with_runpath_resolves_like_the_loader_not_through_an_inherited_rpat
         stderr.contains("cannot pack: unresolved dependencies: \"libleaf.so\""),
         "{stderr}"
     );
+    assert!(stderr.contains(&hint) && stderr.contains(&fix), "{stderr}");
 }
 
 #[test]

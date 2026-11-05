@@ -222,6 +222,10 @@ pub struct Resolution {
     /// resolution itself is unchanged by them; callers print them with
     /// `warn_about_tolerances`.
     pub warnings: Vec<String>,
+    /// Why a soname in `missing` is missing, when the resolver can tell, one line each.
+    /// Diagnosis only: nothing here is resolved or staged. Callers print them with
+    /// `print_hints`.
+    pub hints: Vec<String>,
 }
 
 impl Resolution {
@@ -243,6 +247,13 @@ impl Resolution {
                 "warning: {w} scratchsmith 2.0 rejects it. See {}",
                 crate::image::DEPRECATIONS_URL
             );
+        }
+    }
+
+    /// Print each hint as one stderr line, never stdout, for the same reason as above.
+    pub fn print_hints(&self) {
+        for h in &self.hints {
+            eprintln!("note: {h}");
         }
     }
 }
@@ -527,6 +538,25 @@ pub fn resolve_with(
 
         for (i, soname) in obj.needed.iter().enumerate() {
             let Some(found) = find_lib(soname, &search, obj_dir, &sysroot.root) else {
+                // RUNPATH hides an ancestor's RPATH from this object. If the library sits
+                // there, say so, so the user is not told only that it is missing. The probe
+                // names the cause and nothing more: the soname stays missing.
+                if !searches_rpath {
+                    if let Some(hit) = find_lib(soname, &inherited_rpaths, obj_dir, &sysroot.root) {
+                        let dir = hit.parent().unwrap_or(Path::new("/"));
+                        push_unique(
+                            &mut resolution.hints,
+                            format!(
+                                "`{}` is in {}, an RPATH that {} inherits from a parent. {2} \
+                                 has RUNPATH, so the loader does not search an inherited RPATH \
+                                 for it. Give {2} a RUNPATH that lists {1}.",
+                                soname.escape_debug(),
+                                printable(dir),
+                                printable(&obj_path)
+                            ),
+                        );
+                    }
+                }
                 push_unique(&mut resolution.missing, soname.clone());
                 resolution.edges.push(DepEdge {
                     from: obj_path.clone(),
@@ -1938,6 +1968,18 @@ mod tests {
         assert!(res.warnings.is_empty(), "{:?}", res.warnings);
         // The exe's own lookup still searches its RPATH.
         assert!(has(&res, "libmid.so"));
+        // One hint names the cause and the fix: the dir, the object, RUNPATH.
+        assert_eq!(res.hints.len(), 1, "{:?}", res.hints);
+        let hint = &res.hints[0];
+        let libs_dir = canonical(root).join("app/libs").display().to_string();
+        assert!(
+            hint.contains("`libleaf.so`")
+                && hint.contains(&format!("is in {libs_dir},"))
+                && hint.contains(&canonical(&mid).display().to_string())
+                && hint.contains(&format!("a RUNPATH that lists {libs_dir}")),
+            "{hint}"
+        );
+        assert!(!hint.chars().any(breaks_a_line), "{hint:?}");
 
         // A second copy sits in a default directory. That is the one the loader uses, so it
         // is the one to stage: the old search staged the RPATH copy, a different file than
@@ -1946,6 +1988,7 @@ mod tests {
         let res = resolve(graph(&["/opt/elsewhere"])).unwrap();
         assert_eq!(leaf_path(&res), Some(canonical(&system_leaf)));
         assert!(res.warnings.is_empty(), "{:?}", res.warnings);
+        assert!(res.hints.is_empty(), "{:?}", res.hints);
 
         // Without RUNPATH on libmid the inherited RPATH is in force and comes first, as it
         // always did, with nothing to warn about.
