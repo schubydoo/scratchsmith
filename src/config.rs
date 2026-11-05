@@ -129,8 +129,18 @@ impl Config {
             names.sort();
             for name in names {
                 let path = format!("{prefix}.profile.{name}");
-                out.push((path.clone(), name.as_str()));
-                walk(&cfg.profile[name], &path, out);
+                let table = &cfg.profile[name];
+                // A table with no keys of its own that only parents a deeper one is implicit
+                // (the user wrote the deeper header), so it gets no advice of its own.
+                let implicit = !table.profile.is_empty()
+                    && (Config {
+                        profile: HashMap::new(),
+                        ..table.clone()
+                    }) == Config::default();
+                if !implicit {
+                    out.push((path.clone(), name.as_str()));
+                }
+                walk(table, &path, out);
             }
         }
         let mut tops: Vec<&String> = self.profile.keys().collect();
@@ -363,6 +373,8 @@ mod tests {
         let err = Config::load(&path).unwrap_err().to_string();
         assert!(err.contains("[profile.release.profile.signed]"), "{err}");
         assert!(err.contains("top-level [profile.signed]"), "{err}");
+        assert!(err.contains(" is not allowed"), "{err}");
+        assert!(err.contains(". Move it to a top-level"), "{err}");
         // A flat file still loads.
         std::fs::write(&path, "[profile.release]\nstrip = true\n").unwrap();
         assert!(Config::load(&path).is_ok());
@@ -396,9 +408,15 @@ mod tests {
     fn a_table_nested_at_depth_three_is_named_by_its_full_path() {
         let err = nested_error("[profile.a.profile.b.profile.c]\nsign = true\n");
         assert!(err.contains("[profile.a.profile.b.profile.c]"), "{err}");
-        // The middle table is nested too, so it is named as well.
-        assert!(err.contains("[profile.a.profile.b]"), "{err}");
         assert!(err.contains("top-level [profile.c]"), "{err}");
+        // The middle table has no keys and no header of its own: it gets no advice.
+        assert!(!err.contains("[profile.a.profile.b]"), "{err}");
+        assert!(!err.contains("[profile.b]"), "{err}");
+        // A middle table with its own keys is a real table and is named.
+        let err = nested_error(
+            "[profile.a.profile.b]\nsign = true\n\n[profile.a.profile.b.profile.c]\nstrip = true\n",
+        );
+        assert!(err.contains("[profile.a.profile.b],"), "{err}");
         assert!(err.contains("top-level [profile.b]"), "{err}");
     }
 
