@@ -274,10 +274,9 @@ fn a_missing_library_shows_in_the_graph_and_stops_the_pack() {
 }
 
 #[test]
-fn a_truncated_library_warns_on_stderr_and_still_graphs_and_packs() {
-    // The tolerance scratchsmith 2.0 ends: a resolved library that claims to be an ELF and
-    // will not parse is kept as a leaf. Until then the run must succeed exactly as before,
-    // say so on stderr, and leave stdout as clean JSON.
+fn a_truncated_library_fails_both_graph_and_pack() {
+    // A resolved library that claims to be an ELF and will not parse has unknown DT_NEEDED
+    // entries, so `graph` and `pack` refuse it alike, and nothing stages.
     if !cc_available() {
         skip_required("no C compiler");
         return;
@@ -304,23 +303,18 @@ fn a_truncated_library_warns_on_stderr_and_still_graphs_and_packs() {
     for args in runs {
         let out = Command::new(bin).args(&args).output().expect("run");
         let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{args:?} must fail: {stderr}");
         assert!(
-            out.status.success(),
-            "{args:?} must still succeed: {stderr}"
+            stderr.contains("libfoo.so.1.2.3 starts like an ELF and cannot be parsed")
+                && stderr.contains("Replace it with an intact copy")
+                && !stderr.contains("warning: "),
+            "{args:?}: the error must name the file and the fix: {stderr}"
         );
-        assert!(
-            stderr.contains("warning: ")
-                && stderr.contains("libfoo.so.1.2.3 starts like an ELF and cannot be parsed")
-                && stderr.contains("scratchsmith 2.0 rejects it")
-                && stderr.contains("/latest/deprecations/"),
-            "{args:?}: tolerance warning missing from stderr: {stderr}"
-        );
-        serde_json::from_slice::<serde_json::Value>(&out.stdout)
-            .unwrap_or_else(|e| panic!("{args:?}: stdout is not clean JSON ({e})"));
+        assert!(out.stdout.is_empty(), "{args:?}: no report on a failure");
     }
     assert!(
-        walk_contains(&rootfs, "libfoo.so.1.2.3"),
-        "the leaf still stages"
+        !walk_contains(&rootfs, "libfoo.so.1.2.3"),
+        "the damaged file must not stage"
     );
 }
 
@@ -407,4 +401,39 @@ fn a_library_with_runpath_resolves_like_the_loader_not_through_an_inherited_rpat
     );
     let graph: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(graph["missing"].as_array().unwrap().len(), 0, "{graph}");
+}
+
+#[test]
+fn a_truncated_top_level_binary_gives_graph_and_pack_the_same_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = tmp.path().join("app");
+    let full = std::fs::read(std::env::current_exe().unwrap()).unwrap();
+    std::fs::write(&app, &full[..600]).unwrap();
+
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let rootfs = tmp.path().join("rootfs");
+    let mut msgs = Vec::new();
+    for args in [
+        vec!["graph", app.to_str().unwrap()],
+        vec![
+            "pack",
+            "-n",
+            "-o",
+            rootfs.to_str().unwrap(),
+            app.to_str().unwrap(),
+        ],
+    ] {
+        let out = Command::new(bin).args(&args).output().expect("run");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains("starts like an ELF and cannot be parsed")
+                && stderr.contains("Rebuild the binary")
+                && stderr.contains("not a valid ELF binary:")
+                && !stderr.contains("reinstall"),
+            "{args:?}: {stderr}"
+        );
+        msgs.push(stderr);
+    }
+    assert_eq!(msgs[0], msgs[1], "graph and pack must print the same error");
 }

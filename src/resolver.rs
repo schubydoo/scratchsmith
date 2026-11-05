@@ -97,7 +97,19 @@ pub fn ensure_glibc(info: &ElfInfo) -> Result<()> {
 /// Read an ELF file and extract its dynamic-linking facts.
 pub fn read_elf_info(path: &Path) -> Result<ElfInfo> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    parse_elf_info(&bytes).with_context(|| format!("parsing {} as ELF", path.display()))
+    match parse_elf_info(&bytes) {
+        Err(e) if bytes.starts_with(b"\x7fELF") => Err(damaged_binary(path, &format!("{e:#}"))),
+        parsed => parsed.with_context(|| format!("parsing {} as ELF", path.display())),
+    }
+}
+
+// The user's own binary, not a library: keep goblin's cause and advise a rebuild.
+fn damaged_binary(path: &Path, cause: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{} starts like an ELF and cannot be parsed (truncated or corrupt). Rebuild the binary \
+         or replace it with an intact copy: {cause}",
+        printable(path)
+    )
 }
 
 /// Parse ELF dynamic-linking facts from in-memory bytes. Split from `read_elf_info` so it is
@@ -243,14 +255,14 @@ pub trait LinkInfoSource {
     /// The two failure shapes are deliberately DIFFERENT types, because conflating them
     /// drops a whole subtree from the resolution, with nothing landing in `missing`:
     ///
-    /// - `Ok(None)` — the file was read, and it does not parse as an ELF. For a data file the
-    ///   operator named with `--include` that is correct: it has no `DT_NEEDED` of its own, so
-    ///   it is a leaf. A truncated or corrupt ELF lands here too and is kept as a leaf until
-    ///   2.0; `resolve_with` tells the two apart by the magic bytes and warns about the second.
-    ///   A file without the magic, reached through a name out of an ELF, fails the resolution.
-    /// - `Err` — the file could not be READ. Nothing is known about its dependencies, so
-    ///   treating it as a leaf would drop its whole subtree from the resolution without
-    ///   anything landing in `Resolution::missing`.
+    /// - `Ok(None)` — the file was read, and it is not an ELF. For a data file the operator
+    ///   named with `--include` that is correct: it has no `DT_NEEDED` of its own, so it is a
+    ///   leaf. A file without the magic, reached through a name out of an ELF, fails the
+    ///   resolution.
+    /// - `Err` — the file could not be READ, or it starts with the ELF magic and does not
+    ///   parse ([`UnparsableElf`]). Nothing is known about its dependencies, so treating it as
+    ///   a leaf would drop its whole subtree from the resolution without anything landing in
+    ///   `Resolution::missing`.
     fn read(&self, path: &Path) -> Result<Option<ElfInfo>>;
 }
 
@@ -259,17 +271,37 @@ pub struct GoblinSource;
 
 impl LinkInfoSource for GoblinSource {
     fn read(&self, path: &Path) -> Result<Option<ElfInfo>> {
-        // The IO error propagates; a PARSE failure stays a leaf, exactly as before.
-        //
-        // That includes a truncated or corrupt `.so`, which loses its DT_NEEDED subtree.
-        // Failing on it would refuse to pack a graph that packs today: such a file survives
-        // the stager's copy, the hardening lint returns Option, and only `--strip` rejects it.
-        // That is "tighten validation", so it waits for 2.0, and `resolve_with` warns until
-        // then.
+        // Decide from the bytes already read, not a second open: a FIFO cannot be read twice,
+        // and an IO error on a re-read would let a corrupt ELF pass as a data file.
         let bytes = read_bounded(path, DEVICE_READ_CAP)?;
-        Ok(parse_elf_info(&bytes).ok())
+        match parse_elf_info(&bytes) {
+            Ok(info) => Ok(Some(info)),
+            // Keep goblin's cause in the chain for the top-level binary's message.
+            Err(e) if bytes.starts_with(b"\x7fELF") => {
+                Err(e.context(UnparsableElf(path.to_path_buf())))
+            }
+            Err(_) => Ok(None),
+        }
     }
 }
+
+/// The file starts with the ELF magic and does not parse: a truncated or corrupt ELF, not a
+/// data file. Its `DT_NEEDED` entries are unknown, so nothing below it can be resolved.
+#[derive(Debug)]
+pub struct UnparsableElf(pub PathBuf);
+
+impl std::fmt::Display for UnparsableElf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} starts like an ELF and cannot be parsed (truncated or corrupt). Replace it with \
+             an intact copy: reinstall the package that owns it, or rebuild it.",
+            printable(&self.0)
+        )
+    }
+}
+
+impl std::error::Error for UnparsableElf {}
 
 // The most read from a device or a FIFO. No real library is one, but `/dev/zero` never ends,
 // and neither does a FIFO that `yes` feeds.
@@ -349,7 +381,14 @@ pub fn resolve_with(
     let root_path =
         std::fs::canonicalize(binary).with_context(|| format!("locating {}", binary.display()))?;
     let mut root_info = source
-        .read(&root_path)?
+        .read(&root_path)
+        .map_err(|e| match e.is::<UnparsableElf>() {
+            true => {
+                let cause: Vec<_> = e.chain().skip(1).map(ToString::to_string).collect();
+                damaged_binary(&root_path, &cause.join(": "))
+            }
+            false => e,
+        })?
         .ok_or_else(|| anyhow::anyhow!("{} is not a valid ELF binary", root_path.display()))?;
     // Treat --include entries as extra direct dependencies of the binary, so they and
     // their own transitive deps are resolved and staged like anything else. They go after
@@ -378,7 +417,13 @@ pub fn resolve_with(
             }
             // The kernel loads an ET_DYN or an ET_EXEC interpreter. An ELF of another type (a
             // core dump holds a process's memory) is a host file the binary picked.
-            match source.read(&loader)? {
+            // A corrupt loader warns only if no library lists it as DT_NEEDED. Usually libc.so.6
+            // does, and the dependency walk then fails the pack on it.
+            let parsed = match source.read(&loader) {
+                Err(e) if e.is::<UnparsableElf>() => None,
+                read => read?,
+            };
+            match parsed {
                 Some(info)
                     if info.e_type != goblin::elf::header::ET_DYN
                         && info.e_type != goblin::elf::header::ET_EXEC =>
@@ -535,11 +580,10 @@ pub fn resolve_with(
                 soname: soname.clone(),
                 path: real.clone(),
             });
-            // A resolved file that will not PARSE (an --include'd data file, or a corrupt ELF)
-            // is kept as a leaf rather than aborting the whole resolution. A file that cannot
-            // be READ is not: its own DT_NEEDED children are never queued, never resolved and
-            // never staged, and they never reach `missing` either, because nothing asked for
-            // them.
+            // An --include'd data file is kept as a leaf rather than aborting the whole
+            // resolution. A file that cannot be READ, or a corrupt ELF, is not: its own
+            // DT_NEEDED children are never queued, never resolved and never staged, and they
+            // never reach `missing` either, because nothing asked for them.
             //
             // What the user saw depended on the command. `graph` resolves without staging, so
             // it exited 0 and reported a tree with a whole branch absent. `pack` did fail, but
@@ -561,6 +605,7 @@ pub fn resolve_with(
                     printable(&real)
                 );
             }
+            // A corrupt loader listed as DT_NEEDED (libc.so.6 does) fails here.
             match source.read(&real)? {
                 // A library the ELF named must be a shared object: glibc (2.17 to 2.41 at
                 // least) fails any other type with "cannot dynamically load executable". So it
@@ -581,13 +626,6 @@ pub fn resolve_with(
                     let declared = child.needed.len();
                     queue.push_back((real, child, child_rpaths.clone(), declared));
                 }
-                // Not a stray data file: it claims to be an ELF and will not parse, so its
-                // own DT_NEEDED entries are unknown and nothing under it was resolved.
-                None if has_elf_magic(&real) => resolution.warnings.push(format!(
-                    "{} starts like an ELF and cannot be parsed (truncated or corrupt), so the \
-                     libraries it needs were not resolved and can be absent from the image.",
-                    printable(&real)
-                )),
                 // The name came out of an ELF: a path, or a bare name found through a search
                 // path the ELF set, can point at any host file, which would then ship in the
                 // image. Only the operator's --include may stage a file that is not an ELF.
@@ -720,8 +758,8 @@ fn elf_type_name(e_type: u16) -> String {
 }
 
 // True when the file opens and begins with the ELF magic. Any IO failure reads as "no",
-// which loses the corrupt-ELF warning and fails closed where a missing magic is an error. A
-// 2.0 rejection of a file that HAS the magic must not gate on this: it would fail open.
+// which fails closed where a missing magic is an error. A rejection of a file that HAS the
+// magic must not gate on this: it would fail open.
 // Only a regular file is opened: a FIFO was already read to EOF, so a second open waits
 // forever for a writer that is gone.
 fn has_elf_magic(path: &Path) -> bool {
@@ -1028,44 +1066,39 @@ mod tests {
         assert!(has(&ok, "libleaf.so"), "fixture must resolve {leaf:?}");
     }
 
-    #[test]
-    fn a_corrupt_elf_that_reads_fine_stays_a_leaf() {
-        // The other half: a file that READS fine and does not parse has no DT_NEEDED of its
-        // own, so it is staged as a leaf and the resolution continues.
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        let (exe, mid, _leaf, mut infos) = chain_fixture(root);
-        // Drop libmid's scripted info: MapSource returns Ok(None) for it. `touch` wrote the
-        // ELF magic, so this is the corrupt-ELF leaf; a file without the magic fails instead
-        // (see the next test).
-        infos.remove(&canonical(&mid));
+    // Scripted facts where the fixture has them, and the real parse of the file's bytes where
+    // it does not, so the magic-byte split in `GoblinSource` is what decides.
+    struct ScriptedOrGoblin {
+        infos: HashMap<PathBuf, ElfInfo>,
+    }
 
-        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos })
-            .expect("a non-ELF leaf must not fail the resolution");
-        assert!(has(&res, "libmid.so"), "the leaf itself must still stage");
-        assert!(
-            !has(&res, "libleaf.so"),
-            "a leaf contributes no DT_NEEDED children"
-        );
+    impl LinkInfoSource for ScriptedOrGoblin {
+        fn read(&self, path: &Path) -> Result<Option<ElfInfo>> {
+            match self.infos.get(&canonical(path)) {
+                Some(info) => Ok(Some(info.clone())),
+                None => GoblinSource.read(path),
+            }
+        }
     }
 
     #[test]
-    fn an_unparsable_elf_leaf_warns_and_a_data_file_fails() {
+    fn an_unparsable_elf_library_fails_and_a_data_file_fails() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let (exe, mid, _leaf, mut infos) = chain_fixture(root);
-        // No scripted info for libmid, and `touch` wrote the ELF magic into it: an ELF by
-        // its own claim that the source could not parse.
+        // No scripted facts for libmid, and `touch` wrote the ELF magic into it: an ELF by
+        // its own claim that does not parse. Its DT_NEEDED entries are unknown.
         infos.remove(&canonical(&mid));
-        let src = MapSource { infos };
+        let src = ScriptedOrGoblin { infos };
 
-        let res = resolve_with(&exe, &Sysroot::new(root), &[], &src).unwrap();
-        assert!(has(&res, "libmid.so"), "the tolerance keeps the leaf");
-        assert_eq!(res.warnings.len(), 1, "{:?}", res.warnings);
+        let err = resolve_with(&exe, &Sysroot::new(root), &[], &src).unwrap_err();
+        assert!(err.is::<UnparsableElf>(), "{err:#}");
+        let msg = format!("{err:#}");
         assert!(
-            res.warnings[0].contains(&canonical(&mid).display().to_string()),
-            "the warning must name the file: {:?}",
-            res.warnings
+            msg.contains(&canonical(&mid).display().to_string())
+                && msg.contains("cannot be parsed")
+                && msg.contains("Replace it"),
+            "the error must name the file and the fix: {msg}"
         );
 
         // Same graph, but the file makes no claim to be an ELF. The binary's DT_NEEDED picked
@@ -1252,7 +1285,10 @@ mod tests {
         let root = tmp.path();
         let (exe, _mid, _leaf, mut infos) = chain_fixture(root);
         infos.remove(&canonical(&root.join("lib64/ld-linux-x86-64.so.2")));
-        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        // The loader's bytes go through `GoblinSource`, which fails them as corrupt. The
+        // interpreter keeps the 1.x warning until its own 2.0 refusal.
+        let src = ScriptedOrGoblin { infos };
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &src).unwrap();
         assert!(
             res.warnings
                 .iter()
@@ -1263,7 +1299,7 @@ mod tests {
     }
 
     #[test]
-    fn an_include_of_a_data_file_stays_a_quiet_leaf() {
+    fn an_include_of_a_data_file_stays_a_quiet_leaf_and_a_corrupt_elf_fails() {
         // --include is the operator's own choice, and it is how a non-ELF plugin asset ships.
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -1279,7 +1315,7 @@ mod tests {
             (canonical(&exe), elf(&["libok.so"], &[], &[], None)),
             (canonical(&lib), elf(&[], &[], &[], None)),
         ]);
-        let src = MapSource { infos };
+        let src = ScriptedOrGoblin { infos };
 
         for include in ["plugin.conf".to_string(), data.display().to_string()] {
             let res = resolve_with(
@@ -1292,6 +1328,13 @@ mod tests {
             assert!(has(&res, &include), "{include}: {:?}", res.libs);
             assert!(res.warnings.is_empty(), "{include}: {:?}", res.warnings);
         }
+
+        // The operator's choice does not cover a corrupt ELF: its own DT_NEEDED are unknown.
+        let corrupt = root.join("usr/lib/plugin.so");
+        touch(&corrupt);
+        let err =
+            resolve_with(&exe, &Sysroot::new(root), &["plugin.so".to_string()], &src).unwrap_err();
+        assert!(err.is::<UnparsableElf>(), "{err:#}");
     }
 
     #[test]
@@ -1399,12 +1442,17 @@ mod tests {
     }
 
     #[test]
-    fn goblin_source_keeps_an_unparsable_file_and_fails_an_unreadable_one() {
+    fn goblin_source_fails_a_corrupt_or_unreadable_file_and_keeps_a_data_file() {
         let tmp = tempfile::tempdir().unwrap();
         let junk = tmp.path().join("libjunk.so");
         fs::write(&junk, b"\x7fELF then nothing an ELF parser accepts").unwrap();
-        assert_eq!(GoblinSource.read(&junk).unwrap(), None);
+        let err = GoblinSource.read(&junk).unwrap_err();
+        assert!(err.is::<UnparsableElf>(), "{err:#}");
         assert!(has_elf_magic(&junk));
+
+        let data = tmp.path().join("plugin.conf");
+        fs::write(&data, b"key = value").unwrap();
+        assert_eq!(GoblinSource.read(&data).unwrap(), None);
 
         let short = tmp.path().join("short");
         fs::write(&short, b"\x7fE").unwrap();
@@ -1416,6 +1464,27 @@ mod tests {
         let absent = tmp.path().join("absent.so");
         assert!(GoblinSource.read(&absent).is_err());
         assert!(!has_elf_magic(&absent));
+    }
+
+    #[test]
+    fn read_elf_info_keeps_the_parse_cause_and_advises_a_rebuild_for_a_truncated_binary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("app");
+        fs::write(&exe, b"\x7fELF and then the file ends").unwrap();
+        let msg = format!("{:#}", read_elf_info(&exe).unwrap_err());
+        assert!(
+            msg.contains("starts like an ELF and cannot be parsed")
+                && msg.contains("Rebuild the binary")
+                && msg.contains("not a valid ELF binary:")
+                && !msg.contains("reinstall"),
+            "{msg}"
+        );
+        fs::write(&exe, b"not an elf").unwrap();
+        let msg = format!("{:#}", read_elf_info(&exe).unwrap_err());
+        assert!(
+            msg.contains("parsing ") && !msg.contains("starts like an ELF"),
+            "{msg}"
+        );
     }
 
     // A small device cap, so a test that reads an endless device to it allocates little.
@@ -1481,6 +1550,21 @@ mod tests {
             err.contains("`/usr/lib/libfifo.so`") && err.contains("not a regular file"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn an_included_fifo_that_starts_like_an_elf_fails_in_2_0() {
+        // 1.x did not warn for a file that is not a regular file, and kept it as a leaf.
+        // The bytes decide now, so a FIFO whose writer sends the ELF magic and junk fails.
+        let tmp = tempfile::tempdir().unwrap();
+        let fifo = tmp.path().join("plugin.fifo");
+        mkfifo(&fifo);
+        let writer = fifo.clone();
+        std::thread::spawn(move || {
+            let _ = fs::write(&writer, b"\x7fELF and junk");
+        });
+        let err = returns(move || GoblinSource.read(&fifo).unwrap_err());
+        assert!(err.is::<UnparsableElf>(), "{err:#}");
     }
 
     #[test]
