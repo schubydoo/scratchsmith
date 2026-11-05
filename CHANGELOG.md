@@ -5,6 +5,69 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 2.0.0 (2026-11-05)
+
+### Breaking Changes
+
+#### A needed library in a directory whose name holds `:` must be one that `ldconfig` caches ([#441](https://github.com/schubydoo/scratchsmith/pull/441))
+
+A `DT_NEEDED` library found only in a directory such as `x:y`, from `RUNPATH` `$ORIGIN/x:y`, loads only through the image's `ld.so.cache`. If `ldconfig` skips it, as it skips `foo.so`, `pack` and `graph` now fail, where 1.9 packed an image that exited 127. An `--include` file there still stages as before.
+
+#### A library that starts like an ELF and cannot be parsed now fails the run ([#427](https://github.com/schubydoo/scratchsmith/pull/427))
+
+Since 1.6.0, `pack` and `graph` warned about a truncated or corrupt library and kept it. The libraries that it needs then did not reach the image. Now both commands fail with exit code 1 and name the file. Replace the damaged file with an intact copy. A file that you name with `--include` and that is not an ELF at all still stages as before.
+
+#### A program interpreter that starts like an ELF and cannot be parsed now fails the run ([#433](https://github.com/schubydoo/scratchsmith/pull/433))
+
+Since 1.8.0, `pack` and `graph` warned about a truncated or corrupt program interpreter
+(`PT_INTERP`) and went on, and the image did not start. Now both commands fail with exit `1`
+and name the file. Replace the damaged loader with an intact copy, for example by reinstalling
+glibc.
+
+#### The default `--packages` selection is now `report,sbom` ([#430](https://github.com/schubydoo/scratchsmith/pull/430))
+
+With no `--packages` value, `--sbom` and `--scan` now see the distribution packages that own the bundled files, such as glibc. A `--scan-fail-on` gate can then fail a pack that passed on 1.9. To keep the 1.x result, set `--packages report` or `packages = ["report"]`. Nothing changes without `--sbom` or `--scan`, or on a host with no dpkg or rpm database.
+
+#### A package record no longer replaces or removes a file that the pack staged ([#439](https://github.com/schubydoo/scratchsmith/pull/439))
+
+The packed program or an `--include` library can sit on the host at a package record path, such as `/var/lib/dpkg/status.d/libc6`. In 1.x, an explicit `sbom` or `image` in `--packages` wrote the record over that file, and `sbom` then removed it, with exit code 0. Now an explicit `image`, or an explicit `sbom` with `--sbom` or `--scan`, fails the pack with exit code 1, and the file stays. With the default `--packages`, the pack leaves the records out and warns.
+
+#### `pack --no-build --output DIR` refuses a directory that is not empty ([#431](https://github.com/schubydoo/scratchsmith/pull/431))
+
+In 1.x, a `DIR` that held an earlier pack gave a warning, and the new pack merged into the old tree. Now the command stops with an error before it stages any file. If it cannot list `DIR`, it also stops, because it cannot prove that `DIR` is empty. Remove the old directory, or choose another one.
+
+#### `--label` and `--env` now require `NAME=value` ([#425](https://github.com/schubydoo/scratchsmith/pull/425))
+
+`scratchsmith pack --label build` and `--env LOG_LEVEL` used to warn and pack anyway, but now they fail with exit code 2. The `label` and `env` keys in `scratchsmith.toml` fail the same way. A config error names every bad entry, with its file and profile. To set an empty value on purpose, write the `=` and stop there: `--label build=`.
+
+#### A nested profile table is now an error ([#424](https://github.com/schubydoo/scratchsmith/pull/424))
+
+A `[profile.a.profile.b]` table in `scratchsmith.toml` now fails the pack with exit code 1. Through 1.9, scratchsmith warned and ignored the table, because no `--profile` value reaches it. The error names every nested table by its full path, and says how to fix each one. Move it to a top-level `[profile.b]` table, or merge its keys into the profile that already has that name.
+
+#### `$PLATFORM` in a search path on an unnamed architecture now fails the run ([#432](https://github.com/schubydoo/scratchsmith/pull/432))
+
+On RISC-V, for example, `$PLATFORM` has no value. Since 1.6.0, `pack` and `graph` warned about it in an `RPATH` or `RUNPATH`. They searched the path with the token removed, and so shipped a library from the parent directory. Now both commands fail with exit code 1. The error names the file to link again, with the directory name in place of the token.
+
+#### A library found only through an inherited RPATH under RUNPATH is now missing ([#428](https://github.com/schubydoo/scratchsmith/pull/428))
+
+A library with `RUNPATH` can need a file that sits only in a parent's `RPATH` directory. Since
+1.6.0, scratchsmith staged that file with a warning. The loader never searches there, so 2.0 reports
+that library as missing, and `pack` and `graph` fail. Give the library that needs the file a
+`RUNPATH` that holds the directory, and pack again.
+
+#### A refused command line exits 2 ([#429](https://github.com/schubydoo/scratchsmith/pull/429))
+
+A command line that scratchsmith refuses after it parses the flags now exits `2`, the same code
+as a parse error. Examples are `--watch --format json`, `--packages none,report`, `pack` with no
+binary, and `smoke = true` in the config with `--no-build`. In 1.x these exited `1`, the code for
+a failed pack. A script that checks for `1` on these refusals must now check for `2`.
+
+### Fixes
+
+#### `RPATH` and `RUNPATH` lists are searched entry by entry ([#437](https://github.com/schubydoo/scratchsmith/pull/437))
+
+A search path with more than one directory, such as `-Wl,-rpath,/opt/none:$ORIGIN`, was read as one directory. `pack` and `graph` then reported a library as missing that the loader finds, and failed. Each `:` entry is now searched in order, as `ld.so` does, and `$ORIGIN` and `$PLATFORM` are checked in each entry. An empty entry is not searched, because it means the directory the program starts in.
+
 ## 1.9.0 (2026-10-29)
 
 ### Features
