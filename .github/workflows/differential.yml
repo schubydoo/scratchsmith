@@ -1,0 +1,80 @@
+# Nightly differential sweep: tests/differential.rs with thousands of cases from a fresh seed.
+# Every PR runs the same test with 64 fixed cases in ci.yml. This run reaches layouts those
+# cases never generate. A failure prints the seed of each broken case: repeat one locally with
+# SCRATCHSMITH_DIFF_SEED=<seed> SCRATCHSMITH_DIFF_CASES=1 cargo test --test differential.
+# NOT a required check.
+name: Differential sweep
+
+on:
+  schedule:
+    - cron: "17 3 * * *" # daily, 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: First seed (decimal or 0x hex). Empty uses the run ID.
+        required: false
+      cases:
+        description: Number of cases.
+        required: false
+        default: "3000"
+
+permissions: {}
+
+jobs:
+  sweep:
+    name: differential sweep
+    runs-on: ubuntu-latest
+    # About 85 ms a case, plus the build.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    concurrency:
+      group: ${{ github.workflow }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          toolchain: stable
+          rustflags: ""
+      - name: Allow unprivileged user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Sweep
+        env:
+          SEED_INPUT: ${{ inputs.seed }}
+          CASES_INPUT: ${{ inputs.cases }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          export SCRATCHSMITH_DIFF_SEED="${SEED_INPUT:-$RUN_ID}"
+          export SCRATCHSMITH_DIFF_CASES="${CASES_INPUT:-3000}"
+          echo "seed $SCRATCHSMITH_DIFF_SEED, $SCRATCHSMITH_DIFF_CASES cases"
+          cargo test --test differential -- --nocapture 2>&1 | tee sweep.log
+      # The failure email links to this run. Put each broken case at the top of it, so the
+      # reader does not have to search a long log for the seeds.
+      - name: Summarize broken cases
+        if: failure()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Differential sweep failed"
+            echo
+            echo "Each line is one broken case. To repeat one, run:"
+            echo
+            echo '```sh'
+            echo 'SCRATCHSMITH_DIFF_SEED=<seed> SCRATCHSMITH_DIFF_CASES=1 cargo test --test differential'
+            echo '```'
+            echo
+            if [ -f sweep.log ] && grep -qE '^seed 0x[0-9a-f]+: ' sweep.log; then
+              # The backticks are Markdown for the summary, not shell.
+              # shellcheck disable=SC2016
+              grep -E '^seed 0x[0-9a-f]+: ' sweep.log | sed -E 's/^(seed 0x[0-9a-f]+): /- `\1`: /'
+            else
+              echo "No broken case was printed, so the build or the setup failed. Read the Sweep step log."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
