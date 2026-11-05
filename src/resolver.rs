@@ -400,7 +400,8 @@ pub fn resolve_with(
             }
             // The kernel loads an ET_DYN or an ET_EXEC interpreter. An ELF of another type (a
             // core dump holds a process's memory) is a host file the binary picked.
-            // A corrupt loader still warns until the interpreter gets the same 2.0 refusal.
+            // A corrupt loader warns only if no library lists it as DT_NEEDED. Usually libc.so.6
+            // does, and the dependency walk then fails the pack on it.
             let parsed = match source.read(&loader) {
                 Err(e) if e.is::<UnparsableElf>() => None,
                 read => read?,
@@ -587,6 +588,7 @@ pub fn resolve_with(
                     printable(&real)
                 );
             }
+            // A corrupt loader listed as DT_NEEDED (libc.so.6 does) fails here.
             match source.read(&real)? {
                 // A library the ELF named must be a shared object: glibc (2.17 to 2.41 at
                 // least) fails any other type with "cannot dynamically load executable". So it

@@ -90,6 +90,10 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.
 The first three warnings come from `pack` and from `graph`, because both resolve the same
 dependency tree. The last one comes from `pack` only.
 
+The interpreter warning stays only when no library lists the loader as `DT_NEEDED`. On a usual
+glibc sysroot `libc.so.6` lists it, so the dependency walk reads the loader as a library and the
+pack fails with the unparsable-ELF error.
+
 ### `$PLATFORM` with no value
 
 A library search path is an `RPATH` or a `RUNPATH` entry in the binary, or in a library that the
