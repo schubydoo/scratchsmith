@@ -100,7 +100,8 @@ change:
 ## Breaking changes in 2.0.0
 
 Each item below warned on stderr before 2.0, from the release that the Deprecations page names,
-except the last one, which changed an exit code with no warning.
+with two exceptions. The `--no-build` output directory that cannot be listed had no warning, and
+the last item changed an exit code with no warning.
 The [Deprecations](docs/deprecations.md) page lists what to write instead.
 
 - A library that sits only in an inherited `RPATH` directory, needed by an object that has
@@ -117,7 +118,8 @@ The [Deprecations](docs/deprecations.md) page lists what to write instead.
   can find more. Write `--packages report` for the 1.x result.
 - `pack --no-build --output DIR` into a `DIR` that is not empty is now an error, with exit code 1.
   The error comes before any file is staged. Before, scratchsmith warned and merged into the old
-  tree. Use a new or empty directory.
+  tree. Use a new or empty directory. A `DIR` that scratchsmith cannot list is now an error too,
+  because it cannot prove that the directory is empty. 1.x did not warn for it and packed into it.
 - A command line that scratchsmith refuses only after the parse now exits 2, not 1. Examples are
   `--watch --format json`, `pack` with no binary, and one `--add-file` image path given twice.
   This had no warning before 2.0. A script that tests for exactly `1` must also accept `2`.

@@ -1197,6 +1197,34 @@ fn a_symlinked_output_dir_is_judged_by_its_target_and_a_file_is_refused() {
 }
 
 #[test]
+fn an_output_directory_that_cannot_be_listed_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("locked");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o300)).unwrap();
+    // Root reads any directory, so the mode proves nothing there.
+    if dir.read_dir().is_ok() {
+        eprintln!("skipping: this user can list a mode 0300 directory (root)");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let out = pack_no_build_into(bin, &dir);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("cannot read the output directory"),
+        "{stderr}"
+    );
+    assert_eq!(dir.read_dir().unwrap().count(), 0, "nothing may be staged");
+}
+
+#[test]
 fn an_older_rpm_host_is_found_and_its_berkeley_database_warns() {
     use std::os::unix::fs::PermissionsExt;
     let Some(bin) = small_fixture() else {

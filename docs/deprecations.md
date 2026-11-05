@@ -9,8 +9,8 @@ This page has one list for each kind of change. Three kinds change only in a maj
 deprecated input shapes, tolerances, and changing defaults. Refused input is a fourth kind,
 because a minor release can refuse input that is the attack itself. The last list, Removed in
 2.0.0, shows what version 2.0.0 changed after its deprecation cycle ended. Most inputs there now
-fail, and one gets a new default. It also shows one exit code that changed in 2.0.0 with no
-cycle, and it says why.
+fail, and one gets a new default. It also shows two changes in 2.0.0 that had no warning before
+it, an exit code and an output directory that cannot be listed, and it says why.
 
 A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.
@@ -120,6 +120,7 @@ $ cc -Wl,-rpath,/opt/app/lib/riscv64 -o myapp main.c
 | A command line refused after the parse, such as `--watch --format json` | Not warned | A usage error, exit code 2. 1.x exited 1 | Fix the command line. A script that tests for exactly `1` must also accept `2` |
 | `--packages` (the `packages` key) with no value | 1.9.0 | The default is `report,sbom`, so `--sbom` and `--scan` see the packages and a `--scan-fail-on` gate can find more | `--packages report` (or `packages = ["report"]`) for the 1.x result |
 | `pack --no-build --output DIR` into a `DIR` that is not empty | 1.6.0 | An error before any file is staged. `pack` exits `1` | A new or empty directory, or `rm -rf DIR` first |
+| `pack --no-build --output DIR` into a `DIR` that cannot be listed | Not warned | An error. `pack` exits `1` | A directory that you can read, or a new one |
 
 ### A library found only through an inherited `RPATH`
 
@@ -143,3 +144,10 @@ pack, and printed no warning about a change. In 2.0.0 they exit `2`, the same co
 argument-parse error. This change had no deprecation cycle, because the 1.x contract promised
 only a non-zero code for these refusals. A script that tests for exactly `1` must also accept
 `2`.
+
+### An output directory that cannot be listed
+
+`pack --no-build --output DIR` checks that `DIR` is empty. In 1.x the check could not read a
+`DIR` that it could not list, so it printed no warning and packed into it. Version 2.0.0 refuses
+that `DIR`, because it cannot prove that the directory is empty. This change had no warning
+before 2.0. Give the pack a directory that you can read, or a new one.
