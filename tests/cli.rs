@@ -2357,31 +2357,30 @@ fn an_added_file_on_a_record_path_wins_over_the_default_records() {
     let kept = tmp.path().join("default/var/lib/dpkg/status.d/libc6");
     assert_eq!(std::fs::read_to_string(kept).unwrap(), "mine\n");
 
-    // An explicit `sbom` asked for the records, so the same collision stops the pack.
-    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
-        .args([
-            "pack",
-            "--no-build",
-            "--sbom",
-            "--packages",
-            "report,sbom",
-            "-o",
-        ])
-        .arg(tmp.path().join("explicit"))
-        .arg("--sbom-file")
-        .arg(tmp.path().join("explicit.sbom.json"))
-        .args(["--add-file", &add])
-        .arg(bin)
-        .env("PATH", &tools)
-        .env("ASKED", tmp.path().join("explicit.asked"))
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(
-        stderr.contains("is a file you added with --add-file"),
-        "{stderr}"
-    );
+    // An explicit `sbom` or `image` asked for the records, so the same collision stops the
+    // pack, and the error names the way out.
+    for (packages, asked) in [("report,sbom", "sbom"), ("report,image", "image")] {
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["pack", "--no-build", "--sbom", "--packages", packages, "-o"])
+            .arg(tmp.path().join(asked))
+            .arg("--sbom-file")
+            .arg(tmp.path().join(format!("{asked}.sbom.json")))
+            .args(["--add-file", &add])
+            .arg(bin)
+            .env("PATH", &tools)
+            .env("ASKED", tmp.path().join(format!("{asked}.asked")))
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{packages}: {stderr}");
+        assert!(
+            stderr.contains("is a file you added with --add-file")
+                && stderr.contains(&format!(
+                    "Remove {asked} from --packages to pack without the records"
+                )),
+            "{packages}: {stderr}"
+        );
+    }
 }
 
 #[test]

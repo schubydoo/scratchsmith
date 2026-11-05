@@ -714,12 +714,18 @@ fn write_record(path: &Path, image: &Path, bytes: &[u8]) -> Result<()> {
             image.display()
         )));
     }
-    std::fs::OpenOptions::new()
+    let context = || format!("writing {}", path.display());
+    let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
-        .and_then(|mut f| f.write_all(bytes))
-        .with_context(|| format!("writing {}", path.display()))
+        .with_context(context)?;
+    // O_EXCL proves this call created the file, so a failed write takes it away again: the
+    // caller lists a record for the cleanup only after it is written.
+    file.write_all(bytes).map_err(|err| {
+        let _ = std::fs::remove_file(path);
+        anyhow::Error::new(err).context(context())
+    })
 }
 
 // Create `dir` and record each directory that did not exist before, so a later removal takes
@@ -973,7 +979,8 @@ mod tests {
             )]),
             ..Owners::default()
         };
-        assert!(stage_records(rootfs, &newer, &[]).is_err());
+        let err = stage_records(rootfs, &newer, &[]).unwrap_err();
+        assert!(err.downcast_ref::<RecordsSkipped>().is_some(), "{err:#}");
         assert_eq!(
             std::fs::read_to_string(rootfs.join("var/lib/dpkg/status.d/libc6")).unwrap(),
             "Package: libc6\n"
@@ -1027,7 +1034,9 @@ mod tests {
         std::fs::create_dir_all(rootfs.join("blocker")).unwrap();
         // Make `var/lib/dpkg/status.d/libc6` a directory by staging it first.
         std::fs::create_dir_all(rootfs.join("var/lib/dpkg/status.d/libc6")).unwrap();
-        assert!(stage_records(rootfs, &owners, &[]).is_err());
+        // A collision like any other, so the default packs on without the records.
+        let err = stage_records(rootfs, &owners, &[]).unwrap_err();
+        assert!(err.downcast_ref::<RecordsSkipped>().is_some(), "{err:#}");
         assert!(
             rootfs.join("var/lib/dpkg/status.d/libc6").is_dir(),
             "theirs stays"
@@ -1086,6 +1095,7 @@ mod tests {
         std::os::unix::fs::symlink(&outside, rootfs.join("var")).unwrap();
         let err = stage_records(&rootfs, &owners, &[]).unwrap_err();
         assert!(format!("{err:#}").contains("is a symlink"), "{err:#}");
+        assert!(err.downcast_ref::<RecordsSkipped>().is_none(), "{err:#}");
         assert_eq!(
             std::fs::read_dir(&outside).unwrap().count(),
             0,
@@ -1098,8 +1108,32 @@ mod tests {
         let target = outside.join("victim");
         std::fs::write(&target, b"untouched").unwrap();
         std::os::unix::fs::symlink(&target, rootfs.join("var/lib/dpkg/status.d/libc6")).unwrap();
-        assert!(stage_records(&rootfs, &owners, &[]).is_err());
+        let err = stage_records(&rootfs, &owners, &[]).unwrap_err();
+        assert!(err.downcast_ref::<RecordsSkipped>().is_some(), "{err:#}");
         assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
+    }
+
+    #[test]
+    fn a_write_error_while_staging_records_is_not_skippable() {
+        // An unwritable status.d is a write error in the output tree, not a collision, so
+        // even the default selection fails on it.
+        use std::os::unix::fs::PermissionsExt;
+        let owners = Owners {
+            records: Records::Dpkg(vec![("libc6".into(), "Package: libc6\n".into())]),
+            ..Owners::default()
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let status_d = tmp.path().join("var/lib/dpkg/status.d");
+        std::fs::create_dir_all(&status_d).unwrap();
+        std::fs::set_permissions(&status_d, std::fs::Permissions::from_mode(0o555)).unwrap();
+        if std::fs::write(status_d.join("probe"), b"").is_ok() {
+            eprintln!("skipping: root writes into a read-only directory");
+            return;
+        }
+        let err = stage_records(tmp.path(), &owners, &[]).unwrap_err();
+        std::fs::set_permissions(&status_d, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(err.downcast_ref::<RecordsSkipped>().is_none(), "{err:#}");
+        assert!(format!("{err:#}").contains("writing"), "{err:#}");
     }
 
     #[test]

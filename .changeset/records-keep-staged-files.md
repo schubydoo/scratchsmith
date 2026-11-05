@@ -4,4 +4,4 @@ default: patch
 
 #### Package records no longer replace or remove a file that the pack staged
 
-The packed program or an `--include` library can sit on the host at a package record path, such as `/var/lib/dpkg/status.d/libc6`. A pack with `sbom` or `image` wrote the record over that file, and `sbom` then removed it. Now the file stays, and the default `sbom` leaves the records out with a warning. A `sbom` or `image` that you set fails the pack, as for an `--add-file` at that path.
+A pack with `sbom` or `image` wrote a package record over a staged program or library, and `sbom` then removed it. Now the file stays, and the default `sbom` leaves the records out with a warning. A link or a directory at a record path gets that warning too, where it failed the pack before. A `sbom` or `image` that you set now fails with exit code 1 instead of 0, and the error names the output to remove.
