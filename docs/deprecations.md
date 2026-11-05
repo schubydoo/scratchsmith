@@ -9,8 +9,8 @@ This page has one list for each kind of change. Three kinds change only in a maj
 deprecated input shapes, tolerances, and changing defaults. Refused input is a fourth kind,
 because a minor release can refuse input that is the attack itself. The last list, Removed in
 2.0.0, shows what version 2.0.0 changed after its deprecation cycle ended. Most inputs there now
-fail, and one gets a new default. It also shows two changes in 2.0.0 that had no warning before
-it, an exit code and an output directory that cannot be listed, and it says why.
+fail, and one gets a new default. It also shows two changes in 2.0.0 with no warning first: an
+exit code, and an output directory that cannot be listed. It says why for each.
 
 A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.
@@ -147,7 +147,7 @@ only a non-zero code for these refusals. A script that tests for exactly `1` mus
 
 ### An output directory that cannot be listed
 
-`pack --no-build --output DIR` checks that `DIR` is empty. In 1.x the check could not read a
-`DIR` that it could not list, so it printed no warning and packed into it. Version 2.0.0 refuses
+`pack --no-build --output DIR` checks that `DIR` is empty. In 1.x the check skipped a `DIR`
+that it had no permission to list, so it printed no warning and packed into it. Version 2.0.0 refuses
 that `DIR`, because it cannot prove that the directory is empty. This change had no warning
 before 2.0. Give the pack a directory that you can read, or a new one.
