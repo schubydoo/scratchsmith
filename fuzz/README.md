@@ -14,7 +14,7 @@ cargo +nightly fuzz run <target>
 |---|---|---|
 | `parse_elf_info` | `resolver::parse_elf_info` | ELF header and dynamic-section parse (goblin). |
 | `analyze_hardening` | `lint::hardening_from_bytes` | ELF hardening read (PIE, RELRO, NX, canary, fortify). |
-| `resolve_graph` | `resolver::resolve_with` | `ld.so` search: RPATH, RUNPATH, `$ORIGIN`, soname lookup, and the tolerance warnings. Asserts that no warning, hint, or `$PLATFORM` error holds a character that breaks a line. Structured input. |
+| `resolve_graph` | `resolver::resolve_with` | `ld.so` search: RPATH, RUNPATH, `$ORIGIN`, soname lookup, and the refusals: a corrupt, non-ELF, or wrong-type library or loader, and `$PLATFORM` with no value. Asserts that no hint or `$PLATFORM` error holds a character that breaks a line. Structured input. |
 | `unpack` | `unpack::run` | The outer OCI-archive parse (tar, gzip, JSON) on raw bytes. |
 | `unpack_structured` | `unpack::run` | Layer application, whiteout deletion and its symlink containment, digest checks, media dispatch. Structured input. |
 | `registry_parse` | `registry::parse_child_manifest`, `parse_child_config`, `select_token` | Registry manifest, config blob, and token-response JSON parse. |
@@ -27,12 +27,14 @@ outer parse. The `unpack_structured` target assembles a real OCI-layout archive 
 refuses to write a `..` entry, so neither builder reaches the escaping-entry bail in
 `unpack::run`. The unit tests cover that path instead. Keep both targets.
 
-The `resolve_graph` target reaches the "starts like an ELF and cannot be parsed" error for a
-library by one route only. Every library that the target creates also gets scripted facts. So
-the one file with the ELF magic and no facts is the target's own loader, `/lib64/ld-fuzz.so.2`.
-A `DT_NEEDED` entry must name it, which is why `resolve_graph.dict` holds that literal. Its
-line-break assertion exercises the search-path entry in the `$PLATFORM` error. It does not
-exercise a file name, because every file name that the target creates is a safe one.
+The `resolve_graph` target reaches the "starts like an ELF and cannot be parsed" error by two
+routes. A library with `no_facts` set has the ELF magic and no scripted facts. When a
+`DT_NEEDED` entry names that library, the walk fails it. With `non_elf` too, it drives the
+refusal of a library that is not an ELF. The target's own loader, `/lib64/ld-fuzz.so.2`, has
+no facts unless `interp_core` gives it some. So `place_interp` alone makes the PT_INTERP read
+fail before the walk starts. Its line-break assertion exercises the search-path entry in the
+`$PLATFORM` error. It does not exercise a file name, because every file name that the target
+creates is a safe one.
 
 ## Seeds
 

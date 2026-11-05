@@ -5,12 +5,12 @@ Scratchsmith keeps the version 1.0 contract in
 Nothing on that contract disappears without notice. This page lists everything on the way out,
 and what you write instead.
 
-This page has one list for each kind of change. Three kinds change only in a major version:
-deprecated input shapes, tolerances, and changing defaults. Refused input is a fourth kind,
-because a minor release can refuse input that is the attack itself. The last list, Removed in
-2.0.0, shows what version 2.0.0 changed after its deprecation cycle ended. Most inputs there now
-fail, and one gets a new default. It also shows two changes in 2.0.0 with no warning first: an
-exit code, and an output directory that cannot be listed. It says why for each.
+This page has one list for each kind of change. Two kinds change only in a major version:
+deprecated input shapes and tolerances. Refused input is a third kind, because a minor release
+can refuse input that is the attack itself. The last list, Removed in 2.0.0, shows what version
+2.0.0 changed after its deprecation cycle ended. Most inputs there now fail, and one gets a new
+default. It also shows three changes in 2.0.0 with no warning first: an exit code, an output
+directory that cannot be listed, and an `--include` file that is not a regular file.
 
 A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.
@@ -78,15 +78,8 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.
 
 ## Tolerances ending in 2.0
 
-| Input | Warns since | Error in | What to do |
-|---|---|---|---|
-| A program interpreter that starts like an ELF and cannot be parsed | 1.8.0 | 2.0.0 | Replace the damaged file |
-
-This warning comes from `pack` and from `graph`, because both resolve the same dependency tree.
-
-The interpreter warning stays only when no library lists the loader as `DT_NEEDED`. On a usual
-glibc sysroot `libc.so.6` lists it, so the dependency walk reads the loader as a library and the
-pack fails with the unparsable-ELF error.
+No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list
+[Removed in 2.0.0](#removed-in-200) names each one.
 
 ## Removed in 2.0.0
 
@@ -103,6 +96,7 @@ pack fails with the unparsable-ELF error.
 | `pack --no-build --output DIR` into a `DIR` that is not empty | 1.6.0 | An error before any file is staged. `pack` exits `1` | A new or empty directory, or `rm -rf DIR` first |
 | `pack --no-build --output DIR` into a `DIR` that cannot be listed | Not warned | An error. `pack` exits `1` | A directory that you can read, or a new one |
 | `$PLATFORM` in a search path, on an architecture with no value for it | 1.6.0 | An error. `pack` and `graph` exit `1` and name the file that holds the search path | Write the directory name in the path |
+| A program interpreter (`PT_INTERP`) that starts like an ELF and cannot be parsed | 1.8.0 | An error. `pack` and `graph` exit `1` and name the file | Replace the damaged loader with an intact copy |
 
 ### A library found only through an inherited `RPATH`
 

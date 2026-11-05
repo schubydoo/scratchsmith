@@ -1211,7 +1211,6 @@ mod tests {
             libs: vec![],
             missing: vec![],
             edges: vec![],
-            warnings: vec![],
             hints: vec![],
         };
         stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
@@ -1474,7 +1473,6 @@ mod tests {
             }],
             missing: vec![],
             edges: vec![],
-            warnings: vec![],
             hints: vec![],
         };
         stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
@@ -1768,7 +1766,6 @@ mod tests {
             libs: vec![],
             missing: vec!["libmissing.so".into()],
             edges: vec![],
-            warnings: vec![],
             hints: vec![],
         };
         let err = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap_err();
@@ -1794,7 +1791,6 @@ mod tests {
             }],
             missing: vec![],
             edges: vec![],
-            warnings: vec![],
             hints: vec![],
         };
         let report = stage_default_includes(&res, &dest, &NssSelection::default()).unwrap();
@@ -1832,7 +1828,6 @@ mod tests {
             }],
             missing: vec![],
             edges: vec![],
-            warnings: vec![],
             hints: vec![],
         };
         let report = stage_default_includes(&res, &dest, &NssSelection::default()).unwrap();
@@ -1861,7 +1856,6 @@ mod tests {
             }],
             missing: vec![],
             edges: vec![],
-            warnings: vec![],
             hints: vec![],
         };
         (tmp, res, dest)

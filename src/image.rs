@@ -349,13 +349,6 @@ const DEFAULT_PATH: &str = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/b
 /// Distroless-style non-root uid:gid; the default so images never run as root.
 const DEFAULT_USER: &str = "65532:65532";
 
-/// The published Deprecations page. Every deprecation warning ends with it, so a reader has the
-/// whole list rather than the one line in front of them (`COMPATIBILITY.md:53`).
-/// The `latest/` segment is load-bearing: `mike` writes each build into its own version
-/// directory and leaves only a redirect stub at the site root, so the bare path is a 404
-/// (measured: `/scratchsmith/usage/` 404, `/scratchsmith/latest/usage/` 200).
-pub const DEPRECATIONS_URL: &str = "https://schubydoo.github.io/scratchsmith/latest/deprecations/";
-
 // The host CPU architecture as an OCI/Go `GOARCH` value, for the image config's
 // `architecture` field. Split from the host lookup so every arm is unit-testable.
 // Unknown arches pass through rather than mislabeling as `amd64`; scratchsmith runs on

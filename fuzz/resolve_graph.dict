@@ -13,9 +13,10 @@
 ".so"
 "ld-linux-x86-64.so.2"
 "ld-musl-x86_64.so.1"
-# The harness's own loader file. It carries the ELF magic and has no scripted facts, so a
-# DT_NEEDED entry that names it is the one way to make a library fail as "starts like an ELF and
-# cannot be parsed" in `resolve_with`. `exists()` gives the engine no byte-by-byte feedback on
-# a path, so without these literals that error stays unreached.
+# The harness's own loader file. A DT_NEEDED entry that names it makes the walk reach the
+# loader as a library too. With shared-object facts from `interp_core`, it resolves and is
+# queued. With no facts, the corrupt loader fails at PT_INTERP first, whether or not a library
+# lists it. `exists()` gives the engine no byte-by-byte feedback on a path, so without these
+# literals that shape stays unreached.
 "ld-fuzz.so.2"
 "/lib64/ld-fuzz.so.2"
