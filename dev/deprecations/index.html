@@ -1004,12 +1004,12 @@
 <a href="https://github.com/schubydoo/scratchsmith/blob/main/COMPATIBILITY.md">COMPATIBILITY.md</a>.
 Nothing on that contract disappears without notice. This page lists everything on the way out,
 and what you write instead.</p>
-<p>This page has one list for each kind of change. Three kinds change only in a major version:
-deprecated input shapes, tolerances, and changing defaults. Refused input is a fourth kind,
-because a minor release can refuse input that is the attack itself. The last list, Removed in
-2.0.0, shows what version 2.0.0 changed after its deprecation cycle ended. Most inputs there now
-fail, and one gets a new default. It also shows two changes in 2.0.0 with no warning first: an
-exit code, and an output directory that cannot be listed. It says why for each.</p>
+<p>This page has one list for each kind of change. Two kinds change only in a major version:
+deprecated input shapes and tolerances. Refused input is a third kind, because a minor release
+can refuse input that is the attack itself. The last list, Removed in 2.0.0, shows what version
+2.0.0 changed after its deprecation cycle ended. Most inputs there now fail, and one gets a new
+default. It also shows three changes in 2.0.0 with no warning first: an exit code, an output
+directory that cannot be listed, and an <code>--include</code> file that is not a regular file.</p>
 <p>A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.</p>
 <p>A tolerance is different. Scratchsmith accepts input today that it cannot use in full, and the
@@ -1056,28 +1056,8 @@ as the total limit.</p>
 <p>There is no way around this limit. <code>unpack</code> cannot read a layer over 2 GiB of either type, and
 gzipping the layer does not help, because a gzip layer stops at the same limit.</p>
 <h2 id="tolerances-ending-in-20">Tolerances ending in 2.0<a class="headerlink" href="#tolerances-ending-in-20" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Input</th>
-<th>Warns since</th>
-<th>Error in</th>
-<th>What to do</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>A program interpreter that starts like an ELF and cannot be parsed</td>
-<td>1.8.0</td>
-<td>2.0.0</td>
-<td>Replace the damaged file</td>
-</tr>
-</tbody>
-</table>
-<p>This warning comes from <code>pack</code> and from <code>graph</code>, because both resolve the same dependency tree.</p>
-<p>The interpreter warning stays only when no library lists the loader as <code>DT_NEEDED</code>. On a usual
-glibc sysroot <code>libc.so.6</code> lists it, so the dependency walk reads the loader as a library and the
-pack fails with the unparsable-ELF error.</p>
+<p>No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list
+<a href="#removed-in-200">Removed in 2.0.0</a> names each one.</p>
 <h2 id="removed-in-200">Removed in 2.0.0<a class="headerlink" href="#removed-in-200" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1154,6 +1134,12 @@ pack fails with the unparsable-ELF error.</p>
 <td>1.6.0</td>
 <td>An error. <code>pack</code> and <code>graph</code> exit <code>1</code> and name the file that holds the search path</td>
 <td>Write the directory name in the path</td>
+</tr>
+<tr>
+<td>A program interpreter (<code>PT_INTERP</code>) that starts like an ELF and cannot be parsed</td>
+<td>1.8.0</td>
+<td>An error. <code>pack</code> and <code>graph</code> exit <code>1</code> and name the file</td>
+<td>Replace the damaged loader with an intact copy</td>
 </tr>
 </tbody>
 </table>
