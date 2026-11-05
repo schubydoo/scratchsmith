@@ -98,14 +98,18 @@ pub fn ensure_glibc(info: &ElfInfo) -> Result<()> {
 pub fn read_elf_info(path: &Path) -> Result<ElfInfo> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     match parse_elf_info(&bytes) {
-        // The user's own binary, not a library: keep goblin's cause and advise a rebuild.
-        Err(e) if bytes.starts_with(b"\x7fELF") => Err(e.context(format!(
-            "{} starts like an ELF and cannot be parsed (truncated or corrupt). Rebuild the \
-             binary or replace it with an intact copy",
-            printable(path)
-        ))),
+        Err(e) if bytes.starts_with(b"\x7fELF") => Err(damaged_binary(path, &format!("{e:#}"))),
         parsed => parsed.with_context(|| format!("parsing {} as ELF", path.display())),
     }
+}
+
+// The user's own binary, not a library: keep goblin's cause and advise a rebuild.
+fn damaged_binary(path: &Path, cause: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{} starts like an ELF and cannot be parsed (truncated or corrupt). Rebuild the binary \
+         or replace it with an intact copy: {cause}",
+        printable(path)
+    )
 }
 
 /// Parse ELF dynamic-linking facts from in-memory bytes. Split from `read_elf_info` so it is
@@ -272,8 +276,9 @@ impl LinkInfoSource for GoblinSource {
         let bytes = read_bounded(path, DEVICE_READ_CAP)?;
         match parse_elf_info(&bytes) {
             Ok(info) => Ok(Some(info)),
-            Err(_) if bytes.starts_with(b"\x7fELF") => {
-                Err(UnparsableElf(path.to_path_buf()).into())
+            // Keep goblin's cause in the chain for the top-level binary's message.
+            Err(e) if bytes.starts_with(b"\x7fELF") => {
+                Err(e.context(UnparsableElf(path.to_path_buf())))
             }
             Err(_) => Ok(None),
         }
@@ -376,7 +381,14 @@ pub fn resolve_with(
     let root_path =
         std::fs::canonicalize(binary).with_context(|| format!("locating {}", binary.display()))?;
     let mut root_info = source
-        .read(&root_path)?
+        .read(&root_path)
+        .map_err(|e| match e.is::<UnparsableElf>() {
+            true => {
+                let cause: Vec<_> = e.chain().skip(1).map(ToString::to_string).collect();
+                damaged_binary(&root_path, &cause.join(": "))
+            }
+            false => e,
+        })?
         .ok_or_else(|| anyhow::anyhow!("{} is not a valid ELF binary", root_path.display()))?;
     // Treat --include entries as extra direct dependencies of the binary, so they and
     // their own transitive deps are resolved and staged like anything else. They go after
