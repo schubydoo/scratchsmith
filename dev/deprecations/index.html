@@ -591,17 +591,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#a-library-found-only-through-an-inherited-rpath" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        A library found only through an inherited RPATH
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#an-output-directory-that-is-not-empty" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -653,6 +642,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Removed in 2.0.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-library-found-only-through-an-inherited-rpath" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A library found only through an inherited RPATH
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -948,17 +954,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#a-library-found-only-through-an-inherited-rpath" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        A library found only through an inherited RPATH
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#an-output-directory-that-is-not-empty" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1010,6 +1005,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Removed in 2.0.0">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#a-library-found-only-through-an-inherited-rpath" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A library found only through an inherited RPATH
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1114,12 +1126,6 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.<
 <td>Write the directory name in the path</td>
 </tr>
 <tr>
-<td>A library found only through an inherited <code>RPATH</code>, by an object that has <code>RUNPATH</code></td>
-<td>1.6.0</td>
-<td>2.0.0</td>
-<td>Give that object the directory in its own <code>RUNPATH</code></td>
-</tr>
-<tr>
 <td><code>--no-build</code> into an output directory that is not empty</td>
 <td>1.6.0</td>
 <td>2.0.0</td>
@@ -1127,7 +1133,7 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.<
 </tr>
 </tbody>
 </table>
-<p>The first three warnings come from <code>pack</code> and from <code>graph</code>, because both resolve the same
+<p>The first two warnings come from <code>pack</code> and from <code>graph</code>, because both resolve the same
 dependency tree. The last one comes from <code>pack</code> only.</p>
 <p>The interpreter warning stays only when no library lists the loader as <code>DT_NEEDED</code>. On a usual
 glibc sysroot <code>libc.so.6</code> lists it, so the dependency walk reads the loader as a library and the
@@ -1142,23 +1148,6 @@ library with the same name in that directory then ships in place of the correct 
 <p>The warning names the file that holds the search path. When you link that file, write the
 directory name in the search path and do not use the token:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-Wl,-rpath,/opt/app/lib/riscv64<span class="w"> </span>-o<span class="w"> </span>myapp<span class="w"> </span>main.c
-</code></pre></div>
-<h3 id="a-library-found-only-through-an-inherited-rpath">A library found only through an inherited <code>RPATH</code><a class="headerlink" href="#a-library-found-only-through-an-inherited-rpath" title="Permanent link">&para;</a></h3>
-<p>A binary can list directories where the loader looks for its libraries. There are two kinds of
-list. An <code>RPATH</code> is inherited: a library that the program loads also searches the program's
-<code>RPATH</code>. A <code>RUNPATH</code> is not inherited.</p>
-<p>The loader has one more rule. A library that has its own <code>RUNPATH</code> does not search any inherited
-<code>RPATH</code> for the libraries that it needs.</p>
-<p>Earlier versions of scratchsmith did not apply that rule. Scratchsmith now searches the way the
-loader does. If that search finds the library, scratchsmith stages that copy, which is the copy
-that the program uses on the host.</p>
-<p>If that search finds nothing, scratchsmith falls back to the old search, stages what it finds,
-and prints the warning. The copy that it stages is not the copy that the loader uses. On most
-hosts the loader finds no copy at all, and the program does not start there. The image can
-still run, because the loader cache in the image knows where the file is. Scratchsmith 2.0
-reports the library as missing.</p>
-<p>To fix it, link the library that needs the file with a <code>RUNPATH</code> that holds the directory:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-shared<span class="w"> </span>-fPIC<span class="w"> </span>-Wl,--enable-new-dtags<span class="w"> </span>-Wl,-rpath,/opt/app/lib<span class="w"> </span>-o<span class="w"> </span>libmid.so<span class="w"> </span>mid.c<span class="w"> </span>-lleaf
 </code></pre></div>
 <h3 id="an-output-directory-that-is-not-empty">An output directory that is not empty<a class="headerlink" href="#an-output-directory-that-is-not-empty" title="Permanent link">&para;</a></h3>
 <p><code>pack --no-build --output &lt;dir&gt;</code> stages the files of the image into a directory and builds no
@@ -1176,8 +1165,8 @@ own stages no records and removes none, because nothing reads the tree.</p>
 in the directory, so the pack ends with an error.</p>
 <p>Scratchsmith 2.0 refuses a directory that is not empty. Give each pack a new directory, or
 remove the old one first:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="gp">$ </span>rm<span class="w"> </span>-rf<span class="w"> </span>./rootfs
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>./rootfs<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="gp">$ </span>rm<span class="w"> </span>-rf<span class="w"> </span>./rootfs
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>./rootfs<span class="w"> </span>./app
 </code></pre></div>
 <h2 id="defaults-changing-in-20">Defaults changing in 2.0<a class="headerlink" href="#defaults-changing-in-20" title="Permanent link">&para;</a></h2>
 <table>
@@ -1214,7 +1203,7 @@ command line and no <code>packages</code> key in <code>scratchsmith.toml</code>.
 as no value, because 2.0 gives it the new default too. Any value that names an output stops the
 warning.</p>
 <p>To keep today's result, set the value:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--packages<span class="w"> </span>report<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--packages<span class="w"> </span>report<span class="w"> </span>./app
 </code></pre></div>
 <p>In <code>scratchsmith.toml</code>, write <code>packages = ["report"]</code>. To take the 2.0 default now, set
 <code>--packages report,sbom</code>.</p>
@@ -1259,8 +1248,23 @@ warning.</p>
 <td>An error. <code>pack</code> and <code>graph</code> exit <code>1</code> and name the file. 1.x did not warn for a file that is not a regular file, such as a FIFO named with <code>--include</code>, so that case fails now with no earlier warning</td>
 <td>Replace the damaged file with an intact copy</td>
 </tr>
+<tr>
+<td>A library found only through an inherited <code>RPATH</code>, by an object that has <code>RUNPATH</code></td>
+<td>1.6.0</td>
+<td>Reported as missing, and <code>pack</code> and <code>graph</code> fail</td>
+<td>Give that object the directory in its own <code>RUNPATH</code></td>
+</tr>
 </tbody>
 </table>
+<h3 id="a-library-found-only-through-an-inherited-rpath">A library found only through an inherited <code>RPATH</code><a class="headerlink" href="#a-library-found-only-through-an-inherited-rpath" title="Permanent link">&para;</a></h3>
+<p>An <code>RPATH</code> is inherited: a library that the program loads also searches the program's <code>RPATH</code>.
+A library that has its own <code>RUNPATH</code> does not search any inherited <code>RPATH</code> for the libraries
+that it needs. Scratchsmith now applies that rule with no fallback, so the library is missing,
+as it is for the loader. A <code>note:</code> line on stderr names the directory and the library that
+needs the file. To fix it, link the library that needs the file with a <code>RUNPATH</code> that
+holds the directory:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-shared<span class="w"> </span>-fPIC<span class="w"> </span>-Wl,--enable-new-dtags<span class="w"> </span>-Wl,-rpath,/opt/app/lib<span class="w"> </span>-o<span class="w"> </span>libmid.so<span class="w"> </span>mid.c<span class="w"> </span>-lleaf
+</code></pre></div>
 
 
 
