@@ -296,8 +296,9 @@ the image. Do not add a secret this way. Only a `--no-build --output` rootfs kee
 bits.
 
 With the default `--symlinks copy-all`, the flag takes regular files only. If the source is
-missing or is a directory, the pack fails and names the path. If `DST` is already in the image,
-the pack fails as well, so a second entry for one path cannot quietly replace the first. A file
+missing or is a directory, the pack fails and names the path. One `DST` given in two entries is
+a usage error with exit code 2, so a second entry cannot quietly replace the first. If `DST` is
+already in the image for another reason, the pack fails as well. A file
 you asked for is never skipped without a word. The added files count toward `--max-size`.
 
 Another `--symlinks` mode changes two of those rules, and only for a source that is itself a

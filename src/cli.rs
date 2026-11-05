@@ -473,6 +473,22 @@ fn dispatch(cli: Cli) -> Result<()> {
                     "--locale: {dup} is given more than once; give each locale only once"
                 )));
             }
+            // Path equality compares components, so `/etc//x` and `/etc/./x` match `/etc/x`.
+            // The stager still refuses a collision with a file the pack staged itself.
+            let mut seen = std::collections::HashSet::new();
+            if let Some(dup) = opts
+                .add_files
+                .iter()
+                .find(|f| !seen.insert(f.dst.as_path()))
+            {
+                bail!(UsageError(format!(
+                    "--add-file: {} is given more than once; give each image path only once",
+                    dup.dst
+                        .components()
+                        .collect::<std::path::PathBuf>()
+                        .display()
+                )));
+            }
             // Deprecation warnings go here too, for the same reason.
             crate::pack::warn_about_the_packages_default(&opts);
 

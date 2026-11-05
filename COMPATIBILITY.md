@@ -22,7 +22,9 @@ A breaking change to any of these requires a new **major** version. See the
   line. That is an argument-parse error from clap, or a refusal made after the parse. Examples
   are `--watch --format json`, `pack` with no binary, and a config value that conflicts with a
   flag. `1` on any other failure, such as a failed pack. Before 2.0.0, a refusal made after the parse
-  exited `1`.
+  exited `1`. That change is a 2.0.0 break. It had no deprecation cycle, because 1.x promised only
+  a non-zero code for these refusals. The 2.0.0 migration notes in
+  [docs/deprecations.md](docs/deprecations.md) list it.
   For `scratchsmith.toml` the same rule holds. A value that parses and is then refused exits `2`,
   for example a `label` with no `=`. A file that cannot be read or parsed exits `1`, for example a
   value of the wrong type or an unknown key. A nested `[profile.a.profile.b]` table is refused

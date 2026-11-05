@@ -95,6 +95,10 @@ fn post_parse_usage_refusals_exit_2() {
         "label.toml",
         &format!("binary = \"{bin}\"\nlabel = [\"build\"]\n"),
     );
+    let dup_add_file = cfg(
+        "add-file.toml",
+        &format!("binary = \"{bin}\"\nadd-file = [\"./a.conf:/etc/x\", \"./b.conf:/etc/x\"]\n"),
+    );
     let bad_push = cfg(
         "bad-push.toml",
         &format!("binary = \"{bin}\"\npush = \"localhost:5000/Bad:1\"\n"),
@@ -185,6 +189,24 @@ fn post_parse_usage_refusals_exit_2() {
             "--locale given twice",
             vec!["pack", "--locale", "C.utf8", "--locale", "C.utf8", bin],
             "given more than once",
+        ),
+        // `/etc//x` is the same image path as `/etc/x`, so the check compares paths, not text.
+        (
+            "--add-file with one image path twice",
+            vec![
+                "pack",
+                "--add-file",
+                "./a.conf:/etc/x",
+                "--add-file",
+                "./b.conf:/etc//x",
+                bin,
+            ],
+            "/etc/x is given more than once",
+        ),
+        (
+            "add-file with one image path twice from the config",
+            vec!["pack", "--config", &dup_add_file],
+            "/etc/x is given more than once",
         ),
         (
             "label with no = from the config",

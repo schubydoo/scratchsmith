@@ -8,7 +8,8 @@ and what you write instead.
 This page has one list for each kind of change. Three kinds change only in a major version:
 deprecated input shapes, tolerances, and changing defaults. Refused input is a fourth kind,
 because a minor release can refuse input that is the attack itself. The last list, Removed in
-2.0.0, shows what version 2.0.0 now rejects, after its deprecation cycle ended.
+2.0.0, shows what version 2.0.0 now rejects, after its deprecation cycle ended. It also shows one
+exit code that changed in 2.0.0 with no cycle, and it says why.
 
 A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.
@@ -180,6 +181,7 @@ In `scratchsmith.toml`, write `packages = ["report"]`. To take the 2.0 default n
 | A `label` or `env` entry with no `=` in `scratchsmith.toml` | 1.5.0 | A usage error, exit code 2 | `"NAME=value"` |
 | A library that starts like an ELF and cannot be parsed | 1.6.0 | An error. `pack` and `graph` exit `1` and name the file. 1.x did not warn for a file that is not a regular file, such as a FIFO named with `--include`, so that case fails now with no earlier warning | Replace the damaged file with an intact copy |
 | A library found only through an inherited `RPATH`, by an object that has `RUNPATH` | 1.6.0 | Reported as missing, and `pack` and `graph` fail | Give that object the directory in its own `RUNPATH` |
+| A command line refused after the parse, such as `--watch --format json` | Not warned | A usage error, exit code 2. 1.x exited 1 | Fix the command line. A script that tests for exactly `1` must also accept `2` |
 
 ### A library found only through an inherited `RPATH`
 
@@ -193,3 +195,13 @@ holds the directory:
 ```console
 $ cc -shared -fPIC -Wl,--enable-new-dtags -Wl,-rpath,/opt/app/lib -o libmid.so mid.c -lleaf
 ```
+
+### A command line refused after the parse exits 2
+
+Scratchsmith refuses some command lines only after the parse, because the refusal needs a
+second flag or the config. Examples are `--watch --format json`, `pack` with no binary, and one
+`--add-file` image path given twice. In 1.x these refusals exited `1`, the code for a failed
+pack, and printed no warning about a change. In 2.0.0 they exit `2`, the same code as an
+argument-parse error. This change had no deprecation cycle, because the 1.x contract promised
+only a non-zero code for these refusals. A script that tests for exactly `1` must also accept
+`2`.
