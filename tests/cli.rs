@@ -1026,6 +1026,49 @@ fn a_bare_label_in_the_selected_profile_names_the_profile() {
 }
 
 #[test]
+fn each_bad_list_names_its_own_source_under_a_profile() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    // The profile sets `label` but not `env`, so only the label comes from the profile.
+    let toml = "env = [\"LOG_LEVEL\"]\n\n[profile.ci]\nlabel = [\"build\"]\n";
+    let (code, stderr, cfg) = pack_bare_config(bin, toml, &["--profile", "ci"]);
+    assert_eq!(code, Some(2), "got: {stderr}");
+    assert!(
+        stderr.contains(&format!("{cfg} [profile.ci]: a label needs the form"))
+            && stderr.contains(&format!("\n  {cfg}: an env entry needs the form")),
+        "each entry should name its own source: {stderr}"
+    );
+
+    // A selected profile that sets neither list: the bad entry comes from the base.
+    let toml = "label = [\"build\"]\n\n[profile.ci]\nuser = \"1000\"\n";
+    let (code, stderr, cfg) = pack_bare_config(bin, toml, &["--profile", "ci"]);
+    assert_eq!(code, Some(2), "got: {stderr}");
+    assert!(
+        stderr.contains(&format!("error: {cfg}: a label needs the form"))
+            && !stderr.contains("[profile."),
+        "a base entry should not name the profile: {stderr}"
+    );
+}
+
+#[test]
+fn the_multi_entry_header_names_only_the_kinds_it_lists() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    for (toml, header) in [
+        ("label = [\"a\", \"b\"]\n", "2 label entries need the form"),
+        ("env = [\"A\", \"\"]\n", "2 env entries need the form"),
+    ] {
+        let (code, stderr, _) = pack_bare_config(bin, toml, &[]);
+        assert_eq!(code, Some(2), "got: {stderr}");
+        assert!(stderr.contains(header), "want `{header}`: {stderr}");
+    }
+}
+
+#[test]
 fn every_bare_label_and_env_entry_is_named_in_one_error() {
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");

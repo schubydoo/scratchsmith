@@ -459,23 +459,27 @@ pub fn env_pair(s: &str) -> Result<String, String> {
 /// keys in `scratchsmith.toml`, and runs before staging so no sink does work first.
 /// `label_from` and `env_from` name where each list came from, to prefix each entry's error.
 pub fn require_pairs(cfg: &ImageConfig, label_from: &str, env_from: &str) -> anyhow::Result<()> {
-    let bad: Vec<String> = [
-        ("a label", &cfg.labels, label_from),
-        ("an env entry", &cfg.env, env_from),
-    ]
-    .into_iter()
-    .flat_map(|(kind, entries, from)| {
+    let bad_in = |kind: &str, entries: &[String], from: &str| -> Vec<String> {
         entries
             .iter()
             .filter(|e| !e.contains('='))
-            .map(move |e| format!("{from}: {}", bare_entry_error(kind, e)))
-    })
-    .collect();
-    match bad.as_slice() {
+            .map(|e| format!("{from}: {}", bare_entry_error(kind, e)))
+            .collect()
+    };
+    let labels = bad_in("a label", &cfg.labels, label_from);
+    let env = bad_in("an env entry", &cfg.env, env_from);
+    let kinds = match (labels.is_empty(), env.is_empty()) {
+        (false, false) => "label and env entries",
+        (false, true) => "label entries",
+        _ => "env entries",
+    };
+    // Two blank entries give two identical lines: they are two entries to fix.
+    let all = [labels, env].concat();
+    match all.as_slice() {
         [] => Ok(()),
         [one] => anyhow::bail!("{one}"),
         all => anyhow::bail!(
-            "{} label and env entries need the form `NAME=value`:\n  {}",
+            "{} {kinds} need the form `NAME=value`:\n  {}",
             all.len(),
             all.join("\n  ")
         ),
