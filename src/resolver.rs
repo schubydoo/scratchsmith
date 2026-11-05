@@ -428,16 +428,17 @@ pub fn resolve_with(
             }
             // The kernel loads an ET_DYN or an ET_EXEC interpreter. An ELF of another type (a
             // core dump holds a process's memory) is a host file the binary picked.
-            // A corrupt loader warns only if no library lists it as DT_NEEDED. Usually libc.so.6
-            // does, and the dependency walk then fails the pack on it.
-            let parsed = match source.read(&loader) {
-                Err(e) if e.is::<UnparsableElf>() => None,
-                read => read?,
-            };
-            match parsed {
-                Some(info)
-                    if info.e_type != goblin::elf::header::ET_DYN
-                        && info.e_type != goblin::elf::header::ET_EXEC =>
+            // A corrupt loader fails here, before the walk, so the error is the same whether or
+            // not a library lists it as DT_NEEDED.
+            let parsed = source.read(&canonical(&loader)).with_context(|| {
+                format!(
+                    "the program interpreter (PT_INTERP) `{}`",
+                    escape_for_display(interp)
+                )
+            })?;
+            if let Some(info) = parsed {
+                if info.e_type != goblin::elf::header::ET_DYN
+                    && info.e_type != goblin::elf::header::ET_EXEC
                 {
                     bail!(
                         "the program interpreter (PT_INTERP) `{}` is {}, which the kernel cannot \
@@ -448,12 +449,6 @@ pub fn resolve_with(
                         printable(&canonical(&loader))
                     );
                 }
-                Some(_) => {}
-                None => resolution.warnings.push(format!(
-                    "the program interpreter (PT_INTERP) {} starts like an ELF and cannot be \
-                     parsed (truncated or corrupt), so the image cannot start.",
-                    printable(&canonical(&loader))
-                )),
             }
             resolution.interpreter = Some(ResolvedInterp {
                 image_path: PathBuf::from(interp),
@@ -603,7 +598,7 @@ pub fn resolve_with(
                     printable(&real)
                 );
             }
-            // A corrupt loader listed as DT_NEEDED (libc.so.6 does) fails here.
+            // A corrupt ELF fails here. A corrupt loader already failed at PT_INTERP above.
             match source.read(&real)? {
                 // A library the ELF named must be a shared object: glibc (2.17 to 2.41 at
                 // least) fails any other type with "cannot dynamically load executable". So it
@@ -1278,21 +1273,25 @@ mod tests {
     }
 
     #[test]
-    fn a_pt_interp_that_does_not_parse_warns() {
+    fn a_pt_interp_that_does_not_parse_fails() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let (exe, _mid, _leaf, mut infos) = chain_fixture(root);
-        infos.remove(&canonical(&root.join("lib64/ld-linux-x86-64.so.2")));
-        // The loader's bytes go through `GoblinSource`, which fails them as corrupt. The
-        // interpreter keeps the 1.x warning until its own 2.0 refusal.
+        let loader = canonical(&root.join("lib64/ld-linux-x86-64.so.2"));
+        infos.remove(&loader);
+        // The loader's bytes go through `GoblinSource`, which fails them as corrupt. No
+        // library in this graph lists the loader as DT_NEEDED, so only PT_INTERP reaches it.
         let src = ScriptedOrGoblin { infos };
-        let res = resolve_with(&exe, &Sysroot::new(root), &[], &src).unwrap();
+        let err = resolve_with(&exe, &Sysroot::new(root), &[], &src).unwrap_err();
+        assert!(err.is::<UnparsableElf>(), "{err:#}");
+        let msg = format!("{err:#}");
         assert!(
-            res.warnings
-                .iter()
-                .any(|w| w.contains("PT_INTERP") && w.contains("cannot be parsed")),
-            "{:?}",
-            res.warnings
+            msg.contains("PT_INTERP")
+                && msg.contains(&format!(
+                    "{} starts like an ELF and cannot be parsed",
+                    loader.display()
+                )),
+            "{msg}"
         );
     }
 

@@ -80,13 +80,6 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.
 
 | Input | Warns since | Error in | What to do |
 |---|---|---|---|
-| A program interpreter that starts like an ELF and cannot be parsed | 1.8.0 | 2.0.0 | Replace the damaged file |
-
-This warning comes from `pack` and from `graph`, because both resolve the same dependency tree.
-
-The interpreter warning stays only when no library lists the loader as `DT_NEEDED`. On a usual
-glibc sysroot `libc.so.6` lists it, so the dependency walk reads the loader as a library and the
-pack fails with the unparsable-ELF error.
 
 ## Removed in 2.0.0
 
@@ -103,6 +96,7 @@ pack fails with the unparsable-ELF error.
 | `pack --no-build --output DIR` into a `DIR` that is not empty | 1.6.0 | An error before any file is staged. `pack` exits `1` | A new or empty directory, or `rm -rf DIR` first |
 | `pack --no-build --output DIR` into a `DIR` that cannot be listed | Not warned | An error. `pack` exits `1` | A directory that you can read, or a new one |
 | `$PLATFORM` in a search path, on an architecture with no value for it | 1.6.0 | An error. `pack` and `graph` exit `1` and name the file that holds the search path | Write the directory name in the path |
+| A program interpreter (`PT_INTERP`) that starts like an ELF and cannot be parsed | 1.8.0 | An error. `pack` and `graph` exit `1` and name the file | Replace the damaged loader with an intact copy |
 
 ### A library found only through an inherited `RPATH`
 

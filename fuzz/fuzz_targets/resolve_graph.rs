@@ -80,7 +80,7 @@ struct Scenario {
     place_interp: bool,
     // Make that loader a data file, to drive the PT_INTERP refusal.
     interp_non_elf: bool,
-    // The loader's parsed facts: none (it does not parse, and warns), a core dump (refused), or
+    // The loader's parsed facts: none (it does not parse, and fails), a core dump (refused), or
     // a shared object.
     interp_core: Option<bool>,
 }

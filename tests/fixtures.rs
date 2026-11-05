@@ -535,3 +535,63 @@ fn a_platform_search_path_on_an_unnamed_arch_fails_both_graph_and_pack() {
         "the library from the wrong directory must not stage"
     );
 }
+
+#[test]
+fn a_truncated_program_interpreter_gives_graph_and_pack_the_same_error() {
+    // libc.so.6 lists the host loader as DT_NEEDED, not this copy, so only PT_INTERP reaches it.
+    if !cc_available() {
+        skip_required("no C compiler");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let host_loader = read_elf_info(Path::new("/usr/bin/id"))
+        .unwrap()
+        .interpreter
+        .expect("/usr/bin/id has PT_INTERP");
+    let full = std::fs::read(&host_loader).unwrap();
+    let loader = dir.join("ld-damaged.so.2");
+    std::fs::write(&loader, &full[..600]).unwrap();
+    std::fs::write(dir.join("main.c"), "int main(void){return 0;}").unwrap();
+    let app = dir.join("app");
+    cc(&[
+        &format!("-Wl,--dynamic-linker={}", loader.display()),
+        "-o",
+        app.to_str().unwrap(),
+        dir.join("main.c").to_str().unwrap(),
+    ]);
+
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let rootfs = dir.join("rootfs");
+    let app = app.to_str().unwrap();
+    let rootfs = rootfs.to_str().unwrap();
+    let mut msgs = Vec::new();
+    for args in [
+        vec!["graph", app],
+        vec!["graph", "--format", "json", app],
+        vec!["pack", "-n", "-o", rootfs, app],
+        vec!["pack", "--format", "json", "-n", "-o", rootfs, app],
+    ] {
+        let out = Command::new(bin).args(&args).output().expect("run");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert_eq!(out.status.code(), Some(1), "{args:?} must fail: {stderr}");
+        assert!(
+            stderr.contains("the program interpreter (PT_INTERP)")
+                && stderr.contains("ld-damaged.so.2 starts like an ELF and cannot be parsed")
+                && stderr.contains("Replace it with an intact copy")
+                && stderr.contains("not a valid ELF binary:")
+                && !stderr.contains("warning: "),
+            "{args:?}: the error must name the file, the fix and the cause: {stderr}"
+        );
+        assert!(out.stdout.is_empty(), "{args:?}: no report on a failure");
+        msgs.push(stderr);
+    }
+    assert!(
+        msgs.iter().all(|m| m == &msgs[0]),
+        "graph and pack must print the same error: {msgs:?}"
+    );
+    assert!(
+        !walk_contains(Path::new(rootfs), "ld-damaged.so.2"),
+        "the damaged loader must not stage"
+    );
+}

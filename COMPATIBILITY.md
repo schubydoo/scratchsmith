@@ -123,6 +123,9 @@ The [Deprecations](docs/deprecations.md) page lists what to write instead.
 - `$PLATFORM` in an `RPATH` or `RUNPATH` entry, on an architecture other than `x86_64` or
   `aarch64`, is now an error. `pack` and `graph` exit with code 1. Before, scratchsmith warned and
   searched the path with the token removed. Write the directory name in the path.
+- A program interpreter (`PT_INTERP`) that starts like an ELF and cannot be parsed is now an
+  error, with exit code 1. Before, `pack` and `graph` warned and went on. Replace the damaged
+  loader with an intact copy.
 - A command line that scratchsmith refuses only after the parse now exits 2, not 1. Examples are
   `--watch --format json`, `pack` with no binary, and one `--add-file` image path given twice.
   This had no warning before 2.0. A script that tests for exactly `1` must also accept `2`.
