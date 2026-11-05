@@ -98,7 +98,12 @@ pub fn ensure_glibc(info: &ElfInfo) -> Result<()> {
 pub fn read_elf_info(path: &Path) -> Result<ElfInfo> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     match parse_elf_info(&bytes) {
-        Err(_) if bytes.starts_with(b"\x7fELF") => Err(UnparsableElf(path.to_path_buf()).into()),
+        // The user's own binary, not a library: keep goblin's cause and advise a rebuild.
+        Err(e) if bytes.starts_with(b"\x7fELF") => Err(e.context(format!(
+            "{} starts like an ELF and cannot be parsed (truncated or corrupt). Rebuild the \
+             binary or replace it with an intact copy",
+            printable(path)
+        ))),
         parsed => parsed.with_context(|| format!("parsing {} as ELF", path.display())),
     }
 }
@@ -1450,14 +1455,24 @@ mod tests {
     }
 
     #[test]
-    fn read_elf_info_gives_a_truncated_top_level_binary_the_same_error_as_graph() {
+    fn read_elf_info_keeps_the_parse_cause_and_advises_a_rebuild_for_a_truncated_binary() {
         let tmp = tempfile::tempdir().unwrap();
         let exe = tmp.path().join("app");
         fs::write(&exe, b"\x7fELF and then the file ends").unwrap();
-        let err = read_elf_info(&exe).unwrap_err();
-        assert!(err.is::<UnparsableElf>(), "{err:#}");
+        let msg = format!("{:#}", read_elf_info(&exe).unwrap_err());
+        assert!(
+            msg.contains("starts like an ELF and cannot be parsed")
+                && msg.contains("Rebuild the binary")
+                && msg.contains("not a valid ELF binary:")
+                && !msg.contains("reinstall"),
+            "{msg}"
+        );
         fs::write(&exe, b"not an elf").unwrap();
-        assert!(!read_elf_info(&exe).unwrap_err().is::<UnparsableElf>());
+        let msg = format!("{:#}", read_elf_info(&exe).unwrap_err());
+        assert!(
+            msg.contains("parsing ") && !msg.contains("starts like an ELF"),
+            "{msg}"
+        );
     }
 
     // A small device cap, so a test that reads an endless device to it allocates little.
@@ -1523,6 +1538,21 @@ mod tests {
             err.contains("`/usr/lib/libfifo.so`") && err.contains("not a regular file"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn an_included_fifo_that_starts_like_an_elf_fails_in_2_0() {
+        // 1.x did not warn for a file that is not a regular file, and kept it as a leaf.
+        // The bytes decide now, so a FIFO whose writer sends the ELF magic and junk fails.
+        let tmp = tempfile::tempdir().unwrap();
+        let fifo = tmp.path().join("plugin.fifo");
+        mkfifo(&fifo);
+        let writer = fifo.clone();
+        std::thread::spawn(move || {
+            let _ = fs::write(&writer, b"\x7fELF and junk");
+        });
+        let err = returns(move || GoblinSource.read(&fifo).unwrap_err());
+        assert!(err.is::<UnparsableElf>(), "{err:#}");
     }
 
     #[test]
