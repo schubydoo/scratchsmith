@@ -504,23 +504,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Deprecated input shapes">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#a-label-or-an-environment-variable-with-no-equals-sign" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        A label or an environment variable with no equals sign
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -889,23 +872,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Deprecated input shapes">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#a-label-or-an-environment-variable-with-no-equals-sign" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        A label or an environment variable with no equals sign
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -1107,45 +1073,8 @@ tolerance prints one warning line to standard error, and the exit code stays the
 different result. Scratchsmith prints one warning line to standard error where the result will
 change, and the exit code stays the same.</p>
 <h2 id="deprecated-input-shapes">Deprecated input shapes<a class="headerlink" href="#deprecated-input-shapes" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Input</th>
-<th>Deprecated in</th>
-<th>Removed in</th>
-<th>Write this instead</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>--label NAME</code> with no <code>=</code></td>
-<td>1.5.0</td>
-<td>2.0.0</td>
-<td><code>--label NAME=value</code></td>
-</tr>
-<tr>
-<td><code>--env NAME</code> with no <code>=</code></td>
-<td>1.5.0</td>
-<td>2.0.0</td>
-<td><code>--env NAME=value</code></td>
-</tr>
-</tbody>
-</table>
-<h3 id="a-label-or-an-environment-variable-with-no-equals-sign">A label or an environment variable with no equals sign<a class="headerlink" href="#a-label-or-an-environment-variable-with-no-equals-sign" title="Permanent link">&para;</a></h3>
-<p><code>--label</code> and <code>--env</code> take a <code>NAME=value</code> pair. Scratchsmith accepts a bare name.</p>
-<p>A bare <code>--label build</code> writes the label <code>build</code> with an empty value. That is legal in an image
-configuration, and it is almost never what you meant. A bare <code>--env build</code> is worse: the OCI image
-specification defines <code>Env</code> as a list of <code>KEY=VALUE</code> strings, so an entry with no <code>=</code> is not a
-valid environment variable. A runtime can drop it, or pass it on as a name with no value.</p>
-<p>A bare <code>--env PATH</code> is worse than a stray entry. Scratchsmith keys each entry on the text before
-the first <code>=</code>, so <code>PATH</code> matches the default <code>PATH</code> entry and replaces it. The image then ships
-with no usable <code>PATH</code> at all.</p>
-<p>The same applies to the <code>label</code> and <code>env</code> keys in <code>scratchsmith.toml</code>, which take the same
-strings.</p>
-<p>Add the <code>=</code> and the value you meant:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--label<span class="w"> </span><span class="nv">build</span><span class="o">=</span>ci<span class="w"> </span>--env<span class="w"> </span><span class="nv">LOG_LEVEL</span><span class="o">=</span>info<span class="w"> </span>./myapp
-</code></pre></div>
-<p>To set an empty value on purpose, write the <code>=</code> and stop there: <code>--label build=</code>.</p>
+<p>No input shape is deprecated now. Version 2.0.0 removed the 1.x deprecations, and the list
+<a href="#removed-in-200">Removed in 2.0.0</a> names each one.</p>
 <h2 id="refused-without-a-deprecation-cycle">Refused without a deprecation cycle<a class="headerlink" href="#refused-without-a-deprecation-cycle" title="Permanent link">&para;</a></h2>
 <p>Some input was the attack itself. COMPATIBILITY.md allows a minor or patch release to refuse
 such input with no deprecation cycle, and this section lists each case.</p>
@@ -1246,7 +1175,7 @@ such as <code>/opt/app/lib/$PLATFORM</code> becomes <code>/opt/app/lib/</code>, 
 library with the same name in that directory then ships in place of the correct one.</p>
 <p>The warning names the file that holds the search path. When you link that file, write the
 directory name in the search path and do not use the token:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-Wl,-rpath,/opt/app/lib/riscv64<span class="w"> </span>-o<span class="w"> </span>myapp<span class="w"> </span>main.c
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-Wl,-rpath,/opt/app/lib/riscv64<span class="w"> </span>-o<span class="w"> </span>myapp<span class="w"> </span>main.c
 </code></pre></div>
 <h3 id="a-library-found-only-through-an-inherited-rpath">A library found only through an inherited <code>RPATH</code><a class="headerlink" href="#a-library-found-only-through-an-inherited-rpath" title="Permanent link">&para;</a></h3>
 <p>A binary can list directories where the loader looks for its libraries. There are two kinds of
@@ -1263,7 +1192,7 @@ hosts the loader finds no copy at all, and the program does not start there. The
 still run, because the loader cache in the image knows where the file is. Scratchsmith 2.0
 reports the library as missing.</p>
 <p>To fix it, link the library that needs the file with a <code>RUNPATH</code> that holds the directory:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-shared<span class="w"> </span>-fPIC<span class="w"> </span>-Wl,--enable-new-dtags<span class="w"> </span>-Wl,-rpath,/opt/app/lib<span class="w"> </span>-o<span class="w"> </span>libmid.so<span class="w"> </span>mid.c<span class="w"> </span>-lleaf
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-shared<span class="w"> </span>-fPIC<span class="w"> </span>-Wl,--enable-new-dtags<span class="w"> </span>-Wl,-rpath,/opt/app/lib<span class="w"> </span>-o<span class="w"> </span>libmid.so<span class="w"> </span>mid.c<span class="w"> </span>-lleaf
 </code></pre></div>
 <h3 id="an-output-directory-that-is-not-empty">An output directory that is not empty<a class="headerlink" href="#an-output-directory-that-is-not-empty" title="Permanent link">&para;</a></h3>
 <p><code>pack --no-build --output &lt;dir&gt;</code> stages the files of the image into a directory and builds no
@@ -1281,8 +1210,8 @@ own stages no records and removes none, because nothing reads the tree.</p>
 in the directory, so the pack ends with an error.</p>
 <p>Scratchsmith 2.0 refuses a directory that is not empty. Give each pack a new directory, or
 remove the old one first:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="gp">$ </span>rm<span class="w"> </span>-rf<span class="w"> </span>./rootfs
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>./rootfs<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="gp">$ </span>rm<span class="w"> </span>-rf<span class="w"> </span>./rootfs
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>./rootfs<span class="w"> </span>./app
 </code></pre></div>
 <h2 id="defaults-changing-in-20">Defaults changing in 2.0<a class="headerlink" href="#defaults-changing-in-20" title="Permanent link">&para;</a></h2>
 <table>
@@ -1319,7 +1248,7 @@ command line and no <code>packages</code> key in <code>scratchsmith.toml</code>.
 as no value, because 2.0 gives it the new default too. Any value that names an output stops the
 warning.</p>
 <p>To keep today's result, set the value:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--packages<span class="w"> </span>report<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--packages<span class="w"> </span>report<span class="w"> </span>./app
 </code></pre></div>
 <p>In <code>scratchsmith.toml</code>, write <code>packages = ["report"]</code>. To take the 2.0 default now, set
 <code>--packages report,sbom</code>.</p>
@@ -1339,6 +1268,24 @@ warning.</p>
 <td>1.5.0</td>
 <td>An error. <code>pack</code> exits <code>1</code></td>
 <td>A top-level <code>[profile.b]</code> table, with the keys it relied on repeated</td>
+</tr>
+<tr>
+<td><code>--label NAME</code> with no <code>=</code></td>
+<td>1.5.0</td>
+<td>A usage error, exit code 2</td>
+<td><code>--label NAME=value</code>, or <code>--label NAME=</code> for an empty value</td>
+</tr>
+<tr>
+<td><code>--env NAME</code> with no <code>=</code></td>
+<td>1.5.0</td>
+<td>A usage error, exit code 2</td>
+<td><code>--env NAME=value</code></td>
+</tr>
+<tr>
+<td>A <code>label</code> or <code>env</code> entry with no <code>=</code> in <code>scratchsmith.toml</code></td>
+<td>1.5.0</td>
+<td>An error, exit code 1</td>
+<td><code>"NAME=value"</code></td>
 </tr>
 </tbody>
 </table>
