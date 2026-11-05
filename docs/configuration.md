@@ -9,10 +9,10 @@ file**.
 | `binary` | *(positional arg)* | The ELF binary to pack. |
 | `entrypoint` | `--entrypoint` | Image `ENTRYPOINT` (defaults to the packed binary's path). |
 | `cmd` | `--cmd` | Default arguments appended to the entrypoint (list, and `--cmd` is repeatable). |
-| `env` | `--env` | Image environment entries, each `KEY=VALUE` (list). |
+| `env` | `--env` | Image environment entries, each `KEY=VALUE` (list). An entry with no `=` fails the pack with exit code 2. Write `KEY=` for an empty value. |
 | `workdir` | `--workdir` | Image `WORKDIR`. |
 | `user` | `--user` | Image user `UID[:GID]`. Defaults to a non-root UID. `0`/root prints a warning. |
-| `label` | `--label` | OCI image label `KEY=VALUE` (list, and `--label` is repeatable). |
+| `label` | `--label` | OCI image label `KEY=VALUE` (list, and `--label` is repeatable). An entry with no `=` fails the pack with exit code 2. Write `KEY=` for an empty value. |
 | `healthcheck` | `--healthcheck` | Container `HEALTHCHECK` in exec form (list, and repeatable). It runs inside the scratch image, so it must name an executable present there, typically the packed binary. |
 | `strip` | `--strip` | Strip symbols from the binary and libraries. |
 | `upx` | `--upx` | Compress the packed binary with UPX (it self-decompresses at runtime). |
@@ -34,9 +34,13 @@ file**.
 | `deny` | `--deny` | If this library ships, the pack fails (list). Resolved libraries, the loader, and NSS modules are all in scope, matched by soname or staged file name. This is a CI policy gate. Read sonames from `scratchsmith graph`. |
 | `require` | `--require` | If this library does not ship, the pack fails (list). Same scope as `deny`. |
 | `sign` | `--sign` | cosign-sign the pushed image (keyless, by digest). Requires a push target. |
-| `push` | `--push` | Push the image straight to this registry reference, daemonless. |
+| `push` | `--push` | Push the image straight to this registry reference, daemonless. A sink on the command line (`--push`, `--oci-archive` or `--no-build`) replaces this key. If the file also sets `sign`, `--oci-archive` or `--no-build` leaves it no push target, and the pack fails with exit code 2. |
 | `max-size` | `--max-size` | If the packed image exceeds this size, the pack fails. The packed image is the fully-staged rootfs: payload + NSS includes + runtime extras + added files + locales + the `--packages image` records. Write the size as `12MB`, `512KiB`, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024). |
 | `runtime` | `--runtime` | Container engine for the default load sink and the `--smoke` run: `docker` (default), `podman`, or `nerdctl`. The daemonless sinks (`--oci-archive`, `--push`) never invoke a runtime, so this is ignored there. |
+
+A key that is not in this table, or a value of the wrong type, fails the pack with exit code 1.
+A relative path in the file is read from the directory where you run scratchsmith, not from the
+directory of the file.
 
 A full config file, and how to run it:
 
@@ -100,5 +104,10 @@ push = "ghcr.io/you/app:latest"
 ```
 
 Values layer in this order, **last wins**: base config → the selected `[profile.<name>]` → any
-command-line flag. Booleans OR together, so a profile can switch something **on** but not off.
-A scalar is replaced by the more specific layer. A non-empty list replaces the one beneath it.
+command-line flag. Booleans OR together, so a profile or a flag can switch something **on** but
+not off. To switch it off, remove the key from the file. A scalar is replaced by the more specific
+layer. A non-empty list replaces the one beneath it.
+
+Profiles do not nest. A table such as `[profile.a.profile.b]` fails the pack with exit code 1,
+and the error names each nested table by its full path. Move each one to a top-level
+`[profile.<name>]` table. See [Deprecations](deprecations.md#removed-in-200).

@@ -2,7 +2,7 @@
 default: major
 ---
 
-# A refused command line exits 2
+#### A refused command line exits 2
 
 A command line that scratchsmith refuses after it parses the flags now exits `2`, the same code
 as a parse error. Examples are `--watch --format json`, `--packages none,report`, `pack` with no

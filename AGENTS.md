@@ -23,6 +23,7 @@ product story and `CONTRIBUTING.md` for the flow.
 - `src/supplychain.rs`: SBOM (syft), scan (grype) + image signing/attestation (cosign), shelled out.
 - `src/packages.rs` + `src/rpm.rs`: `--packages`, which package owns each bundled file (dpkg, rpm), and the records for the SBOM and the image.
 - `src/watch.rs`: `pack --watch`.
+- `src/{graph,diff,unpack}.rs`: the `graph`, `diff` and `unpack` subcommands. `unpack` reads untrusted image layers.
 - `src/{cli,lint,doctor,report,config}.rs` · `tests/`: integration tests.
 
 ## Hard rules

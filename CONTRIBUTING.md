@@ -105,7 +105,8 @@ A change that breaks one of these is wrong, even with every test green:
    cargo deny check      # licenses/advisories
    ```
    CI runs all of these plus an MSRV build, coverage (**≥ 90%** lines), and
-   `cargo audit`.
+   `cargo audit`. It also builds the static musl binary, runs ShellCheck on `install.sh`,
+   checks that the fuzz targets compile and tests the shell completions.
 3. **Add a changeset** for any user-facing change (see below).
 4. Open the PR and fill in the template.
 

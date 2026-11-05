@@ -38,7 +38,7 @@ inputs:
     required: false
     default: "false"
   smoke:
-    description: After building, run the image once and fail if the binary can't start.
+    description: After building, run the image once and fail if the binary can't start. It cannot be combined with `output`, because `output` builds no image.
     required: false
     default: "false"
   sbom:
@@ -116,7 +116,7 @@ inputs:
     required: false
     default: ""
   env:
-    description: Image environment entries, one `KEY=VALUE` per line.
+    description: Image environment entries, one `KEY=VALUE` per line. A line with no `=` fails the pack. Write `KEY=` for an empty value.
     required: false
     default: ""
   workdir:
@@ -124,7 +124,7 @@ inputs:
     required: false
     default: ""
   label:
-    description: OCI image labels, one `KEY=VALUE` per line.
+    description: OCI image labels, one `KEY=VALUE` per line. A line with no `=` fails the pack. Write `KEY=` for an empty value.
     required: false
     default: ""
   healthcheck:

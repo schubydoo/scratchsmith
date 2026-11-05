@@ -170,7 +170,7 @@ pub enum Command {
         #[arg(long)]
         init: bool,
         /// Copy a host file into the image: `SRC:DST`, or `SRC` to keep its own absolute
-        /// path. Regular files only; repeatable.
+        /// path. Regular files only, unless --symlinks keeps a symlink as a link; repeatable.
         #[arg(long = "add-file", value_name = "SRC[:DST]")]
         add_file: Vec<String>,
         /// Stage a compiled glibc locale at /usr/lib/locale, e.g. en_US.UTF-8; repeatable.
@@ -195,8 +195,8 @@ pub enum Command {
         )]
         nss: Vec<crate::stager::NssModule>,
         /// Where to record the distribution packages that own the bundled files
-        /// (comma-separated: report, sbom, image; or none). Default: report,sbom. A text
-        /// report skips report, and sbom runs only with --sbom or --scan.
+        /// (comma-separated: report, sbom, image; or none). Default: report,sbom. With the
+        /// text report, the default skips report. sbom runs only with --sbom or --scan.
         #[arg(
             long = "packages",
             value_enum,
@@ -234,7 +234,7 @@ pub enum Command {
     Index {
         /// The index reference to create and push, e.g. `ghcr.io/you/app:1.0`.
         target: String,
-        /// Per-arch source images already in the target's registry (one or more), e.g.
+        /// Per-arch source images already pushed to the target's repository (one or more), e.g.
         /// `ghcr.io/you/app:1.0-amd64 ghcr.io/you/app:1.0-arm64`.
         #[arg(required = true, num_args = 1..)]
         sources: Vec<String>,

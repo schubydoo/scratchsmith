@@ -36,7 +36,7 @@ Scratchsmith owns the one input the others do not serve: **an arbitrary prebuilt
 
 - **glibc / host-arch only (for now).** Dynamic musl/Alpine binaries are detected by their
   interpreter and **rejected with a clear error** before anything is staged. You never get a
-  silently broken image. This is a v1 scope choice, not a permanent boundary: musl uses a
+  silently broken image. This is a scope choice, not a permanent boundary: musl uses a
   different loader model and has no NSS, so it needs its own resolver backend (a possible
   future addition). (A *static* musl binary is a single self-contained file and packs fine
   today.) No cross-arch resolution yet.

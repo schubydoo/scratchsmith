@@ -64,7 +64,7 @@ build. It is purpose-built for the hard case and useful for the easy one.
 | **Add host files**: `--add-file SRC[:DST]` (copy any host file into the image) | ✅ |
 | **Locale data**: `--locale NAME` (stage one compiled glibc locale, never the host archive) | ✅ |
 | **Symlink modes**: `--symlinks` (keep a named symlink as a link, or flatten it) | ✅ |
-| Image metadata: labels (`--label`), `HEALTHCHECK` (`--healthcheck`) | ✅ |
+| Image metadata: `--entrypoint`, `--cmd`, `--env`, `--workdir`, `--user`, labels (`--label`), `HEALTHCHECK` (`--healthcheck`) | ✅ |
 | Configuration file (`scratchsmith.toml`) + named profiles (`--profile`), JSON output (`--format json`) | ✅ |
 | **Pluggable runtime**: `--runtime` (docker / podman / nerdctl) for the default load sink | ✅ |
 | **Package provenance**: `--packages` (name the distribution package behind each bundled library, in the report, the SBOM, or the image) | ✅ |
@@ -77,7 +77,7 @@ build. It is purpose-built for the hard case and useful for the easy one.
 | **Daemonless registry push**: `--push <ref>` (no daemon, and it uses your docker credentials) | ✅ |
 | **Signing the image `pack` produces**: `--push --sign` (cosign keyless, by digest) | ✅ |
 | **Multi-arch image index**: `index` (combine per-arch pushes into one tag, daemonless) | ✅ |
-| **Image diff**: `diff <a> <b>` (files added, removed and changed, plus the size delta, and `--exit-code` gates CI) | ✅ |
+| **Rootfs diff**: `diff <a> <b>` (compare two staged rootfs directories: files added, removed and changed, plus the size delta, and `--exit-code` gates CI. To compare images, `unpack` them first) | ✅ |
 | **Unpack an OCI image**: `unpack <archive> <dir>` (extract the layers to audit an image you did not build) | ✅ |
 
 <!-- --8<-- [end:capabilities] -->
@@ -91,7 +91,8 @@ Scratchsmith is **Linux only** (amd64/arm64). It stages a Linux glibc rootfs, so
 on macOS or native Windows. Use a Linux container or WSL2 there.
 
 ```sh
-# One-line install. Downloads the signed binary and verifies its cosign-signed checksums.
+# One-line install. Downloads the binary and verifies its checksum. With cosign installed,
+# it also verifies the signature of the checksums.
 curl -fsSL https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install.sh | bash
 
 # ...or a package manager:
@@ -145,7 +146,7 @@ ships a CycloneDX SBOM of its own dependency graph. The exact `gh attestation` a
 - **[Usage](docs/usage.md)**: pack recipes, daemonless output, and image metadata.
 - **[GitHub Action](docs/github-action.md)**: pack in a CI workflow with the composite action.
 - **[Configuration](docs/configuration.md)**: the `scratchsmith.toml` reference and profiles.
-- **[Deprecations](docs/deprecations.md)**: what a warning means, what ends in 2.0, and what to write instead.
+- **[Deprecations](docs/deprecations.md)**: what a warning means, what 2.0 removed, and what to write instead.
 - **[Verifying releases](docs/verifying.md)**: cosign signatures, SLSA provenance, and the SBOM.
 - **[Comparison & limitations](docs/comparison.md)**: how Scratchsmith compares, and what it does not do.
 - **[Architecture](docs/architecture.md)**: how resolve → stage → assemble works, and the 1.0 stability contract.

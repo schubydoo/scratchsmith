@@ -111,7 +111,7 @@ fn find_tini() -> Result<PathBuf> {
 #[non_exhaustive] // may gain modes in a minor; not a stable exhaustive library API
 pub enum SymlinkMode {
     /// Copy the target's content to the named path. No link in the image (the default,
-    /// and what every release before this one did).
+    /// and the only behavior before 1.4.0).
     #[default]
     CopyAll,
     /// Recreate the link as a link, even when its target is not in the image. A dangling

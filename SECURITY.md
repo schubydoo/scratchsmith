@@ -17,7 +17,7 @@ releases.
 Report privately, either:
 
 - **Preferred:** GitHub's private vulnerability reporting through the **Security** tab →
-  *Report a vulnerability* (if enabled on the repo), or
+  *Report a vulnerability*, or
 - **Email:** [schuuby@proton.me](mailto:schuuby@proton.me).
 
 ### What to include
