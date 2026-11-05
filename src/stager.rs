@@ -354,7 +354,9 @@ pub fn stage_locales(dest: &Path, locales: &[String]) -> Result<()> {
         let name = validate_locale_name(name)?;
         let image = Path::new(LOCALE_ROOT).join(name);
         if is_staged(dest, &image) {
-            bail!("--locale: {name} is already in the image; each locale can be given only once");
+            bail!(crate::cli::UsageError(format!(
+                "--locale: {name} is already in the image; each locale can be given only once"
+            )));
         }
         let target = staged_path(dest, &image, true)?;
         let host_dir = Path::new(LOCALE_ROOT).join(name);
@@ -372,10 +374,14 @@ pub fn stage_locales(dest: &Path, locales: &[String]) -> Result<()> {
 // a path rather than a locale, is refused before it reaches the filesystem.
 fn validate_locale_name(name: &str) -> Result<&str> {
     if name.is_empty() {
-        bail!("--locale: the locale name must not be empty");
+        bail!(crate::cli::UsageError(
+            "--locale: the locale name must not be empty".into()
+        ));
     }
     if name.contains('/') || name == "." || name == ".." {
-        bail!("--locale '{name}': name a locale such as en_US.UTF-8, not a path");
+        bail!(crate::cli::UsageError(format!(
+            "--locale '{name}': name a locale such as en_US.UTF-8, not a path"
+        )));
     }
     Ok(name)
 }
@@ -2556,9 +2562,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("dest");
         make_file(&dest.join("usr/lib/locale/en_US.UTF-8/LC_CTYPE"), b"ctype");
-        let err = stage_locales(&dest, &["en_US.UTF-8".to_string()])
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("already in the image"), "{err}");
+        let err = stage_locales(&dest, &["en_US.UTF-8".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("already in the image"), "{err}");
+        assert!(crate::cli::is_usage(&err), "{err}");
     }
 }

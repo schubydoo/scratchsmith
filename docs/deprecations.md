@@ -177,7 +177,7 @@ In `scratchsmith.toml`, write `packages = ["report"]`. To take the 2.0 default n
 | A nested `[profile.a.profile.b]` table | 1.5.0 | An error. `pack` exits `1` | A top-level `[profile.b]` table, with the keys it relied on repeated |
 | `--label NAME` with no `=` | 1.5.0 | A usage error, exit code 2 | `--label NAME=value`, or `--label NAME=` for an empty value |
 | `--env NAME` with no `=` | 1.5.0 | A usage error, exit code 2 | `--env NAME=value` |
-| A `label` or `env` entry with no `=` in `scratchsmith.toml` | 1.5.0 | An error, exit code 1 | `"NAME=value"` |
+| A `label` or `env` entry with no `=` in `scratchsmith.toml` | 1.5.0 | A usage error, exit code 2 | `"NAME=value"` |
 | A library that starts like an ELF and cannot be parsed | 1.6.0 | An error. `pack` and `graph` exit `1` and name the file. 1.x did not warn for a file that is not a regular file, such as a FIFO named with `--include`, so that case fails now with no earlier warning | Replace the damaged file with an intact copy |
 | A library found only through an inherited `RPATH`, by an object that has `RUNPATH` | 1.6.0 | Reported as missing, and `pack` and `graph` fail | Give that object the directory in its own `RUNPATH` |
 

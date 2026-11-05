@@ -22,7 +22,14 @@ stable contract. A breaking change to any of them requires a new major version:
 - **`scratchsmith.toml`**: the configuration keys and their types (the [Configuration](configuration.md) reference).
 - **`--format json`**: the field names and types of the `pack`, `index`, `graph`, `diff`, and `unpack`
   reports (the schema CI gates consume). Each is pinned by a golden test, so a change is always deliberate.
-- **Exit codes**: `0` on success, `2` on an argument-parse error, and non-zero on any other failure.
+- **Exit codes**: `0` on success. `2` on a usage error: an argument-parse error, or a command line
+  that scratchsmith refuses after the parse, such as `--watch --format json` or `pack` with no
+  binary. `1` on any other failure, such as a failed pack. Before 2.0.0, a refusal made after the
+  parse exited `1`.
+  For `scratchsmith.toml` the same rule holds. A value that parses and is then refused exits `2`,
+  for example a `label` with no `=`. A file that cannot be read or parsed exits `1`, for example a
+  value of the wrong type or an unknown key. A nested `[profile.a.profile.b]` table is refused
+  when the file loads, so it exits `1` too.
 
 **Not** frozen (these can change in any release): human-readable text and warning wording, log
 output, `doctor`'s exact phrasing, the Rust **library API**, and the exact bytes of the produced

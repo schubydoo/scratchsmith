@@ -18,7 +18,15 @@ A breaking change to any of these requires a new **major** version. See the
 - **`scratchsmith.toml`**: the config keys and their types.
 - **`--format json`**: the field names and types of the `pack`, `index`, `graph`, `diff`, and
   `unpack` reports (the schema CI gates consume).
-- **Exit codes**: `0` on success, `2` on an argument-parse error, non-zero on any other failure.
+- **Exit codes**: `0` on success. `2` on a usage error, which is any refusal of the command
+  line. That is an argument-parse error from clap, or a refusal made after the parse. Examples
+  are `--watch --format json`, `pack` with no binary, and a config value that conflicts with a
+  flag. `1` on any other failure, such as a failed pack. Before 2.0.0, a refusal made after the parse
+  exited `1`.
+  For `scratchsmith.toml` the same rule holds. A value that parses and is then refused exits `2`,
+  for example a `label` with no `=`. A file that cannot be read or parsed exits `1`, for example a
+  value of the wrong type or an unknown key. A nested `[profile.a.profile.b]` table is refused
+  when the file loads, so it exits `1` too.
 
 ## What is *not* a contract (can change in any release)
 
@@ -82,7 +90,8 @@ change:
 - **`--format json`**: `json_report_schema_is_stable`, `index_report_schema_is_stable`,
   `dep_graph_json_schema_is_stable`, `diff_report_schema_is_stable`, and
   `unpack_report_schema_is_stable` pin the exact key sets.
-- **Exit codes**: the exit-code tests in `tests/cli.rs` pin `0` / `2` / non-zero.
+- **Exit codes**: the exit-code tests in `tests/cli.rs` pin `0` / `2` / `1`.
+  `post_parse_usage_refusals_exit_2` covers each refusal made after the parse.
 - **Library API**: a non-blocking `cargo-semver-checks` CI job surfaces `pub`-API changes as a
   heads-up. It is not a gate, because the library is out of contract.
 

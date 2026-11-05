@@ -146,19 +146,21 @@ pub fn push_index(target: &str, sources: &[String]) -> Result<IndexOutcome> {
     }
     let target_ref: Reference = target
         .parse()
-        .with_context(|| format!("invalid target reference {target:?}"))?;
+        .with_context(|| format!("invalid target reference {target:?}"))
+        .map_err(crate::cli::usage)?;
     let source_refs = sources
         .iter()
         .map(|s| {
             let r: Reference = s
                 .parse()
-                .with_context(|| format!("invalid source reference {s:?}"))?;
+                .with_context(|| format!("invalid source reference {s:?}"))
+                .map_err(crate::cli::usage)?;
             // An image index references its children by digest, resolved within the
             // repository it was pulled from — so every source must be in the target's
             // repository (this push publishes only the list, never copies child blobs).
             // The usual shape is the same repo, a different tag: app:1.0-amd64 -> app:1.0.
             if r.registry() != target_ref.registry() || r.repository() != target_ref.repository() {
-                bail!(
+                bail!(crate::cli::UsageError(format!(
                     "source {s} is {}/{} but the target index is {}/{}; an image index \
                      references its children by digest within one repository, so every \
                      source must be in the target's repository (typically the same repo, a \
@@ -167,7 +169,7 @@ pub fn push_index(target: &str, sources: &[String]) -> Result<IndexOutcome> {
                     r.repository(),
                     target_ref.registry(),
                     target_ref.repository()
-                );
+                )));
             }
             Ok((s.clone(), r))
         })

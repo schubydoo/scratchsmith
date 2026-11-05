@@ -1,9 +1,33 @@
 //! Command-line surface and dispatch.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::generate;
 use std::path::PathBuf;
+
+/// A refusal of the command line itself (a flag pair, a missing argument, a bad value) that
+/// clap cannot see, because it needs the config or the other flags. `main` exits 2 for it, the
+/// same code as a clap parse error, so a script can tell "called wrong" from "the pack failed".
+#[derive(Debug)]
+pub struct UsageError(pub String);
+
+impl std::fmt::Display for UsageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for UsageError {}
+
+/// Mark an error from a value check as a usage error. The text, cause chain included, is kept.
+pub fn usage(err: anyhow::Error) -> anyhow::Error {
+    UsageError(format!("{err:#}")).into()
+}
+
+/// Whether `err`, or any cause in its chain, is a usage error.
+pub fn is_usage(err: &anyhow::Error) -> bool {
+    err.chain().any(|e| e.is::<UsageError>())
+}
 
 /// Output format for the pack report.
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -279,7 +303,9 @@ fn dispatch(cli: Cli) -> Result<()> {
     if let Some(shell) = cli.completions {
         // Fail loud rather than silently dropping a subcommand passed alongside.
         if cli.command.is_some() {
-            bail!("--completions cannot be combined with a subcommand");
+            bail!(UsageError(
+                "--completions cannot be combined with a subcommand".into()
+            ));
         }
         write_completions(shell, &mut std::io::stdout());
         return Ok(());
@@ -287,7 +313,9 @@ fn dispatch(cli: Cli) -> Result<()> {
     // `arg_required_else_help` prints help for an empty invocation before we get
     // here; any remaining `None` means flags were given without a subcommand.
     let Some(command) = cli.command else {
-        bail!("no command given; run with --help to see available commands");
+        bail!(UsageError(
+            "no command given; run with --help to see available commands".into()
+        ));
     };
     match command {
         Command::Pack {
@@ -336,13 +364,14 @@ fn dispatch(cli: Cli) -> Result<()> {
                 None => crate::config::Config::default(),
             };
             let file = match &profile {
-                Some(name) => file.select_profile(name)?,
+                Some(name) => file.select_profile(name).map_err(usage)?,
                 None => file,
             };
             let Some(binary) = binary.or(file.binary) else {
-                bail!(
+                bail!(UsageError(
                     "no binary to pack: pass one on the command line or set `binary` in --config"
-                );
+                        .into()
+                ));
             };
 
             let opts = crate::pack::PackOptions {
@@ -373,7 +402,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                     add_file
                 }
                 .iter()
-                .map(|spec| crate::stager::AddFile::parse(spec))
+                .map(|spec| crate::stager::AddFile::parse(spec).map_err(usage))
                 .collect::<Result<Vec<_>>>()?,
                 locales: if locale.is_empty() {
                     file.locale
@@ -390,7 +419,8 @@ fn dispatch(cli: Cli) -> Result<()> {
                     &file.nss
                 } else {
                     &nss
-                })?,
+                })
+                .map_err(usage)?,
                 deny: if deny.is_empty() { file.deny } else { deny },
                 require: if require.is_empty() {
                     file.require
@@ -416,7 +446,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                 sign: sign || file.sign,
                 max_size: max_size
                     .or(file.max_size)
-                    .map(|s| crate::report::parse_size(&s))
+                    .map(|s| crate::report::parse_size(&s).map_err(usage))
                     .transpose()?,
                 runtime: runtime.or(file.runtime).unwrap_or_default(),
                 packages: {
@@ -425,7 +455,8 @@ fn dispatch(cli: Cli) -> Result<()> {
                             &file.packages
                         } else {
                             &packages
-                        })?;
+                        })
+                        .map_err(usage)?;
                     match format {
                         Format::Text => selection.for_text_report(),
                         Format::Json => selection,
@@ -435,7 +466,7 @@ fn dispatch(cli: Cli) -> Result<()> {
 
             // Refuse here, not in a sink path: the effective config is complete and every sink
             // is still ahead. clap checked the flags, so this catches the config-file keys.
-            crate::image::require_pairs(&opts.image)?;
+            crate::image::require_pairs(&opts.image).map_err(usage)?;
             // Deprecation warnings go here too, for the same reason.
             crate::pack::warn_about_the_packages_default(&opts);
 
@@ -455,12 +486,21 @@ fn dispatch(cli: Cli) -> Result<()> {
             } else {
                 crate::pack::Sink::DockerLoad
             };
+            // Parse the push reference now: the sink parses it again, but only after staging
+            // the whole rootfs, and a typo should not cost a full pack to find.
+            if let crate::pack::Sink::Push(reference) = &sink {
+                reference
+                    .parse::<oci_client::Reference>()
+                    .with_context(|| format!("invalid image reference {reference:?}"))
+                    .map_err(usage)?;
+            }
             // Signing needs a registry image (cosign signs by digest); a profile that set `sign`
             // without a push target would otherwise be silently dropped.
             if opts.sign && !matches!(sink, crate::pack::Sink::Push(_)) {
-                bail!(
+                bail!(UsageError(
                     "--sign needs a push target — pass --push or set `push` in the config/profile"
-                );
+                        .into()
+                ));
             }
             // A deprecation line like the one above, printed here for the same reasons.
             if let crate::pack::Sink::Rootfs(dir) = &sink {
@@ -480,15 +520,16 @@ fn dispatch(cli: Cli) -> Result<()> {
             // clap rejects `--watch --push`; this catches a `push` that came from the config.
             // A watch packs on every save, and a registry is not the place for each of those.
             if matches!(sink, crate::pack::Sink::Push(_)) {
-                bail!(
+                bail!(UsageError(
                     "--watch cannot push: it packs again on every change. Pass --oci-archive, \
                      remove `push` from the config/profile, or drop --watch"
-                );
+                        .into()
+                ));
             }
             // One JSON document per pack on stdout is a stream shape nobody has chosen yet.
             // Refusing it now keeps that choice open; allowing it later is additive.
             if matches!(format, Format::Json) {
-                bail!("--watch prints a text report for each pack; it cannot be used with --format json");
+                bail!(UsageError("--watch prints a text report for each pack; it cannot be used with --format json".into()));
             }
             crate::watch::run(&binary, pack_once)
         }
@@ -957,6 +998,7 @@ mod tests {
         assert!(err
             .to_string()
             .contains("cannot be combined with a subcommand"));
+        assert!(is_usage(&err), "{err}");
     }
 
     #[test]
@@ -968,6 +1010,18 @@ mod tests {
         };
         let err = dispatch(cli).unwrap_err();
         assert!(err.to_string().starts_with("no command given"), "{err}");
+        assert!(is_usage(&err), "{err}");
+    }
+
+    #[test]
+    fn a_marked_error_keeps_its_text_and_a_plain_one_is_not_usage() {
+        let plain = anyhow::anyhow!("inner").context("outer");
+        assert!(!is_usage(&plain));
+        let marked = usage(plain);
+        assert!(is_usage(&marked));
+        assert_eq!(format!("{marked:#}"), "outer: inner");
+        // A context added on top must not hide the mark.
+        assert!(is_usage(&marked.context("more")));
     }
 
     #[test]
