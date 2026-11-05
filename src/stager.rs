@@ -1085,8 +1085,8 @@ fn copy_into(src: &Path, root: &Path, abs_target: &Path) -> Result<()> {
         );
     }
     let target = staged_path(root, abs_target, true)?;
-    // Copy to a sibling and rename it over the name, as `packages::write_record` does. A
-    // file already at the name is replaced, never written into:
+    // Copy to a sibling and rename it over the name. A file already at the name is replaced,
+    // never written into:
     // `fs::copy` opens its target for writing, so a read-only copy (a 0444 CA bundle) fails
     // for anyone but root, and a hard link or a symlink would carry the write elsewhere.
     let dir = target.parent().context("a staged file has no directory")?;

@@ -564,10 +564,10 @@ fn is_package_name(s: &str) -> bool {
 /// the `sbom` output shows the packages to syft and grype without changing the image; call
 /// `keep` for the `image` output.
 ///
-/// A record that was already there is replaced, and it is removed like the rest, because
-/// the `sbom` promise is that the image does not carry the records. Directories are removed
-/// only when this call created them, and an os-release that was already there is not
-/// touched, because that one can be the user's.
+/// It holds only what this call created, so dropping it removes nothing else: a record is
+/// never written over a path that is already in the tree. Directories are removed only when
+/// this call created them, and an os-release that was already there is not touched, because
+/// that one can be the user's.
 #[derive(Debug, Default)]
 pub struct StagedRecords {
     files: Vec<PathBuf>,
@@ -606,7 +606,7 @@ impl Drop for StagedRecords {
     }
 }
 
-/// A `stage_records` error that is not a write to the output tree: an `--add-file` on a
+/// A `stage_records` error that is not a write to the output tree: a staged file on a
 /// record path, no host os-release, or an rpm database that rpm could not build. The default
 /// selection packs on without the records for these. A write error still fails it, because
 /// the rest of the pack writes to the same tree.
@@ -630,9 +630,10 @@ fn skipped(err: anyhow::Error) -> anyhow::Error {
 ///
 /// On an error the guard built so far is dropped, so a failed call leaves nothing behind.
 ///
-/// `protected` are image paths the user staged in this pack (`--add-file` destinations). A
-/// record that would land on one stops the pack: a file the user asked for is never replaced
-/// or removed behind their back.
+/// A record that would land on anything already in the tree stops the call: that is a file
+/// this pack staged (the binary, a library, an `--add-file`), because the output directory
+/// starts empty. It is never replaced or removed behind the user's back. `protected` are the
+/// `--add-file` destinations, named in the error so the user knows which flag collided.
 pub fn stage_records(
     rootfs: &Path,
     owners: &Owners,
@@ -648,7 +649,7 @@ pub fn stage_records(
                 image.display()
             )));
         }
-        write_record(path, bytes)
+        write_record(path, &image, bytes)
     };
 
     match &owners.records {
@@ -671,8 +672,8 @@ pub fn stage_records(
         }
         Records::Rpm(headers) => {
             // rpm builds the database in a directory of its own, and only its bytes come
-            // here. They are placed like any other record, at the host's database path: no
-            // write goes through a link, and an earlier database is replaced by a rename.
+            // here. They are placed like any other record, at the host's database path, and
+            // no write goes through a link or over a file already there.
             let files = crate::rpm::build_database(headers).map_err(skipped)?;
             let db = crate::rpm::db_path()
                 .context("asking rpm where its database lives")
@@ -702,38 +703,23 @@ pub fn stage_records(
     Ok(staged)
 }
 
-// Write one record, replacing a regular file that is already there.
-//
-// Never through a link. A new file is opened O_EXCL, which does not follow a link at the
-// final component. An existing REGULAR file is replaced by a rename, which swaps the name
-// and does not follow one either. Anything else at that name (a link, a directory) is not
-// ours to touch.
-fn write_record(path: &Path, bytes: &[u8]) -> Result<()> {
+// Write one record as a new file. O_EXCL does not follow a link at the final component,
+// and it refuses a name that is already there, so nothing this pack staged is written over.
+fn write_record(path: &Path, image: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let context = || format!("writing {}", path.display());
-    match path.symlink_metadata() {
-        Err(_) => std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .and_then(|mut f| f.write_all(bytes))
-            .with_context(context),
-        Ok(meta) if meta.is_file() => {
-            use std::os::unix::fs::PermissionsExt;
-            let dir = path.parent().context("a record path has a parent")?;
-            let mut tmp = tempfile::Builder::new()
-                .permissions(std::fs::Permissions::from_mode(0o666))
-                .tempfile_in(dir)
-                .with_context(context)?;
-            tmp.write_all(bytes).with_context(context)?;
-            tmp.persist(path).with_context(context)?;
-            Ok(())
-        }
-        Ok(_) => bail!(
-            "cannot record packages: {} exists and is not a regular file",
-            path.display()
-        ),
+    if path.symlink_metadata().is_ok() {
+        return Err(skipped(anyhow::anyhow!(
+            "cannot record packages: {} is already in the image, and the package records \
+             need that path",
+            image.display()
+        )));
     }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .and_then(|mut f| f.write_all(bytes))
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 // Create `dir` and record each directory that did not exist before, so a later removal takes
@@ -978,8 +964,8 @@ mod tests {
         stage_records(rootfs, &owners, &[]).unwrap().keep();
         assert!(rootfs.join("var/lib/dpkg/status.d/libc6").is_file());
 
-        // A second call on a tree that already holds the kept record replaces it, not
-        // refuses it.
+        // A second call on a tree that already holds the kept record refuses it, and the
+        // record stays as it was: a call removes only what it wrote.
         let newer = Owners {
             records: Records::Dpkg(vec![(
                 "libc6".into(),
@@ -987,15 +973,45 @@ mod tests {
             )]),
             ..Owners::default()
         };
-        stage_records(rootfs, &newer, &[]).unwrap().keep();
+        assert!(stage_records(rootfs, &newer, &[]).is_err());
         assert_eq!(
             std::fs::read_to_string(rootfs.join("var/lib/dpkg/status.d/libc6")).unwrap(),
-            "Package: libc6\nVersion: 2\n"
+            "Package: libc6\n"
         );
-        // An `sbom`-only call must not leave the record behind: the guard removes it
-        // although an earlier call, not this one, created it.
-        drop(stage_records(rootfs, &newer, &[]).unwrap());
-        assert!(!rootfs.join("var/lib/dpkg/status.d/libc6").exists());
+    }
+
+    #[test]
+    fn a_record_never_replaces_or_removes_a_file_the_pack_staged() {
+        // The packed binary or an --include sits at its host path, so a host that keeps it
+        // under status.d puts it where a record goes. Neither the write nor the cleanup of
+        // the temporary `sbom` records may touch it.
+        let owners = Owners {
+            records: Records::Dpkg(vec![
+                ("coreutils".into(), "Package: coreutils\n".into()),
+                ("libc6".into(), "Package: libc6\n".into()),
+            ]),
+            ..Owners::default()
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path();
+        let binary = rootfs.join("var/lib/dpkg/status.d/libc6");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, b"\x7fELF the packed binary").unwrap();
+
+        let err = stage_records(rootfs, &owners, &[]).unwrap_err();
+        assert!(err.downcast_ref::<RecordsSkipped>().is_some(), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("/var/lib/dpkg/status.d/libc6 is already in the image"),
+            "{err:#}"
+        );
+        assert_eq!(
+            std::fs::read(&binary).unwrap(),
+            b"\x7fELF the packed binary"
+        );
+        assert!(
+            !rootfs.join("var/lib/dpkg/status.d/coreutils").exists(),
+            "the record this call wrote is taken back"
+        );
     }
 
     #[test]
@@ -1045,9 +1061,13 @@ mod tests {
         let err = stage_records(rootfs, &owners, &protected).unwrap_err();
         assert!(format!("{err:#}").contains("--add-file"), "{err:#}");
         assert_eq!(std::fs::read(&record).unwrap(), b"the user's own file");
-        // The same file with no such claim is treated as a stale record, and is replaced.
-        stage_records(rootfs, &owners, &[]).unwrap().keep();
-        assert_eq!(std::fs::read(&record).unwrap(), b"Package: libc6\n");
+        // The same file with no such claim is still not replaced.
+        let err = stage_records(rootfs, &owners, &[]).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("already in the image"),
+            "{err:#}"
+        );
+        assert_eq!(std::fs::read(&record).unwrap(), b"the user's own file");
     }
 
     #[test]
