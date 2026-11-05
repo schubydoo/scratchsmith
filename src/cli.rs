@@ -363,6 +363,21 @@ fn dispatch(cli: Cli) -> Result<()> {
                 Some(path) => crate::config::Config::load(path)?,
                 None => crate::config::Config::default(),
             };
+            // Where the label and env lists come from, for the refusal of a bad entry. A CLI
+            // list replaces the file's, and a selected profile's list replaces the base's.
+            let list_from = |cli: &[String], pick: fn(&crate::config::Config) -> &Vec<String>| {
+                let in_profile = profile.as_ref().and_then(|n| file.profile.get(n));
+                match (&config, &profile) {
+                    _ if !cli.is_empty() => "the command line".to_string(),
+                    (Some(path), Some(name)) if in_profile.is_some_and(|p| !pick(p).is_empty()) => {
+                        format!("{} [profile.{name}]", path.display())
+                    }
+                    (Some(path), _) => path.display().to_string(),
+                    (None, _) => "the command line".to_string(),
+                }
+            };
+            let label_from = list_from(&label, |c| &c.label);
+            let env_from = list_from(&env, |c| &c.env);
             let file = match &profile {
                 Some(name) => file.select_profile(name).map_err(usage)?,
                 None => file,
@@ -466,7 +481,7 @@ fn dispatch(cli: Cli) -> Result<()> {
 
             // Refuse here, not in a sink path: the effective config is complete and every sink
             // is still ahead. clap checked the flags, so this catches the config-file keys.
-            crate::image::require_pairs(&opts.image).map_err(usage)?;
+            crate::image::require_pairs(&opts.image, &label_from, &env_from).map_err(usage)?;
             let mut seen = std::collections::HashSet::new();
             if let Some(dup) = opts.locales.iter().find(|l| !seen.insert(l.as_str())) {
                 bail!(UsageError(format!(
