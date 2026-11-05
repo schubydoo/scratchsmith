@@ -54,10 +54,14 @@ jobs:
       - name: Assert the rootfs staged
         env:
           ROOTFS: ${{ steps.rootfs.outputs.rootfs }}
+          REPORT: ${{ steps.rootfs.outputs.report }}
         run: |
           set -euo pipefail
           [ -n "$ROOTFS" ] || { echo "::error::action produced no rootfs output"; exit 1; }
-          test -e "$ROOTFS/usr/bin/id"    # staged at its verbatim path
+          # The binary is staged at its REAL path (the entrypoint), not the path named: on a
+          # runner where /usr/bin/id is a symlink, nothing is staged at /usr/bin/id.
+          entry="$(echo "$REPORT" | jq -er '.entrypoint')"
+          test -x "$ROOTFS$entry" || { echo "::error::entrypoint $entry is not an executable file in the rootfs"; exit 1; }
           echo "staged rootfs at $ROOTFS"
       # Exercise the image-config inputs so a wiring regression (especially the multi-line list
       # inputs) fails here — entrypoint/cmd/env/workdir/user/label/healthcheck, each asserted via
@@ -477,7 +481,8 @@ jobs:
           # `.size.upx` is true only when upx ran on the binary.
           echo "$REPORT" | jq -e '.size.upx == true' >/dev/null || { echo "::error::report.size.upx is not true — is --upx wired in action.yml?"; exit 1; }
           # `.size.upx` says the flag arrived. The sizes say that upx did its work.
-          echo "$REPORT" | jq -e '.size.entries[] | select(.path == "/usr/bin/id") | .after < .before' >/dev/null || { echo "::error::upx ran but /usr/bin/id did not shrink"; exit 1; }
+          # The binary's entry is named by its real path, which is not /usr/bin/id where that is a link.
+          echo "$REPORT" | jq -e '.entrypoint as $e | .size.entries[] | select(.path == $e) | .after < .before' >/dev/null || { echo "::error::upx ran but the binary did not shrink"; exit 1; }
           echo "upx input wired"
       - name: Pack with init → image
         id: init
