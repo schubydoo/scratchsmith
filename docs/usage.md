@@ -230,8 +230,10 @@ The records depend on the package manager of the build host:
   Linux 2, does not have it. On those hosts `report` works and the `image` output fails. If
   `--sbom` or `--scan` is on, a `sbom` that you set fails too. The default `sbom` turns off
   quietly there. The report still names the packages, and the SBOM and the scan see none.
-- If you add a file with `--add-file` at a path that a record needs, the pack fails.
-  Scratchsmith does not replace a file that you added.
+- If you add a file with `--add-file` at a path that a record needs, scratchsmith keeps your
+  file and does not replace it. A `sbom` or `image` that you set then fails the pack. The
+  default `sbom` leaves the records out and prints a warning, and the pack goes on. The SBOM
+  and the scan then see no package records.
 
 ### Hosts with no package database
 

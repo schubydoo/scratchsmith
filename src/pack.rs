@@ -274,6 +274,8 @@ fn bundled_files(
 //   carries the package data, and shipping one without it would look the same from outside;
 // - a default `sbom` whose records fail (rpm 4.11 has no `rpmdb --exportdb`) is turned off,
 //   and the lookup runs again without records, so the report still names the owners.
+//   Records that then fail to stage (an `--add-file` on their path) are left out with a
+//   warning in `finish_staging`, for the same reason.
 //
 // `manager` is a parameter so each of those is testable on any host. It is a function, so
 // `--packages none` probes nothing: "looks nothing up" includes the probe.
@@ -648,7 +650,21 @@ fn finish_staging(
     // `drop_unread_sbom` turned `sbom` off already when neither of the two runs.
     let _records = match owners {
         Some(owners) if selection.sbom && !selection.image => {
-            Some(packages::stage_records(dest, owners, &added)?)
+            match packages::stage_records(dest, owners, &added) {
+                Ok(records) => Some(records),
+                // 1.9 never staged records for the default, so no staging error may fail
+                // the pack. A file the user added wins over a record they did not ask for.
+                Err(err) if !selection.explicit => {
+                    let cause = format!("{err:#}");
+                    warnings.push(format!(
+                        "--packages: the SBOM and the scan see no package records. {}. Set \
+                         --packages report to pack without them and without this warning",
+                        cause.escape_debug()
+                    ));
+                    None
+                }
+                Err(err) => return Err(err),
+            }
         }
         _ => None,
     };

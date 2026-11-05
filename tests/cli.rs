@@ -2127,6 +2127,65 @@ fn a_failed_package_lookup_warns_on_the_text_report_too() {
 }
 
 #[test]
+fn an_added_file_on_a_record_path_wins_over_the_default_records() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    if !dpkg_host() {
+        common::skip_optional("needs a dpkg host");
+        return;
+    }
+    // The packed binary links glibc, so libc6's record wants this path.
+    let tmp = tempfile::tempdir().unwrap();
+    let tools = fake_tools(tmp.path(), &[("syft", FAKE_RECORD_READER)]);
+    let mine = tmp.path().join("mine");
+    std::fs::write(&mine, "mine\n").unwrap();
+    let add = format!("{}:/var/lib/dpkg/status.d/libc6", mine.display());
+
+    // The default selection: 1.9 packed this, so the pack goes on without the records.
+    let (_, said, _) = pack_with_fakes(
+        tmp.path(),
+        &tools,
+        "default",
+        &["--sbom", "--add-file", &add],
+    );
+    assert!(
+        said.contains("warning: --packages: the SBOM and the scan see no package records")
+            && said.contains("is a file you added with --add-file"),
+        "{said}"
+    );
+    let kept = tmp.path().join("default/var/lib/dpkg/status.d/libc6");
+    assert_eq!(std::fs::read_to_string(kept).unwrap(), "mine\n");
+
+    // An explicit `sbom` asked for the records, so the same collision stops the pack.
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args([
+            "pack",
+            "--no-build",
+            "--sbom",
+            "--packages",
+            "report,sbom",
+            "-o",
+        ])
+        .arg(tmp.path().join("explicit"))
+        .arg("--sbom-file")
+        .arg(tmp.path().join("explicit.sbom.json"))
+        .args(["--add-file", &add])
+        .arg(bin)
+        .env("PATH", &tools)
+        .env("ASKED", tmp.path().join("explicit.asked"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("is a file you added with --add-file"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn a_file_dpkg_would_read_as_a_pattern_is_named_as_not_looked_up() {
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");
