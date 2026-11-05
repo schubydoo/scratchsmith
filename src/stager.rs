@@ -354,9 +354,12 @@ pub fn stage_locales(dest: &Path, locales: &[String]) -> Result<()> {
         let name = validate_locale_name(name)?;
         let image = Path::new(LOCALE_ROOT).join(name);
         if is_staged(dest, &image) {
-            bail!(crate::cli::UsageError(format!(
-                "--locale: {name} is already in the image; each locale can be given only once"
-            )));
+            // A name repeated on the command line is refused in dispatch, so this is something
+            // else in the tree: an --add-file, or a reused --no-build output dir. Not usage.
+            bail!(
+                "--locale: {name} is already in the image; --locale will not replace what is \
+                 staged there"
+            );
         }
         let target = staged_path(dest, &image, true)?;
         let host_dir = Path::new(LOCALE_ROOT).join(name);
@@ -2558,12 +2561,12 @@ mod tests {
     }
 
     #[test]
-    fn locale_refuses_to_stage_the_same_name_twice() {
+    fn locale_refuses_to_replace_a_staged_locale() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("dest");
         make_file(&dest.join("usr/lib/locale/en_US.UTF-8/LC_CTYPE"), b"ctype");
         let err = stage_locales(&dest, &["en_US.UTF-8".to_string()]).unwrap_err();
         assert!(err.to_string().contains("already in the image"), "{err}");
-        assert!(crate::cli::is_usage(&err), "{err}");
+        assert!(!crate::cli::is_usage(&err), "{err}");
     }
 }

@@ -467,6 +467,12 @@ fn dispatch(cli: Cli) -> Result<()> {
             // Refuse here, not in a sink path: the effective config is complete and every sink
             // is still ahead. clap checked the flags, so this catches the config-file keys.
             crate::image::require_pairs(&opts.image).map_err(usage)?;
+            let mut seen = std::collections::HashSet::new();
+            if let Some(dup) = opts.locales.iter().find(|l| !seen.insert(l.as_str())) {
+                bail!(UsageError(format!(
+                    "--locale: {dup} is given more than once; give each locale only once"
+                )));
+            }
             // Deprecation warnings go here too, for the same reason.
             crate::pack::warn_about_the_packages_default(&opts);
 

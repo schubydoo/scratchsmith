@@ -182,6 +182,11 @@ fn post_parse_usage_refusals_exit_2() {
             "isn't supported with --push",
         ),
         (
+            "--locale given twice",
+            vec!["pack", "--locale", "C.utf8", "--locale", "C.utf8", bin],
+            "given more than once",
+        ),
+        (
             "label with no = from the config",
             vec!["pack", "--config", &bare_label],
             "needs the form `NAME=value`",
@@ -240,8 +245,40 @@ fn a_bad_locale_name_is_a_usage_error() {
         assert_eq!(out.status.code(), Some(2), "--locale {locale:?}: {stderr}");
         assert!(stderr.contains(needle), "--locale {locale:?}: {stderr}");
     }
-    // The same locale twice is refused once the first copy is staged, so it needs a locale
-    // directory the host already has.
+}
+
+#[test]
+fn a_locale_already_in_the_tree_is_not_a_usage_error() {
+    // The command line names the locale once. Something else put it in the tree first, so the
+    // refusal is a pack failure (1), not a usage error (2).
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let pack = |rootfs: &std::path::Path, extra: &[&str], locale: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["pack", "--no-build", "--packages", "none", "-o"])
+            .arg(rootfs)
+            .args(extra)
+            .args(["--locale", locale, bin])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        (out.status.code(), stderr)
+    };
+    // An --add-file into the locale path is staged first.
+    let src = tmp.path().join("LC_CTYPE");
+    std::fs::write(&src, b"ctype").unwrap();
+    let add = format!("{}:/usr/lib/locale/en_US.UTF-8/LC_CTYPE", src.display());
+    let (code, stderr) = pack(
+        &tmp.path().join("rootfs-add"),
+        &["--add-file", &add],
+        "en_US.UTF-8",
+    );
+    assert_eq!(code, Some(1), "--add-file into the locale: {stderr}");
+    assert!(stderr.contains("already in the image"), "{stderr}");
+    // A reused --no-build output dir still holds the locale from the first pack.
     let Some(host) = std::fs::read_dir("/usr/lib/locale")
         .into_iter()
         .flatten()
@@ -253,14 +290,11 @@ fn a_bad_locale_name_is_a_usage_error() {
     };
     let name = host.file_name();
     let name = name.to_str().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
-        .args(["pack", "--no-build", "--packages", "none", "-o"])
-        .arg(tmp.path().join("rootfs-twice"))
-        .args(["--locale", name, "--locale", name, bin])
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(2), "--locale twice: {stderr}");
+    let rootfs = tmp.path().join("rootfs-reused");
+    let (code, stderr) = pack(&rootfs, &[], name);
+    assert_eq!(code, Some(0), "first pack: {stderr}");
+    let (code, stderr) = pack(&rootfs, &[], name);
+    assert_eq!(code, Some(1), "second pack into the same dir: {stderr}");
     assert!(stderr.contains("already in the image"), "{stderr}");
 }
 
