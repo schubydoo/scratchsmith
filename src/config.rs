@@ -123,36 +123,71 @@ impl Config {
     /// `[profile.a.profile.b]` parses, because a profile has the same shape as the base config,
     /// but no `--profile` value can reach it. Reject it rather than drop its keys silently.
     fn reject_nested_profiles(&self, path: &Path) -> Result<()> {
-        let mut nested: Vec<(&str, Vec<&str>)> = self
-            .profile
-            .iter()
-            .filter(|(_, p)| !p.profile.is_empty())
-            .map(|(name, p)| {
-                let mut inner: Vec<&str> = p.profile.keys().map(String::as_str).collect();
-                inner.sort();
-                (name.as_str(), inner)
-            })
-            .collect();
+        // Every nested table at any depth, by full path, with its inner name.
+        fn walk<'a>(cfg: &'a Config, prefix: &str, out: &mut Vec<(String, &'a str)>) {
+            let mut names: Vec<&String> = cfg.profile.keys().collect();
+            names.sort();
+            for name in names {
+                let path = format!("{prefix}.profile.{name}");
+                let table = &cfg.profile[name];
+                // A table with no keys of its own that only parents a deeper one is implicit
+                // (the user wrote the deeper header), so it gets no advice of its own.
+                let implicit = !table.profile.is_empty()
+                    && (Config {
+                        profile: HashMap::new(),
+                        ..table.clone()
+                    }) == Config::default();
+                if !implicit {
+                    out.push((path.clone(), name.as_str()));
+                }
+                walk(table, &path, out);
+            }
+        }
+        let mut tops: Vec<&String> = self.profile.keys().collect();
+        tops.sort();
+        let mut nested: Vec<(String, &str)> = Vec::new();
+        for top in tops {
+            walk(&self.profile[top], &format!("profile.{top}"), &mut nested);
+        }
         if nested.is_empty() {
             return Ok(());
         }
-        nested.sort();
         // Name every nested table, so one edit fixes the whole file.
-        let pairs = || {
-            nested
-                .iter()
-                .flat_map(|(o, inner)| inner.iter().map(move |i| (*o, *i)))
+        let fix = |inner: &str| {
+            let shared = nested.iter().filter(|(_, i)| *i == inner).count() > 1;
+            if self.profile.contains_key(inner) {
+                format!("merge its keys into the existing [profile.{inner}]")
+            } else if shared {
+                format!(
+                    "merge their keys into one top-level [profile.{inner}], \
+                     because other nested tables share that name"
+                )
+            } else {
+                format!(
+                    "move it to a top-level [profile.{inner}] table \
+                     and repeat the keys it relied on"
+                )
+            }
         };
-        let found: Vec<String> = pairs()
-            .map(|(o, i)| format!("[profile.{o}.profile.{i}]"))
+        let found: Vec<String> = nested.iter().map(|(p, _)| format!("[{p}]")).collect();
+        if let [(_, inner)] = nested.as_slice() {
+            let advice = fix(inner);
+            let advice = advice[..1].to_uppercase() + &advice[1..];
+            bail!(
+                "{}: {} is not allowed: profiles cannot nest. {advice}",
+                path.display(),
+                found[0]
+            )
+        }
+        let fixes: Vec<String> = nested
+            .iter()
+            .map(|(p, i)| format!("[{p}]: {}", fix(i)))
             .collect();
-        let fixes: Vec<String> = pairs().map(|(_, i)| format!("[profile.{i}]")).collect();
         bail!(
-            "{}: {} not allowed: profiles cannot nest. Move it to a top-level {} table \
-             and repeat the keys it relied on",
+            "{}: {} are not allowed: profiles cannot nest. Fix each one: {}",
             path.display(),
             found.join(", "),
-            fixes.join(", ")
+            fixes.join("; ")
         )
     }
 
@@ -338,6 +373,8 @@ mod tests {
         let err = Config::load(&path).unwrap_err().to_string();
         assert!(err.contains("[profile.release.profile.signed]"), "{err}");
         assert!(err.contains("top-level [profile.signed]"), "{err}");
+        assert!(err.contains(" is not allowed"), "{err}");
+        assert!(err.contains(". Move it to a top-level"), "{err}");
         // A flat file still loads.
         std::fs::write(&path, "[profile.release]\nstrip = true\n").unwrap();
         assert!(Config::load(&path).is_ok());
@@ -357,7 +394,57 @@ mod tests {
             err.contains("[profile.a.profile.x], [profile.b.profile.y]"),
             "{err}"
         );
-        assert!(err.contains("[profile.x], [profile.y]"), "{err}");
+        assert!(err.contains("are not allowed"), "{err}");
+    }
+
+    fn nested_error(toml: &str) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scratchsmith.toml");
+        std::fs::write(&path, toml).unwrap();
+        Config::load(&path).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn a_table_nested_at_depth_three_is_named_by_its_full_path() {
+        let err = nested_error("[profile.a.profile.b.profile.c]\nsign = true\n");
+        assert!(err.contains("[profile.a.profile.b.profile.c]"), "{err}");
+        assert!(err.contains("top-level [profile.c]"), "{err}");
+        // The middle table has no keys and no header of its own: it gets no advice.
+        assert!(!err.contains("[profile.a.profile.b]"), "{err}");
+        assert!(!err.contains("[profile.b]"), "{err}");
+        // A middle table with its own keys is a real table and is named.
+        let err = nested_error(
+            "[profile.a.profile.b]\nsign = true\n\n[profile.a.profile.b.profile.c]\nstrip = true\n",
+        );
+        assert!(err.contains("[profile.a.profile.b],"), "{err}");
+        assert!(err.contains("top-level [profile.b]"), "{err}");
+    }
+
+    #[test]
+    fn several_nested_tables_get_plural_wording() {
+        let err = nested_error("[profile.a.profile.x]\n\n[profile.b.profile.y]\n");
+        assert!(err.contains("are not allowed"), "{err}");
+        assert!(!err.contains(" is not allowed"), "{err}");
+    }
+
+    #[test]
+    fn an_inner_name_that_is_a_profile_gets_merge_advice() {
+        let err = nested_error("[profile.b]\nstrip = true\n\n[profile.a.profile.b]\nsign = true\n");
+        assert!(
+            err.contains("erge its keys into the existing [profile.b]"),
+            "{err}"
+        );
+        let err = nested_error("[profile.a.profile.a]\nsign = true\n");
+        assert!(
+            err.contains("erge its keys into the existing [profile.a]"),
+            "{err}"
+        );
+        // Two nested tables that share an inner name also need a merge.
+        let err = nested_error("[profile.a.profile.x]\n\n[profile.b.profile.x]\n");
+        assert!(
+            err.contains("merge their keys into one top-level [profile.x]"),
+            "{err}"
+        );
     }
 
     #[test]
