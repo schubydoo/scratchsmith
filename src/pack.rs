@@ -312,13 +312,10 @@ fn lookup_owners(
     };
     let mut found = packages::owners(manager, files, conventions, selection.needs_records());
     // Only an explicit selection has `image`, so this is the default `sbom`. Any failure
-    // retries once: one that was not the records' fails again, and warns below.
+    // retries once without the records, also when the text report has no `report`: rpm 4.11
+    // then succeeds and stays quiet, and every other failure fails again and warns below.
     if found.is_err() && selection.sbom && !selection.explicit {
         selection.sbom = false;
-        // The text report drops a default `report`, so then nothing reads a retry.
-        if !selection.report {
-            return Ok(None);
-        }
         found = packages::owners(manager, files, conventions, false);
     }
     match found {

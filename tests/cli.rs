@@ -1268,6 +1268,25 @@ esac"#,
         "report: {stdout}"
     );
 
+    // The text report has no `report`, and the retry without records keeps it quiet too.
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["pack", "--no-build", "--sbom", "-o"])
+        .arg(tmp.path().join("text"))
+        .args(["--sbom-file"])
+        .arg(tmp.path().join("text.json"))
+        .arg(bin)
+        .env("PATH", &tools)
+        .env("FAKE_DB", &db)
+        .output()
+        .unwrap();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "the text pack: {said}");
+    assert!(!said.contains("package lookup failed"), "{said}");
+
     // An `sbom` the user named still fails: an SBOM without the records was not asked for.
     let out = pack("named", &["--packages", "report,sbom"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -2073,6 +2092,37 @@ fn a_failed_package_lookup_warns_unless_the_records_need_it() {
     assert!(
         stderr.contains("--packages image: the package lookup failed"),
         "{stderr}"
+    );
+}
+
+#[test]
+fn a_failed_package_lookup_warns_on_the_text_report_too() {
+    if small_fixture().is_none() {
+        skip_required("no id binary to pack");
+        return;
+    }
+    if !dpkg_host() {
+        common::skip_optional("needs a dpkg host");
+        return;
+    }
+    // The text report drops the default `report`, so only the default `sbom` asks here. A
+    // failed lookup must warn as it does on the JSON report, not leave a quietly empty SBOM.
+    let tmp = tempfile::tempdir().unwrap();
+    let tools = fake_tools(
+        tmp.path(),
+        &[
+            (
+                "dpkg-query",
+                "[ \"$1\" = --version ] && exit 0\necho 'database is locked' >&2\nexit 2",
+            ),
+            ("syft", FAKE_RECORD_READER),
+        ],
+    );
+    let (_, said, _) = pack_with_fakes(tmp.path(), &tools, "text", &["--sbom"]);
+    assert!(
+        said.contains("package lookup failed: dpkg-query -S failed")
+            && said.contains("database is locked"),
+        "{said}"
     );
 }
 
