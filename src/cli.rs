@@ -195,8 +195,8 @@ pub enum Command {
         )]
         nss: Vec<crate::stager::NssModule>,
         /// Where to record the distribution packages that own the bundled files
-        /// (comma-separated: report, sbom, image; or none). Default: report, which a text
-        /// report skips.
+        /// (comma-separated: report, sbom, image; or none). Default: report,sbom. A text
+        /// report skips report, and sbom runs only with --sbom or --scan.
         #[arg(
             long = "packages",
             value_enum,
@@ -489,8 +489,6 @@ fn dispatch(cli: Cli) -> Result<()> {
                         .display()
                 )));
             }
-            // Deprecation warnings go here too, for the same reason.
-            crate::pack::warn_about_the_packages_default(&opts);
 
             // An explicit CLI delivery sink always wins; `push` from the config/profile is only
             // the default when no CLI sink flag was given — otherwise a `[profile.ci]` `push`

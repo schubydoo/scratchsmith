@@ -8,8 +8,9 @@ and what you write instead.
 This page has one list for each kind of change. Three kinds change only in a major version:
 deprecated input shapes, tolerances, and changing defaults. Refused input is a fourth kind,
 because a minor release can refuse input that is the attack itself. The last list, Removed in
-2.0.0, shows what version 2.0.0 now rejects, after its deprecation cycle ended. It also shows one
-exit code that changed in 2.0.0 with no cycle, and it says why.
+2.0.0, shows what version 2.0.0 changed after its deprecation cycle ended. Most inputs there now
+fail, and one gets a new default. It also shows one exit code that changed in 2.0.0 with no
+cycle, and it says why.
 
 A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.
@@ -17,10 +18,6 @@ standard error, and exits with the same code as before. The next major version r
 A tolerance is different. Scratchsmith accepts input today that it cannot use in full, and the
 result can be an image with a part absent. The next major version reports it as an error. Each
 tolerance prints one warning line to standard error, and the exit code stays the same.
-
-A changing default is the third. The input stays valid, and the next major version gives it a
-different result. Scratchsmith prints one warning line to standard error where the result will
-change, and the exit code stays the same.
 
 ## Deprecated input shapes
 
@@ -138,39 +135,6 @@ $ rm -rf ./rootfs
 $ scratchsmith pack --no-build --output ./rootfs ./app
 ```
 
-## Defaults changing in 2.0
-
-| Setting | Today | In 2.0 | Warns since | Keep today's result |
-|---|---|---|---|---|
-| `--packages` (the `packages` key) with no value | `report` | `report,sbom` | 1.9.0 | `--packages report` |
-
-The warning comes from `pack` only.
-
-### The `--packages` default adds `sbom`
-
-`--packages` decides where scratchsmith records the distribution packages that own the bundled
-files. Today the default is `report` alone. Then `--sbom` and `--scan` see a bare tree with no
-package database, so the SBOM names few of the libraries in the image.
-
-In 2.0 the default adds `sbom`. The SBOM and the scan then see the packages, for example glibc
-and openssl. A `--scan-fail-on` gate can then report findings in those packages, and a pack that
-passes the gate today can fail it after the upgrade.
-
-The warning appears only where the result changes. That is a pack that runs `--sbom` or
-`--scan` on a host with a dpkg or rpm database. It also needs no `--packages` value on the
-command line and no `packages` key in `scratchsmith.toml`. An empty list, `packages = []`, counts
-as no value, because 2.0 gives it the new default too. Any value that names an output stops the
-warning.
-
-To keep today's result, set the value:
-
-```console
-$ scratchsmith pack --sbom --packages report ./app
-```
-
-In `scratchsmith.toml`, write `packages = ["report"]`. To take the 2.0 default now, set
-`--packages report,sbom`.
-
 ## Removed in 2.0.0
 
 | Input | Warned since | Now | Write this instead |
@@ -182,6 +146,7 @@ In `scratchsmith.toml`, write `packages = ["report"]`. To take the 2.0 default n
 | A library that starts like an ELF and cannot be parsed | 1.6.0 | An error. `pack` and `graph` exit `1` and name the file. 1.x did not warn for a file that is not a regular file, such as a FIFO named with `--include`, so that case fails now with no earlier warning | Replace the damaged file with an intact copy |
 | A library found only through an inherited `RPATH`, by an object that has `RUNPATH` | 1.6.0 | Reported as missing, and `pack` and `graph` fail | Give that object the directory in its own `RUNPATH` |
 | A command line refused after the parse, such as `--watch --format json` | Not warned | A usage error, exit code 2. 1.x exited 1 | Fix the command line. A script that tests for exactly `1` must also accept `2` |
+| `--packages` (the `packages` key) with no value | 1.9.0 | The default is `report,sbom`, so `--sbom` and `--scan` see the packages and a `--scan-fail-on` gate can find more | `--packages report` (or `packages = ["report"]`) for the 1.x result |
 
 ### A library found only through an inherited `RPATH`
 

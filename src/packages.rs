@@ -36,18 +36,17 @@ pub enum PackagesOutput {
     None,
 }
 
-/// Where the package data goes. Built from `--packages`; the default is the report alone.
+/// Where the package data goes. Built from `--packages`; the default is `report,sbom`.
 ///
-/// The default stops there on purpose. With `sbom`, a scan starts to see the bundled glibc
-/// and openssl, so a `--scan-fail-on` gate that passes today could fail after an upgrade
-/// with nothing changed on the user's side. That is for the user to switch on.
+/// A default output runs only where it has a reader: the text report drops `report`, and a
+/// pack with neither `--sbom` nor `--scan` drops `sbom`. Neither drop warns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PackagesSelection {
     pub report: bool,
     pub sbom: bool,
     pub image: bool,
     /// The user named the outputs. A default selection stays quiet on a host with no dpkg or rpm;
-    /// an explicit one warns, or fails when it asked for records (`needs_records`).
+    /// an explicit one warns, or fails when it asked for records (`requires_records`).
     pub explicit: bool,
 }
 
@@ -55,7 +54,7 @@ impl Default for PackagesSelection {
     fn default() -> Self {
         Self {
             report: true,
-            sbom: false,
+            sbom: true,
             image: false,
             explicit: false,
         }
@@ -96,11 +95,17 @@ impl PackagesSelection {
         self.report || self.sbom || self.image
     }
 
-    /// True when the user asked for records in the SBOM or the image. Only an explicit
-    /// selection can, so a pack that cannot write them fails instead of shipping an SBOM or
-    /// an image that silently lacks what was asked for.
+    /// True when the SBOM or the image output is on, so the lookup builds records.
     pub fn needs_records(&self) -> bool {
         self.sbom || self.image
+    }
+
+    /// True when the user asked for records in the SBOM or the image. Only an explicit
+    /// selection can, so a pack that cannot write them fails instead of shipping an SBOM or
+    /// an image that silently lacks what was asked for. For the default `sbom`, a host that
+    /// cannot name the packages or build their records turns the output off instead.
+    pub fn requires_records(&self) -> bool {
+        self.explicit && self.needs_records()
     }
 }
 
@@ -602,6 +607,25 @@ impl Drop for StagedRecords {
     }
 }
 
+/// A `stage_records` error that is not a write to the output tree: an `--add-file` on a
+/// record path, no host os-release, or an rpm database that rpm could not build. The default
+/// selection packs on without the records for these. A write error still fails it, because
+/// the rest of the pack writes to the same tree.
+#[derive(Debug)]
+pub struct RecordsSkipped(anyhow::Error);
+
+impl std::fmt::Display for RecordsSkipped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.0)
+    }
+}
+
+impl std::error::Error for RecordsSkipped {}
+
+fn skipped(err: anyhow::Error) -> anyhow::Error {
+    RecordsSkipped(err).into()
+}
+
 /// Write `owners`' records under `rootfs/var/lib/dpkg/status.d/`, and the host's os-release
 /// to `rootfs/etc/os-release` unless the rootfs already has one.
 ///
@@ -619,11 +643,11 @@ pub fn stage_records(
     let write = |path: &Path, bytes: &[u8]| -> Result<()> {
         let image = Path::new("/").join(path.strip_prefix(rootfs).unwrap_or(path));
         if protected.contains(&image) {
-            bail!(
+            return Err(skipped(anyhow::anyhow!(
                 "cannot record packages: {} is a file you added with --add-file, and the \
                  package records need that path",
                 image.display()
-            );
+            )));
         }
         write_record(path, bytes)
     };
@@ -642,14 +666,18 @@ pub fn stage_records(
         // an empty list means the export and the report disagreed. An image or an SBOM that
         // was asked to carry the packages must not go out with none.
         Records::Rpm(headers) if headers.is_empty() => {
-            bail!("cannot record packages: rpm named owners and exported no header for them")
+            return Err(skipped(anyhow::anyhow!(
+                "cannot record packages: rpm named owners and exported no header for them"
+            )));
         }
         Records::Rpm(headers) => {
             // rpm builds the database in a directory of its own, and only its bytes come
             // here. They are placed like any other record, at the host's database path: no
             // write goes through a link, and an earlier database is replaced by a rename.
-            let files = crate::rpm::build_database(headers)?;
-            let db = crate::rpm::db_path().context("asking rpm where its database lives")?;
+            let files = crate::rpm::build_database(headers).map_err(skipped)?;
+            let db = crate::rpm::db_path()
+                .context("asking rpm where its database lives")
+                .map_err(skipped)?;
             let db_dir = rootfs.join(db.strip_prefix("/").unwrap_or(&db));
             create_dirs(rootfs, &db_dir, &mut staged.dirs)?;
             for (name, bytes) in files {
@@ -666,7 +694,8 @@ pub fn stage_records(
         let host = ["/etc/os-release", "/usr/lib/os-release"]
             .iter()
             .find_map(|p| std::fs::read(p).ok())
-            .context("reading the host's os-release, which names the distribution")?;
+            .context("reading the host's os-release, which names the distribution")
+            .map_err(skipped)?;
         create_dirs(rootfs, &rootfs.join("etc"), &mut staged.dirs)?;
         write(&os_release, &host)?;
         staged.files.push(os_release);
@@ -740,12 +769,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_selection_defaults_to_the_report_alone_and_none_stands_alone() {
+    fn a_selection_defaults_to_report_and_sbom_and_none_stands_alone() {
         let default = PackagesSelection::from_outputs(&[]).unwrap();
-        assert!(default.report && !default.sbom && !default.image && !default.explicit);
+        assert!(default.report && default.sbom && !default.image && !default.explicit);
         assert!(
-            !default.needs_records(),
-            "the default must never have to fail a pack"
+            default.needs_records() && !default.requires_records(),
+            "the default builds records, and a host without them must not fail the pack"
         );
 
         let all = PackagesSelection::from_outputs(&[
@@ -755,7 +784,7 @@ mod tests {
         ])
         .unwrap();
         assert!(all.report && all.sbom && all.image && all.explicit && all.any());
-        assert!(all.needs_records());
+        assert!(all.needs_records() && all.requires_records());
 
         let image = PackagesSelection::from_outputs(&[PackagesOutput::Image]).unwrap();
         assert!(image.image && !image.report && !image.sbom);
@@ -763,8 +792,9 @@ mod tests {
         let none = PackagesSelection::from_outputs(&[PackagesOutput::None]).unwrap();
         assert!(!none.any() && none.explicit);
 
-        // A text report shows no list, so only a selection that the user named survives it.
-        assert!(!default.for_text_report().any());
+        // A text report shows no list, so it drops the default `report` and keeps `sbom`.
+        let text = default.for_text_report();
+        assert!(!text.report && text.sbom && !text.explicit);
         assert_eq!(all.for_text_report(), all);
         let report = PackagesSelection::from_outputs(&[PackagesOutput::Report]).unwrap();
         assert_eq!(report.for_text_report(), report);
