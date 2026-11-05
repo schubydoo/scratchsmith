@@ -9,8 +9,12 @@ This page has one list for each kind of change. Two kinds change only in a major
 deprecated input shapes and tolerances. Refused input is a third kind, because a minor release
 can refuse input that is the attack itself. The last list, Removed in 2.0.0, shows what version
 2.0.0 changed after its deprecation cycle ended. Most inputs there now fail, and one gets a new
-default. It also shows three changes in 2.0.0 with no warning first: an exit code, an output
-directory that cannot be listed, and an `--include` file that is not a regular file.
+default. It also shows four changes in 2.0.0 with no warning first:
+
+- an exit code
+- an output directory that cannot be listed
+- an `--include` file that is not a regular file
+- a program or a library at a package record path
 
 A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.
@@ -97,6 +101,7 @@ No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list
 | `pack --no-build --output DIR` into a `DIR` that cannot be listed | Not warned | An error. `pack` exits `1` | A directory that you can read, or a new one |
 | `$PLATFORM` in a search path, on an architecture with no value for it | 1.6.0 | An error. `pack` and `graph` exit `1` and name the file that holds the search path | Write the directory name in the path |
 | A program interpreter (`PT_INTERP`) that starts like an ELF and cannot be parsed | 1.8.0 | An error. `pack` and `graph` exit `1` and name the file | Replace the damaged loader with an intact copy |
+| An explicit `sbom` or `image` in `--packages`, with the program or an `--include` library at a package record path on the host | Not warned | An error. `pack` exits `1` and names the path. 1.x exited 0, and the record replaced the file | Remove `sbom` and `image` from `--packages`, or move the file on the host |
 
 ### A library found only through an inherited `RPATH`
 

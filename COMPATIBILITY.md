@@ -100,9 +100,10 @@ change:
 ## Breaking changes in 2.0.0
 
 Each item below warned on stderr before 2.0, from the release that the Deprecations page names,
-with three exceptions. The `--no-build` output directory that cannot be listed had no warning.
-An `--include` file that is not a regular file and starts like an ELF had no warning. The last
-item changed an exit code with no warning.
+with four exceptions. The `--no-build` output directory that cannot be listed had no warning.
+An `--include` file that is not a regular file and starts like an ELF had no warning.
+A program or an `--include` library at a package record path had no warning.
+The last item changed an exit code with no warning.
 The [Deprecations](docs/deprecations.md) page lists what to write instead.
 
 - A library that sits only in an inherited `RPATH` directory, needed by an object that has
@@ -132,6 +133,11 @@ The [Deprecations](docs/deprecations.md) page lists what to write instead.
   the image. Replace the damaged file with an intact copy. An `--include` file that is not a
   regular file, such as a FIFO, and starts like an ELF now fails `graph` too. 1.x did not warn
   for it.
+- The packed program or an `--include` library can be at a package record path on the host, such
+  as `/var/lib/dpkg/status.d/libc6`. An explicit `--packages` value with `sbom` or `image` then
+  fails, with exit code 1. Before, the pack exited 0, but the record replaced the file,
+  and with `sbom` the pack then deleted it. 1.x did not warn for it. Remove `sbom` and `image`
+  from `--packages`, or move the file on the host.
 - A command line that scratchsmith refuses only after the parse now exits 2, not 1. Examples are
   `--watch --format json`, `pack` with no binary, and one `--add-file` image path given twice.
   This had no warning before 2.0. A script that tests for exactly `1` must also accept `2`.

@@ -632,7 +632,13 @@ fn finish_staging(
     // `--packages image`: the records are image content, so they land before the size gate.
     let owners = found.as_ref().filter(|o| !o.packages.is_empty());
     if let (true, Some(owners)) = (selection.image, owners) {
-        let records = packages::stage_records(dest, owners, &added)?;
+        let asked = if selection.sbom {
+            "sbom,image"
+        } else {
+            "image"
+        };
+        let records = packages::stage_records(dest, owners, &added)
+            .map_err(|err| records_refused(err, asked))?;
         if records.berkeley_db() {
             warnings.push(
                 "--packages image: this host's rpm database is a Berkeley DB, and rpm writes \
@@ -668,7 +674,7 @@ fn finish_staging(
                     ));
                     None
                 }
-                Err(err) => return Err(err),
+                Err(err) => return Err(records_refused(err, "sbom")),
             }
         }
         _ => None,
@@ -683,6 +689,15 @@ fn finish_staging(
         sbom,
         scan,
     })
+}
+
+// An explicit `sbom` or `image` whose records cannot be made fails the pack. Name the way
+// out, as the default's warning does. A write error in the tree is not that, and stays as is.
+fn records_refused(err: anyhow::Error, asked: &str) -> anyhow::Error {
+    if err.downcast_ref::<packages::RecordsSkipped>().is_none() {
+        return err;
+    }
+    anyhow::anyhow!("{err:#}. Remove {asked} from --packages to pack without the records")
 }
 
 /// Refuse a `--no-build` output directory that is not new or empty, before anything is staged.
