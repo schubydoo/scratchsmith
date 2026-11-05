@@ -23,34 +23,8 @@ change, and the exit code stays the same.
 
 ## Deprecated input shapes
 
-| Input | Deprecated in | Removed in | Write this instead |
-|---|---|---|---|
-| `--label NAME` with no `=` | 1.5.0 | 2.0.0 | `--label NAME=value` |
-| `--env NAME` with no `=` | 1.5.0 | 2.0.0 | `--env NAME=value` |
-
-### A label or an environment variable with no equals sign
-
-`--label` and `--env` take a `NAME=value` pair. Scratchsmith accepts a bare name.
-
-A bare `--label build` writes the label `build` with an empty value. That is legal in an image
-configuration, and it is almost never what you meant. A bare `--env build` is worse: the OCI image
-specification defines `Env` as a list of `KEY=VALUE` strings, so an entry with no `=` is not a
-valid environment variable. A runtime can drop it, or pass it on as a name with no value.
-
-A bare `--env PATH` is worse than a stray entry. Scratchsmith keys each entry on the text before
-the first `=`, so `PATH` matches the default `PATH` entry and replaces it. The image then ships
-with no usable `PATH` at all.
-
-The same applies to the `label` and `env` keys in `scratchsmith.toml`, which take the same
-strings.
-
-Add the `=` and the value you meant:
-
-```console
-$ scratchsmith pack --label build=ci --env LOG_LEVEL=info ./myapp
-```
-
-To set an empty value on purpose, write the `=` and stop there: `--label build=`.
+No input shape is deprecated now. Version 2.0.0 removed the 1.x deprecations, and the list
+[Removed in 2.0.0](#removed-in-200) names each one.
 
 ## Refused without a deprecation cycle
 
@@ -237,3 +211,6 @@ In `scratchsmith.toml`, write `packages = ["report"]`. To take the 2.0 default n
 | Input | Warned since | Now | Write this instead |
 |---|---|---|---|
 | A nested `[profile.a.profile.b]` table | 1.5.0 | An error. `pack` exits `1` | A top-level `[profile.b]` table, with the keys it relied on repeated |
+| `--label NAME` with no `=` | 1.5.0 | A usage error, exit code 2 | `--label NAME=value`, or `--label NAME=` for an empty value |
+| `--env NAME` with no `=` | 1.5.0 | A usage error, exit code 2 | `--env NAME=value` |
+| A `label` or `env` entry with no `=` in `scratchsmith.toml` | 1.5.0 | An error, exit code 1 | `"NAME=value"` |

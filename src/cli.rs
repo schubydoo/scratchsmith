@@ -92,7 +92,7 @@ pub enum Command {
         #[arg(long = "cmd", value_name = "ARG", allow_hyphen_values = true)]
         cmd: Vec<String>,
         /// Environment entry `KEY=VALUE`; repeatable.
-        #[arg(long = "env", value_name = "KEY=VALUE")]
+        #[arg(long = "env", value_name = "KEY=VALUE", value_parser = crate::image::env_pair)]
         env: Vec<String>,
         /// Working directory inside the image.
         #[arg(long, value_name = "DIR")]
@@ -105,7 +105,7 @@ pub enum Command {
         #[arg(long, value_enum, value_name = "RUNTIME")]
         runtime: Option<crate::image::Runtime>,
         /// OCI image label `KEY=VALUE`; repeatable.
-        #[arg(long = "label", value_name = "KEY=VALUE")]
+        #[arg(long = "label", value_name = "KEY=VALUE", value_parser = crate::image::label_pair)]
         label: Vec<String>,
         /// HEALTHCHECK command; repeatable, exec form (must be runnable in the scratch
         /// image, e.g. the packed binary). Flag-like values pass through.
@@ -433,9 +433,10 @@ fn dispatch(cli: Cli) -> Result<()> {
                 },
             };
 
-            // Deprecation warnings go here, not in a sink path: the effective config is complete,
-            // every sink is still ahead, and no staging failure can swallow the line.
-            crate::image::warn_about_bare_entries(&opts.image);
+            // Refuse here, not in a sink path: the effective config is complete and every sink
+            // is still ahead. clap checked the flags, so this catches the config-file keys.
+            crate::image::require_pairs(&opts.image)?;
+            // Deprecation warnings go here too, for the same reason.
             crate::pack::warn_about_the_packages_default(&opts);
 
             // An explicit CLI delivery sink always wins; `push` from the config/profile is only

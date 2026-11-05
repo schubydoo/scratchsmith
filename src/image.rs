@@ -427,49 +427,44 @@ fn image_config(default_entrypoint: &Path, diff_id: &str, cfg: &ImageConfig) -> 
     })
 }
 
-/// Warn on a `--label` or `--env` value with no `=`, one line per distinct entry.
-///
-/// A bare name is accepted today: the label lands with an empty value, and the env entry breaks
-/// the `KEY=VALUE` form the OCI image config specifies. 2.0 rejects both, and
-/// `COMPATIBILITY.md:41` wants the warning a major line ahead of the rejection, so the exit code
-/// stays where it is. The values also arrive from the `label` and `env` keys in
-/// `scratchsmith.toml`, which is why the text names the value rather than the flag.
-///
-/// Call this once per run, before staging. It reads the effective config, so it covers every
-/// sink, including `--no-build -o DIR`, which builds no image at all.
-pub fn warn_about_bare_entries(cfg: &ImageConfig) {
-    for entry in distinct_bare(&cfg.labels) {
-        eprintln!(
-            "warning: a label with no `=` is deprecated; `{entry}` lands with an empty value. \
-             Write `{entry}=<value>`. scratchsmith 2.0 rejects it. See {DEPRECATIONS_URL}"
-        );
-    }
-    for entry in distinct_bare(&cfg.env) {
-        // A bare `PATH` is worse than a stray entry: `merged_env` keys on the text before the
-        // first `=`, finds the default PATH and replaces it, so the image ends up with no PATH.
-        let extra = if entry == "PATH" {
-            " It also replaces the image's default PATH, leaving no PATH at all."
-        } else {
-            ""
-        };
-        eprintln!(
-            "warning: an env entry with no `=` is deprecated; `{entry}` is not KEY=VALUE, so a \
-             runtime can drop it.{extra} Write `{entry}=<value>`. scratchsmith 2.0 rejects it. \
-             See {DEPRECATIONS_URL}"
-        );
+/// The error for a `--label` or `--env` entry with no `=`. `kind` is `a label` or `an env entry`.
+fn bare_entry_error(kind: &str, entry: &str) -> String {
+    format!(
+        "{kind} needs the form `NAME=value`, but `{entry}` has no `=`. \
+         Write `{entry}=<value>`, or `{entry}=` for an empty value"
+    )
+}
+
+/// clap `value_parser` for `--label`: refuses a value with no `=`, so the CLI exits 2.
+pub fn label_pair(s: &str) -> Result<String, String> {
+    if s.contains('=') {
+        Ok(s.to_string())
+    } else {
+        Err(bare_entry_error("a label", s))
     }
 }
 
-/// The entries with no `=`, sorted and deduplicated, so `--label x --label x` warns once.
-fn distinct_bare(entries: &[String]) -> Vec<&str> {
-    let mut bare: Vec<&str> = entries
-        .iter()
-        .map(String::as_str)
-        .filter(|e| !e.contains('='))
-        .collect();
-    bare.sort_unstable();
-    bare.dedup();
-    bare
+/// clap `value_parser` for `--env`, as `label_pair`.
+pub fn env_pair(s: &str) -> Result<String, String> {
+    if s.contains('=') {
+        Ok(s.to_string())
+    } else {
+        Err(bare_entry_error("an env entry", s))
+    }
+}
+
+/// Refuse a label or env entry with no `=` in the effective config.
+///
+/// clap checks the CLI flags already. This covers the same strings from the `label` and `env`
+/// keys in `scratchsmith.toml`, and runs before staging so no sink does work first.
+pub fn require_pairs(cfg: &ImageConfig) -> anyhow::Result<()> {
+    if let Some(e) = cfg.labels.iter().find(|e| !e.contains('=')) {
+        anyhow::bail!(bare_entry_error("a label", e));
+    }
+    if let Some(e) = cfg.env.iter().find(|e| !e.contains('=')) {
+        anyhow::bail!(bare_entry_error("an env entry", e));
+    }
+    Ok(())
 }
 
 /// True when an image user string denotes root (uid 0 or `root`), so the caller can
