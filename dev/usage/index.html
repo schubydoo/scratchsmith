@@ -1155,8 +1155,9 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>./rootfs<span class="w"> </span>./app
 </code></pre></div>
 <p>Give <code>--output</code> a new directory or an empty one. Scratchsmith does not empty the directory, so
-a pack into a directory that holds an earlier pack merges with it and prints a warning. The
-<a href="../deprecations/#an-output-directory-that-is-not-empty">Deprecations</a> page has the detail.</p>
+a directory that holds anything is an error, and nothing is staged. A file is an error
+too. A directory that scratchsmith cannot list is an error, because it cannot prove the directory
+is empty. Remove the old directory first, or choose another.</p>
 <p>Or write a <strong>daemonless OCI archive</strong> (loadable by skopeo/buildah, and pushable to a registry with
 no Docker daemon):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--oci-archive<span class="w"> </span>./app.oci.tar<span class="w"> </span>./app
@@ -1385,8 +1386,7 @@ advisory.</p>
 </table>
 <ul>
 <li>With <code>sbom</code>, those files are in the staged tree only while the SBOM and the scan run. The
-  image does not contain them. With <code>--no-build</code>, an <code>/etc/os-release</code> that is already in the
-  output directory stays there.</li>
+  image does not contain them.</li>
 <li>With <code>image</code>, they stay, and they count toward <code>--max-size</code>. Your image then has an
   <code>/etc/os-release</code> that names the build host's distribution. If you add your own
   <code>/etc/os-release</code> with <code>--add-file</code>, scratchsmith keeps yours. An SBOM of that image names
@@ -1637,8 +1637,7 @@ halfway does not end the watch.</p>
 <li><code>--push</code>, and a <code>push</code> key from the configuration file. A registry is not the place for an
   image from every save.</li>
 <li><code>--no-build</code>. That sink stages into one directory, and a second pack into the same directory
-  merges with the files from the first. The <a href="../deprecations/#an-output-directory-that-is-not-empty">Deprecations</a>
-  page has the detail.</li>
+  is an error, because the directory is no longer empty.</li>
 <li><code>--format json</code>. Each pack prints a text report.</li>
 </ul>
 <p><code>--watch</code> is a command-line flag only. It has no key in the configuration file and no input on

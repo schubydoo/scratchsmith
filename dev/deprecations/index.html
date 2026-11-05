@@ -590,17 +590,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#an-output-directory-that-is-not-empty" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        An output directory that is not empty
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -634,6 +623,17 @@
     <span class="md-ellipsis">
       
         A command line refused after the parse exits 2
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#an-output-directory-that-cannot-be-listed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An output directory that cannot be listed
       
     </span>
   </a>
@@ -936,17 +936,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#an-output-directory-that-is-not-empty" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        An output directory that is not empty
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -980,6 +969,17 @@
     <span class="md-ellipsis">
       
         A command line refused after the parse exits 2
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#an-output-directory-that-cannot-be-listed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An output directory that cannot be listed
       
     </span>
   </a>
@@ -1020,8 +1020,8 @@ and what you write instead.</p>
 deprecated input shapes, tolerances, and changing defaults. Refused input is a fourth kind,
 because a minor release can refuse input that is the attack itself. The last list, Removed in
 2.0.0, shows what version 2.0.0 changed after its deprecation cycle ended. Most inputs there now
-fail, and one gets a new default. It also shows one exit code that changed in 2.0.0 with no
-cycle, and it says why.</p>
+fail, and one gets a new default. It also shows two changes in 2.0.0 with no warning first: an
+exit code, and an output directory that cannot be listed. It says why for each.</p>
 <p>A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.</p>
 <p>A tolerance is different. Scratchsmith accepts input today that it cannot use in full, and the
@@ -1090,16 +1090,10 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.<
 <td>2.0.0</td>
 <td>Write the directory name in the path</td>
 </tr>
-<tr>
-<td><code>--no-build</code> into an output directory that is not empty</td>
-<td>1.6.0</td>
-<td>2.0.0</td>
-<td>Use a new directory, or empty it first</td>
-</tr>
 </tbody>
 </table>
-<p>The first two warnings come from <code>pack</code> and from <code>graph</code>, because both resolve the same
-dependency tree. The last one comes from <code>pack</code> only.</p>
+<p>These warnings come from <code>pack</code> and from <code>graph</code>, because both resolve the same
+dependency tree.</p>
 <p>The interpreter warning stays only when no library lists the loader as <code>DT_NEEDED</code>. On a usual
 glibc sysroot <code>libc.so.6</code> lists it, so the dependency walk reads the loader as a library and the
 pack fails with the unparsable-ELF error.</p>
@@ -1113,25 +1107,6 @@ library with the same name in that directory then ships in place of the correct 
 <p>The warning names the file that holds the search path. When you link that file, write the
 directory name in the search path and do not use the token:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-Wl,-rpath,/opt/app/lib/riscv64<span class="w"> </span>-o<span class="w"> </span>myapp<span class="w"> </span>main.c
-</code></pre></div>
-<h3 id="an-output-directory-that-is-not-empty">An output directory that is not empty<a class="headerlink" href="#an-output-directory-that-is-not-empty" title="Permanent link">&para;</a></h3>
-<p><code>pack --no-build --output &lt;dir&gt;</code> stages the files of the image into a directory and builds no
-image. Scratchsmith does not empty that directory first. A second pack into the same directory
-merges with the files from the first.</p>
-<p>A file that the second pack stages replaces the old copy. A file that the second pack does not
-stage stays in the directory. For example, pack once with <code>--ca-certs</code> and once without it, and
-the certificate file is still there. The directory then holds more than the flags describe, and
-an SBOM or a scan of it includes the old file.</p>
-<p>One case goes the other way. Pack once with <code>--packages image</code>, and the package records are in
-the directory. Pack again with <code>--packages sbom --sbom</code>, and scratchsmith removes those records
-after the SBOM run, because that output never leaves them in the tree. <code>--packages sbom</code> on its
-own stages no records and removes none, because nothing reads the tree.</p>
-<p>Two flags stop a second pack. <code>--add-file</code> and <code>--locale</code> do not replace a file that is already
-in the directory, so the pack ends with an error.</p>
-<p>Scratchsmith 2.0 refuses a directory that is not empty. Give each pack a new directory, or
-remove the old one first:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="gp">$ </span>rm<span class="w"> </span>-rf<span class="w"> </span>./rootfs
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="gp">$ </span>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>./rootfs<span class="w"> </span>./app
 </code></pre></div>
 <h2 id="removed-in-200">Removed in 2.0.0<a class="headerlink" href="#removed-in-200" title="Permanent link">&para;</a></h2>
 <table>
@@ -1192,6 +1167,18 @@ remove the old one first:</p>
 <td>The default is <code>report,sbom</code>, so <code>--sbom</code> and <code>--scan</code> see the packages and a <code>--scan-fail-on</code> gate can find more</td>
 <td><code>--packages report</code> (or <code>packages = ["report"]</code>) for the 1.x result</td>
 </tr>
+<tr>
+<td><code>pack --no-build --output DIR</code> into a <code>DIR</code> that is not empty</td>
+<td>1.6.0</td>
+<td>An error before any file is staged. <code>pack</code> exits <code>1</code></td>
+<td>A new or empty directory, or <code>rm -rf DIR</code> first</td>
+</tr>
+<tr>
+<td><code>pack --no-build --output DIR</code> into a <code>DIR</code> that cannot be listed</td>
+<td>Not warned</td>
+<td>An error. <code>pack</code> exits <code>1</code></td>
+<td>A directory that you can read, or a new one</td>
+</tr>
 </tbody>
 </table>
 <h3 id="a-library-found-only-through-an-inherited-rpath">A library found only through an inherited <code>RPATH</code><a class="headerlink" href="#a-library-found-only-through-an-inherited-rpath" title="Permanent link">&para;</a></h3>
@@ -1201,7 +1188,7 @@ that it needs. Scratchsmith now applies that rule with no fallback, so the libra
 as it is for the loader. A <code>note:</code> line on stderr names the directory and the library that
 needs the file. To fix it, link the library that needs the file with a <code>RUNPATH</code> that
 holds the directory:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-shared<span class="w"> </span>-fPIC<span class="w"> </span>-Wl,--enable-new-dtags<span class="w"> </span>-Wl,-rpath,/opt/app/lib<span class="w"> </span>-o<span class="w"> </span>libmid.so<span class="w"> </span>mid.c<span class="w"> </span>-lleaf
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-shared<span class="w"> </span>-fPIC<span class="w"> </span>-Wl,--enable-new-dtags<span class="w"> </span>-Wl,-rpath,/opt/app/lib<span class="w"> </span>-o<span class="w"> </span>libmid.so<span class="w"> </span>mid.c<span class="w"> </span>-lleaf
 </code></pre></div>
 <h3 id="a-command-line-refused-after-the-parse-exits-2">A command line refused after the parse exits 2<a class="headerlink" href="#a-command-line-refused-after-the-parse-exits-2" title="Permanent link">&para;</a></h3>
 <p>Scratchsmith refuses some command lines only after the parse, because the refusal needs a
@@ -1211,6 +1198,11 @@ pack, and printed no warning about a change. In 2.0.0 they exit <code>2</code>, 
 argument-parse error. This change had no deprecation cycle, because the 1.x contract promised
 only a non-zero code for these refusals. A script that tests for exactly <code>1</code> must also accept
 <code>2</code>.</p>
+<h3 id="an-output-directory-that-cannot-be-listed">An output directory that cannot be listed<a class="headerlink" href="#an-output-directory-that-cannot-be-listed" title="Permanent link">&para;</a></h3>
+<p><code>pack --no-build --output DIR</code> checks that <code>DIR</code> is empty. In 1.x the check skipped a <code>DIR</code>
+that it had no permission to list, so it printed no warning and packed into it. Version 2.0.0 refuses
+that <code>DIR</code>, because it cannot prove that the directory is empty. This change had no warning
+before 2.0. Give the pack a directory that you can read, or a new one.</p>
 
 
 
