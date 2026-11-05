@@ -120,6 +120,9 @@ The [Deprecations](docs/deprecations.md) page lists what to write instead.
   The error comes before any file is staged. Before, scratchsmith warned and merged into the old
   tree. Use a new or empty directory. A `DIR` that scratchsmith cannot list is now an error too,
   because it cannot prove that the directory is empty. 1.x did not warn for it and packed into it.
+- `$PLATFORM` in an `RPATH` or `RUNPATH` entry, on an architecture other than `x86_64` or
+  `aarch64`, is now an error. `pack` and `graph` exit with code 1. Before, scratchsmith warned and
+  searched the path with the token removed. Write the directory name in the path.
 - A command line that scratchsmith refuses only after the parse now exits 2, not 1. Examples are
   `--watch --format json`, `pack` with no binary, and one `--add-file` image path given twice.
   This had no warning before 2.0. A script that tests for exactly `1` must also accept `2`.

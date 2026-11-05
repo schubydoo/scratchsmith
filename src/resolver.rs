@@ -489,7 +489,7 @@ pub fn resolve_with(
         let used_rpaths: &[String] = if searches_rpath { &obj.rpaths } else { &[] };
         // `$PLATFORM` has no value here, so the entry is searched with the token gone and a
         // same-named file in that other directory can stage in place of the arch-specific
-        // one. Warn only where a search can use the entry. A soname with a slash is a path
+        // one. Refuse only where a search can use the entry. A soname with a slash is a path
         // and skips the search list, so a RUNPATH entry needs a bare soname on this object.
         // An RPATH entry is also handed to every child, so any DT_NEEDED at all is enough.
         if root_info.platform().is_empty() {
@@ -498,17 +498,15 @@ pub fn resolve_with(
             let runpaths = obj.runpaths.iter().filter(|_| bare_soname);
             for entry in rpaths.chain(runpaths) {
                 if entry.contains("$PLATFORM") || entry.contains("${PLATFORM}") {
-                    push_unique(
-                        &mut resolution.warnings,
-                        format!(
-                            "`$PLATFORM` has no value for this architecture ({}), so the \
-                             search path `{}` in {} was searched as `{}` and a library from \
-                             the wrong directory can ship.",
-                            goblin::elf::header::machine_to_str(root_info.machine),
-                            entry.escape_debug(),
-                            printable(&obj_path),
-                            expand_tokens(entry, obj_dir, &root_info).escape_debug()
-                        ),
+                    bail!(
+                        "`$PLATFORM` has no value for this architecture ({}), so the search \
+                         path `{}` in {} would be searched as `{}` and a library from the \
+                         wrong directory could ship. Write the directory name in the search \
+                         path in place of `$PLATFORM`, and link that file again.",
+                        goblin::elf::header::machine_to_str(root_info.machine),
+                        entry.escape_debug(),
+                        printable(&obj_path),
+                        expand_tokens(entry, obj_dir, &root_info).escape_debug()
                     );
                 }
             }
@@ -1772,11 +1770,12 @@ mod tests {
     }
 
     #[test]
-    fn a_platform_token_warns_only_where_it_has_no_value() {
+    fn a_platform_token_fails_only_where_it_has_no_value() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let exe = root.join("app/exe");
         touch(&exe);
+        // `Err` carries the error text, `Ok` the warnings of a resolution that went through.
         let resolve_with_needed =
             |machine: u16, needed: &[&str], rpaths: &[&str], runpaths: &[&str]| {
                 // One bare soname, so the object has a search to run. It need not resolve.
@@ -1784,45 +1783,54 @@ mod tests {
                 info.machine = machine;
                 let infos = HashMap::from([(canonical(&exe), info)]);
                 resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos })
-                    .unwrap()
-                    .warnings
+                    .map(|r| r.warnings)
+                    .map_err(|e| format!("{e:#}"))
             };
         let resolve_as = |machine: u16, rpaths: &[&str], runpaths: &[&str]| {
             resolve_with_needed(machine, &["libx.so"], rpaths, runpaths)
         };
+        let clean = |r: Result<Vec<String>, String>| r.is_ok_and(|w| w.is_empty());
         let riscv = goblin::elf::header::EM_RISCV;
 
-        let w = resolve_as(riscv, &[], &["/opt/$PLATFORM/lib", "/opt/plain"]);
-        assert_eq!(w.len(), 1, "{w:?}");
-        assert!(w[0].contains("`/opt/$PLATFORM/lib`"), "{w:?}");
-        // It names the architecture and the directory that was searched in its place.
+        let e = resolve_as(riscv, &[], &["/opt/$PLATFORM/lib", "/opt/plain"]).unwrap_err();
+        assert!(e.contains("`/opt/$PLATFORM/lib`"), "{e}");
+        // It names the architecture, the file, the directory searched in its place, and the fix.
         assert!(
-            w[0].contains("(RISCV)") && w[0].contains("as `/opt//lib`"),
-            "{w:?}"
+            e.contains("(RISCV)")
+                && e.contains(&canonical(&exe).display().to_string())
+                && e.contains("as `/opt//lib`")
+                && e.contains("Write the directory name"),
+            "{e}"
         );
-        assert_eq!(resolve_as(riscv, &["/opt/${PLATFORM}"], &[]).len(), 1);
+        assert!(resolve_as(riscv, &["/opt/${PLATFORM}"], &[]).is_err());
 
         // The entry is text from an untrusted binary. It must not reach the terminal raw.
-        let w = resolve_as(riscv, &[], &["/opt/$PLATFORM\nwarning: forged\x1b[2J"]);
-        assert!(!w[0].contains('\n') && !w[0].contains('\x1b'), "{w:?}");
-        assert!(w[0].contains("\\nwarning: forged\\u{1b}[2J"), "{w:?}");
+        let e = resolve_as(riscv, &[], &["/opt/$PLATFORM\nwarning: forged\x1b[2J"]).unwrap_err();
+        assert!(!e.contains('\n') && !e.contains('\x1b'), "{e}");
+        assert!(e.contains("\\nwarning: forged\\u{1b}[2J"), "{e}");
 
         // No bare soname means no search: nothing is needed, or the one entry is a path.
         let tokened = ["/opt/$PLATFORM/lib"];
-        assert!(resolve_with_needed(riscv, &[], &[], &tokened).is_empty());
-        assert!(resolve_with_needed(riscv, &["/abs/libx.so"], &[], &tokened).is_empty());
-        // RPATH differs: a child inherits it, so one path-style entry is enough to warn.
-        assert_eq!(
-            resolve_with_needed(riscv, &["/abs/libx.so"], &tokened, &[]).len(),
-            1
-        );
-        assert!(resolve_with_needed(riscv, &[], &tokened, &[]).is_empty());
+        assert!(clean(resolve_with_needed(riscv, &[], &[], &tokened)));
+        assert!(clean(resolve_with_needed(
+            riscv,
+            &["/abs/libx.so"],
+            &[],
+            &tokened
+        )));
+        // RPATH differs: a child inherits it, so one path-style entry is enough to fail.
+        assert!(resolve_with_needed(riscv, &["/abs/libx.so"], &tokened, &[]).is_err());
+        assert!(clean(resolve_with_needed(riscv, &[], &tokened, &[])));
 
-        // A named architecture expands the token, so there is nothing to warn about.
+        // A named architecture expands the token, so there is nothing to refuse.
         let x86 = goblin::elf::header::EM_X86_64;
-        assert!(resolve_as(x86, &[], &["/opt/$PLATFORM/lib"]).is_empty());
+        assert!(clean(resolve_as(x86, &[], &["/opt/$PLATFORM/lib"])));
         // glibc ignores RPATH when RUNPATH is set, so the token in it is never searched.
-        assert!(resolve_as(riscv, &["/opt/$PLATFORM"], &["/opt/plain"]).is_empty());
+        assert!(clean(resolve_as(
+            riscv,
+            &["/opt/$PLATFORM"],
+            &["/opt/plain"]
+        )));
     }
 
     #[test]
