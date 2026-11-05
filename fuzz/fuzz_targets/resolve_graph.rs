@@ -110,13 +110,15 @@ struct Lib {
 }
 
 // The buckets a real file may sit in: a couple of Sysroot default dirs plus the binary's own
-// $ORIGIN tree, so RPATH/$ORIGIN lookups have something to hit.
+// $ORIGIN tree, so RPATH/$ORIGIN lookups have something to hit. `AppColon` is a directory
+// whose name holds ':', reached only by the whole-string fallback and its ldconfig rule.
 #[derive(Arbitrary, Debug)]
 enum LibDir {
     Lib64,
     UsrLib,
     LibGnu,
     AppLibs,
+    AppColon,
 }
 
 impl LibDir {
@@ -127,6 +129,7 @@ impl LibDir {
             LibDir::UsrLib => "/usr/lib",
             LibDir::LibGnu => "/lib/x86_64-linux-gnu",
             LibDir::AppLibs => "/app/libs",
+            LibDir::AppColon => "/app/x:y",
         }
     }
 }
