@@ -195,6 +195,7 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
     let resolution = resolver::resolve_with_includes(binary, &Sysroot::new("/"), &opts.includes)?;
     resolution.warn_about_tolerances();
     if !resolution.missing.is_empty() {
+        resolution.print_hints();
         bail!(
             "cannot pack: unresolved dependencies: {}",
             resolver::missing_for_display(&resolution.missing)
@@ -1074,6 +1075,7 @@ mod tests {
             missing: vec![],
             edges: vec![],
             warnings: vec![],
+            hints: vec![],
         }
     }
 

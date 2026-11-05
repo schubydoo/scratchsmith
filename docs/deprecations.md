@@ -84,10 +84,9 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.
 |---|---|---|---|
 | A program interpreter that starts like an ELF and cannot be parsed | 1.8.0 | 2.0.0 | Replace the damaged file |
 | `$PLATFORM` in a search path, on an architecture with no value for it | 1.6.0 | 2.0.0 | Write the directory name in the path |
-| A library found only through an inherited `RPATH`, by an object that has `RUNPATH` | 1.6.0 | 2.0.0 | Give that object the directory in its own `RUNPATH` |
 | `--no-build` into an output directory that is not empty | 1.6.0 | 2.0.0 | Use a new directory, or empty it first |
 
-The first three warnings come from `pack` and from `graph`, because both resolve the same
+The first two warnings come from `pack` and from `graph`, because both resolve the same
 dependency tree. The last one comes from `pack` only.
 
 The interpreter warning stays only when no library lists the loader as `DT_NEEDED`. On a usual
@@ -109,31 +108,6 @@ directory name in the search path and do not use the token:
 
 ```console
 $ cc -Wl,-rpath,/opt/app/lib/riscv64 -o myapp main.c
-```
-
-### A library found only through an inherited `RPATH`
-
-A binary can list directories where the loader looks for its libraries. There are two kinds of
-list. An `RPATH` is inherited: a library that the program loads also searches the program's
-`RPATH`. A `RUNPATH` is not inherited.
-
-The loader has one more rule. A library that has its own `RUNPATH` does not search any inherited
-`RPATH` for the libraries that it needs.
-
-Earlier versions of scratchsmith did not apply that rule. Scratchsmith now searches the way the
-loader does. If that search finds the library, scratchsmith stages that copy, which is the copy
-that the program uses on the host.
-
-If that search finds nothing, scratchsmith falls back to the old search, stages what it finds,
-and prints the warning. The copy that it stages is not the copy that the loader uses. On most
-hosts the loader finds no copy at all, and the program does not start there. The image can
-still run, because the loader cache in the image knows where the file is. Scratchsmith 2.0
-reports the library as missing.
-
-To fix it, link the library that needs the file with a `RUNPATH` that holds the directory:
-
-```console
-$ cc -shared -fPIC -Wl,--enable-new-dtags -Wl,-rpath,/opt/app/lib -o libmid.so mid.c -lleaf
 ```
 
 ### An output directory that is not empty
@@ -205,3 +179,17 @@ In `scratchsmith.toml`, write `packages = ["report"]`. To take the 2.0 default n
 | `--env NAME` with no `=` | 1.5.0 | A usage error, exit code 2 | `--env NAME=value` |
 | A `label` or `env` entry with no `=` in `scratchsmith.toml` | 1.5.0 | An error, exit code 1 | `"NAME=value"` |
 | A library that starts like an ELF and cannot be parsed | 1.6.0 | An error. `pack` and `graph` exit `1` and name the file. 1.x did not warn for a file that is not a regular file, such as a FIFO named with `--include`, so that case fails now with no earlier warning | Replace the damaged file with an intact copy |
+| A library found only through an inherited `RPATH`, by an object that has `RUNPATH` | 1.6.0 | Reported as missing, and `pack` and `graph` fail | Give that object the directory in its own `RUNPATH` |
+
+### A library found only through an inherited `RPATH`
+
+An `RPATH` is inherited: a library that the program loads also searches the program's `RPATH`.
+A library that has its own `RUNPATH` does not search any inherited `RPATH` for the libraries
+that it needs. Scratchsmith now applies that rule with no fallback, so the library is missing,
+as it is for the loader. A `note:` line on stderr names the directory and the library that
+needs the file. To fix it, link the library that needs the file with a `RUNPATH` that
+holds the directory:
+
+```console
+$ cc -shared -fPIC -Wl,--enable-new-dtags -Wl,-rpath,/opt/app/lib -o libmid.so mid.c -lleaf
+```

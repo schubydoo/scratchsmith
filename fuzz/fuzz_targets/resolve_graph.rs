@@ -235,8 +235,9 @@ fuzz_target!(|scn: Scenario| {
     //
     // `is_control` is the Cc category only. The line and paragraph separators and the
     // bidirectional overrides are not in it, and each one also breaks or reverses a line.
+    // A hint is printed the same way, so it is held to the same rule.
     use scratchsmith::resolver::breaks_a_line;
-    for warning in &resolution.warnings {
+    for warning in resolution.warnings.iter().chain(&resolution.hints) {
         assert!(
             !warning.chars().any(breaks_a_line),
             "a warning carries a character that breaks a line: {warning:?}"

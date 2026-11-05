@@ -384,23 +384,51 @@ fn a_library_with_runpath_resolves_like_the_loader_not_through_an_inherited_rpat
         "the fixture is wrong: the loader must NOT find libleaf through the inherited RPATH"
     );
 
-    // scratchsmith keeps resolving it until 2.0, through the fallback, and says so on stderr.
-    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+    // scratchsmith agrees with the loader: libleaf is unresolved, and graph and pack fail.
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let out = Command::new(bin)
         .args(["graph", "--format", "json"])
         .arg(&app)
         .output()
         .expect("run");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "{stderr}");
+    assert!(!out.status.success(), "an incomplete graph must fail");
     assert!(
-        stderr.contains("warning: ")
-            && stderr.contains("`libleaf.so`")
-            && stderr.contains("inherited")
-            && stderr.contains("scratchsmith 2.0 rejects it"),
-        "the tolerance warning is missing: {stderr}"
+        !stderr.contains("rejects it"),
+        "no fallback warning: {stderr}"
     );
+    // Both commands name the cause and the fix, not only "missing".
+    let real_libs = std::fs::canonicalize(&libs).unwrap();
+    let hint = format!(
+        "note: `libleaf.so` is in {}, an RPATH that {} inherits from a parent.",
+        real_libs.display(),
+        real_libs.join("libmid.so").display()
+    );
+    let fix = format!("a RUNPATH that lists {}.", real_libs.display());
+    assert!(stderr.contains(&hint) && stderr.contains(&fix), "{stderr}");
     let graph: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(graph["missing"].as_array().unwrap().len(), 0, "{graph}");
+    let missing: Vec<&str> = graph["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|n| n["missing"].as_array().unwrap())
+        .filter_map(|s| s.as_str())
+        .collect();
+    assert_eq!(missing, ["libleaf.so"], "{graph}");
+
+    let rootfs = dir.join("rootfs");
+    let pack = Command::new(bin)
+        .args(["pack", "-n", "-o", rootfs.to_str().unwrap()])
+        .arg(&app)
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&pack.stderr);
+    assert!(!pack.status.success(), "pack must refuse: {stderr}");
+    assert!(
+        stderr.contains("cannot pack: unresolved dependencies: \"libleaf.so\""),
+        "{stderr}"
+    );
+    assert!(stderr.contains(&hint) && stderr.contains(&fix), "{stderr}");
 }
 
 #[test]
