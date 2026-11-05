@@ -220,23 +220,34 @@ fuzz_target!(|scn: Scenario| {
 
     let sysroot = Sysroot::new(root);
     let includes: Vec<String> = scn.includes.into_iter().take(8).collect();
-    let Ok(resolution) = resolve_with(&exe, &sysroot, &includes, &MapSource { infos, unreadable })
-    else {
-        return;
-    };
-    // A warning quotes strings that came out of the packed binary and is printed to the
-    // user's terminal as it is. None may carry a character that breaks or reorders a line: a
-    // raw newline or escape would let the input forge a line of scratchsmith's own output.
+    let resolved = resolve_with(&exe, &sysroot, &includes, &MapSource { infos, unreadable });
+    // A warning or error quotes strings that came out of the packed binary and is printed to
+    // the user's terminal as it is. None may carry a character that breaks or reorders a line:
+    // a raw newline or escape would let the input forge a line of scratchsmith's own output.
     // The unit test checks one input; this checks every one the engine finds.
     //
-    // What this really exercises is the search-path entry in the `$PLATFORM` warning, which
-    // is an arbitrary `String`. A FILE NAME in a warning is not exercised: every name here
-    // passes `safe_name`, so the escaping of paths rests on the unit tests alone.
+    // What this really exercises is the search-path entry in the `$PLATFORM` error, which is
+    // an arbitrary `String`. A FILE NAME is not exercised: every name here passes `safe_name`,
+    // so the escaping of paths rests on the unit tests alone. Only that one error is checked,
+    // because it is the one that quotes a search-path entry.
     //
     // `is_control` is the Cc category only. The line and paragraph separators and the
     // bidirectional overrides are not in it, and each one also breaks or reverses a line.
     // A hint is printed the same way, so it is held to the same rule.
     use scratchsmith::resolver::breaks_a_line;
+    let resolution = match resolved {
+        Ok(resolution) => resolution,
+        Err(e) => {
+            let msg = format!("{e:#}");
+            if msg.starts_with("`$PLATFORM` has no value") {
+                assert!(
+                    !msg.chars().any(breaks_a_line),
+                    "an error carries a character that breaks a line: {msg:?}"
+                );
+            }
+            return;
+        }
+    };
     for warning in resolution.warnings.iter().chain(&resolution.hints) {
         assert!(
             !warning.chars().any(breaks_a_line),

@@ -465,3 +465,73 @@ fn a_truncated_top_level_binary_gives_graph_and_pack_the_same_error() {
     }
     assert_eq!(msgs[0], msgs[1], "graph and pack must print the same error");
 }
+
+#[test]
+fn a_platform_search_path_on_an_unnamed_arch_fails_both_graph_and_pack() {
+    // A real RUNPATH of `$ORIGIN/$PLATFORM`, on an ELF relabelled as RISC-V, an arch with no
+    // `$PLATFORM` value. The token would expand to nothing, so libfoo beside the app would
+    // stage in place of an arch-specific copy.
+    if !cc_available() {
+        skip_required("no C compiler");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    std::fs::write(dir.join("foo.c"), "int foo(void){return 42;}").unwrap();
+    std::fs::write(
+        dir.join("main.c"),
+        "extern int foo(void); int main(void){return foo()==42?0:1;}",
+    )
+    .unwrap();
+    let p = |name: &str| dir.join(name).to_str().unwrap().to_string();
+    cc(&["-shared", "-fPIC", "-o", &p("libfoo.so"), &p("foo.c")]);
+    cc(&[
+        "-Wl,--enable-new-dtags",
+        "-Wl,-rpath,$ORIGIN/$PLATFORM",
+        "-o",
+        &p("app"),
+        &p("main.c"),
+        &format!("-L{}", dir.display()),
+        "-lfoo",
+    ]);
+    // e_machine is the little-endian u16 at offset 18 of the ELF header.
+    let mut bytes = std::fs::read(dir.join("app")).unwrap();
+    bytes[18..20].copy_from_slice(&243u16.to_le_bytes()); // EM_RISCV
+    std::fs::write(dir.join("app"), bytes).unwrap();
+
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let rootfs = dir.join("rootfs");
+    let app = p("app");
+    let runs: [Vec<&str>; 3] = [
+        vec!["graph", &app],
+        vec!["graph", "--format", "json", &app],
+        vec![
+            "pack",
+            "--format",
+            "json",
+            "-n",
+            "-o",
+            rootfs.to_str().unwrap(),
+            &app,
+        ],
+    ];
+    let real_app = std::fs::canonicalize(dir.join("app")).unwrap();
+    for args in runs {
+        let out = Command::new(bin).args(&args).output().expect("run");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{args:?} must fail: {stderr}");
+        assert!(
+            stderr.contains("`$PLATFORM` has no value for this architecture (RISCV)")
+                && stderr.contains("`$ORIGIN/$PLATFORM`")
+                && stderr.contains(&real_app.display().to_string())
+                && stderr.contains("Write the directory name")
+                && !stderr.contains("warning: "),
+            "{args:?}: the error must name the entry, the file and the fix: {stderr}"
+        );
+        assert!(out.stdout.is_empty(), "{args:?}: no report on a failure");
+    }
+    assert!(
+        !walk_contains(&rootfs, "libfoo.so"),
+        "the library from the wrong directory must not stage"
+    );
+}

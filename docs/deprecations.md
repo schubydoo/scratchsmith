@@ -81,31 +81,12 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.
 | Input | Warns since | Error in | What to do |
 |---|---|---|---|
 | A program interpreter that starts like an ELF and cannot be parsed | 1.8.0 | 2.0.0 | Replace the damaged file |
-| `$PLATFORM` in a search path, on an architecture with no value for it | 1.6.0 | 2.0.0 | Write the directory name in the path |
 
-These warnings come from `pack` and from `graph`, because both resolve the same
-dependency tree.
+This warning comes from `pack` and from `graph`, because both resolve the same dependency tree.
 
 The interpreter warning stays only when no library lists the loader as `DT_NEEDED`. On a usual
 glibc sysroot `libc.so.6` lists it, so the dependency walk reads the loader as a library and the
 pack fails with the unparsable-ELF error.
-
-### `$PLATFORM` with no value
-
-A library search path is an `RPATH` or a `RUNPATH` entry in the binary, or in a library that the
-binary needs. It can contain the token `$PLATFORM`, and the loader replaces that token with the
-name of the processor type. Scratchsmith knows that name for `x86_64` and `aarch64` only.
-
-On any other architecture, scratchsmith removes the token and searches what is left. A path
-such as `/opt/app/lib/$PLATFORM` becomes `/opt/app/lib/`, which is the parent directory. A
-library with the same name in that directory then ships in place of the correct one.
-
-The warning names the file that holds the search path. When you link that file, write the
-directory name in the search path and do not use the token:
-
-```console
-$ cc -Wl,-rpath,/opt/app/lib/riscv64 -o myapp main.c
-```
 
 ## Removed in 2.0.0
 
@@ -121,6 +102,7 @@ $ cc -Wl,-rpath,/opt/app/lib/riscv64 -o myapp main.c
 | `--packages` (the `packages` key) with no value | 1.9.0 | The default is `report,sbom`, so `--sbom` and `--scan` see the packages and a `--scan-fail-on` gate can find more | `--packages report` (or `packages = ["report"]`) for the 1.x result |
 | `pack --no-build --output DIR` into a `DIR` that is not empty | 1.6.0 | An error before any file is staged. `pack` exits `1` | A new or empty directory, or `rm -rf DIR` first |
 | `pack --no-build --output DIR` into a `DIR` that cannot be listed | Not warned | An error. `pack` exits `1` | A directory that you can read, or a new one |
+| `$PLATFORM` in a search path, on an architecture with no value for it | 1.6.0 | An error. `pack` and `graph` exit `1` and name the file that holds the search path | Write the directory name in the path |
 
 ### A library found only through an inherited `RPATH`
 
@@ -151,3 +133,21 @@ only a non-zero code for these refusals. A script that tests for exactly `1` mus
 that it had no permission to list, so it printed no warning and packed into it. Version 2.0.0 refuses
 that `DIR`, because it cannot prove that the directory is empty. This change had no warning
 before 2.0. Give the pack a directory that you can read, or a new one.
+
+### `$PLATFORM` with no value
+
+A library search path is an `RPATH` or a `RUNPATH` entry in the binary, or in a library that the
+binary needs. It can contain the token `$PLATFORM`, and the loader replaces that token with the
+name of the processor type. Scratchsmith knows that name for `x86_64` and `aarch64` only.
+
+On any other architecture, the token has no value. Through 1.9, scratchsmith removed the token
+and searched what was left, so `/opt/app/lib/$PLATFORM` became the parent directory
+`/opt/app/lib/`. A library with the same name in that directory then shipped in place of the
+correct one. Now `pack` and `graph` stop with exit `1` where 1.x warned, and the error names the
+file that holds the search path. A search path that the loader never reads still passes, for
+example an `RPATH` in a file that also has `RUNPATH`. When you link that file, write the
+directory name in the search path and do not use the token:
+
+```console
+$ cc -Wl,-rpath,/opt/app/lib/riscv64 -o myapp main.c
+```
