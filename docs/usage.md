@@ -321,7 +321,7 @@ scratchsmith pack --symlinks preserve /usr/bin/python3
 
 | Mode | What a named symlink becomes |
 |---|---|
-| `copy-all` | The target's content, at the named path. This is the default, and what every earlier release did. |
+| `copy-all` | The target's content. An `--add-file` source gets it at the named path. The packed binary gets it at its real path, with nothing at the named path. This is the default, and what every earlier release did. |
 | `preserve` | A link. A target outside the image makes it dangle, and the pack warns. |
 | `copy-unsafe` | A link for a target inside the image. The target's content for a target outside it. |
 | `skip-unsafe` | A link for a target inside the image. Nothing at all for a target outside it, and the pack warns. |
