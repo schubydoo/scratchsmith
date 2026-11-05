@@ -580,17 +580,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#a-library-that-cannot-be-parsed" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        A library that cannot be parsed
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#platform-with-no-value" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -948,17 +937,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#a-library-that-cannot-be-parsed" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        A library that cannot be parsed
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#platform-with-no-value" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1124,12 +1102,6 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.<
 </thead>
 <tbody>
 <tr>
-<td>A library that starts like an ELF and cannot be parsed</td>
-<td>1.6.0</td>
-<td>2.0.0</td>
-<td>Replace the damaged file</td>
-</tr>
-<tr>
 <td>A program interpreter that starts like an ELF and cannot be parsed</td>
 <td>1.8.0</td>
 <td>2.0.0</td>
@@ -1155,17 +1127,11 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.<
 </tr>
 </tbody>
 </table>
-<p>The first four warnings come from <code>pack</code> and from <code>graph</code>, because both resolve the same
+<p>The first three warnings come from <code>pack</code> and from <code>graph</code>, because both resolve the same
 dependency tree. The last one comes from <code>pack</code> only.</p>
-<h3 id="a-library-that-cannot-be-parsed">A library that cannot be parsed<a class="headerlink" href="#a-library-that-cannot-be-parsed" title="Permanent link">&para;</a></h3>
-<p>Scratchsmith reads each library that the binary needs, and then resolves the libraries that
-library needs in turn. A file that you name with <code>--include</code> and that is not an ELF at all has
-no dependencies, so scratchsmith stages it and continues. That stays true in 2.0.</p>
-<p>A truncated or corrupt library is a different case. The file starts with the ELF signature, and
-scratchsmith cannot read its list of dependencies. Today scratchsmith stages the damaged file
-and resolves nothing below it. The image can then ship without libraries that the program needs
-at run time, and the pack still exits <code>0</code>.</p>
-<p>Replace the file with an intact copy. Reinstall the package that owns it, or rebuild it.</p>
+<p>The interpreter warning stays only when no library lists the loader as <code>DT_NEEDED</code>. On a usual
+glibc sysroot <code>libc.so.6</code> lists it, so the dependency walk reads the loader as a library and the
+pack fails with the unparsable-ELF error.</p>
 <h3 id="platform-with-no-value"><code>$PLATFORM</code> with no value<a class="headerlink" href="#platform-with-no-value" title="Permanent link">&para;</a></h3>
 <p>A library search path is an <code>RPATH</code> or a <code>RUNPATH</code> entry in the binary, or in a library that the
 binary needs. It can contain the token <code>$PLATFORM</code>, and the loader replaces that token with the
@@ -1286,6 +1252,12 @@ warning.</p>
 <td>1.5.0</td>
 <td>An error, exit code 1</td>
 <td><code>"NAME=value"</code></td>
+</tr>
+<tr>
+<td>A library that starts like an ELF and cannot be parsed</td>
+<td>1.6.0</td>
+<td>An error. <code>pack</code> and <code>graph</code> exit <code>1</code> and name the file. 1.x did not warn for a file that is not a regular file, such as a FIFO named with <code>--include</code>, so that case fails now with no earlier warning</td>
+<td>Replace the damaged file with an intact copy</td>
 </tr>
 </tbody>
 </table>
