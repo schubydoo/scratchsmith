@@ -635,6 +635,69 @@ fn a_library_in_a_directory_named_with_a_colon_still_packs() {
 }
 
 #[test]
+fn a_library_that_ldconfig_does_not_cache_in_a_colon_directory_is_missing() {
+    // NEEDED `foo.so` in `x:y`, reached by RUNPATH `$ORIGIN/x:y`. ld.so splits the string, and
+    // ldconfig caches no `foo.so`, because the name does not start with `lib`. Measured on
+    // glibc 2.41: the 1.x image of this program exits 127. So `pack` and `graph` fail now.
+    if !cc_available() {
+        skip_required("no C compiler");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let libdir = dir.join("x:y");
+    std::fs::create_dir(&libdir).unwrap();
+    std::fs::write(dir.join("foo.c"), "int foo(void){return 42;}").unwrap();
+    std::fs::write(
+        dir.join("main.c"),
+        "extern int foo(void); int main(void){return foo()==42?0:1;}",
+    )
+    .unwrap();
+    let p = |name: &str| dir.join(name).to_str().unwrap().to_string();
+    cc(&[
+        "-shared",
+        "-fPIC",
+        "-Wl,-soname,foo.so",
+        "-o",
+        &p("x:y/foo.so"),
+        &p("foo.c"),
+    ]);
+    cc(&[
+        "-Wl,--enable-new-dtags",
+        "-Wl,-rpath,$ORIGIN/x:y",
+        "-o",
+        &p("app"),
+        &p("main.c"),
+        &format!("-L{}", libdir.display()),
+        "-l:foo.so",
+    ]);
+
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let rootfs = dir.join("rootfs");
+    let shown = libdir.canonicalize().unwrap().display().to_string();
+    for args in [
+        vec!["graph".to_string(), p("app")],
+        vec![
+            "pack".to_string(),
+            "-n".to_string(),
+            "-o".to_string(),
+            rootfs.display().to_string(),
+            p("app"),
+        ],
+    ] {
+        let out = Command::new(bin).args(&args).output().expect("run");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!("note: `foo.so` is in {shown}, a directory"))
+                && stderr.contains("unresolved dependencies: \"foo.so\""),
+            "{args:?}: {stderr}"
+        );
+    }
+    assert!(!walk_contains(&rootfs, "foo.so"), "nothing stages");
+}
+
+#[test]
 fn a_truncated_program_interpreter_gives_graph_and_pack_the_same_error() {
     // libc.so.6 lists the host loader as DT_NEEDED, not this copy, so only PT_INTERP reaches it.
     if !cc_available() {
