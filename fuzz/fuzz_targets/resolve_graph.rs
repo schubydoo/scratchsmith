@@ -7,7 +7,7 @@
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-use scratchsmith::resolver::{resolve_with, ElfInfo, LinkInfoSource, Sysroot};
+use scratchsmith::resolver::{resolve_with, ElfInfo, LinkInfoSource, Sysroot, UnparsableElf};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -96,16 +96,23 @@ struct MapSource {
 }
 
 impl LinkInfoSource for MapSource {
-    // Three outcomes, matching the trait's contract:
-    //   Err       -> the file could not be READ (driven by the fuzz input)
-    //   Ok(None)  -> read fine, does not parse as an ELF: a leaf
+    // The outcomes of the trait's contract:
+    //   Err       -> the file could not be READ (driven by the fuzz input), or it has no
+    //                facts and starts with the ELF magic, as `GoblinSource` fails a corrupt ELF
+    //   Ok(None)  -> no facts and no ELF magic: not an ELF
     //   Ok(Some)  -> scripted facts
     fn read(&self, path: &Path) -> anyhow::Result<Option<ElfInfo>> {
         let key = canonical(path);
         if self.unreadable.contains(&key) {
             anyhow::bail!("fuzz: cannot read {}", key.display());
         }
-        Ok(self.infos.get(&key).cloned())
+        match self.infos.get(&key) {
+            Some(info) => Ok(Some(info.clone())),
+            None if std::fs::read(&key).is_ok_and(|b| b.starts_with(b"\x7fELF")) => {
+                Err(UnparsableElf(key).into())
+            }
+            None => Ok(None),
+        }
     }
 }
 

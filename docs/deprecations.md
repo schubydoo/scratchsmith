@@ -82,27 +82,13 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.
 
 | Input | Warns since | Error in | What to do |
 |---|---|---|---|
-| A library that starts like an ELF and cannot be parsed | 1.6.0 | 2.0.0 | Replace the damaged file |
 | A program interpreter that starts like an ELF and cannot be parsed | 1.8.0 | 2.0.0 | Replace the damaged file |
 | `$PLATFORM` in a search path, on an architecture with no value for it | 1.6.0 | 2.0.0 | Write the directory name in the path |
 | A library found only through an inherited `RPATH`, by an object that has `RUNPATH` | 1.6.0 | 2.0.0 | Give that object the directory in its own `RUNPATH` |
 | `--no-build` into an output directory that is not empty | 1.6.0 | 2.0.0 | Use a new directory, or empty it first |
 
-The first four warnings come from `pack` and from `graph`, because both resolve the same
+The first three warnings come from `pack` and from `graph`, because both resolve the same
 dependency tree. The last one comes from `pack` only.
-
-### A library that cannot be parsed
-
-Scratchsmith reads each library that the binary needs, and then resolves the libraries that
-library needs in turn. A file that you name with `--include` and that is not an ELF at all has
-no dependencies, so scratchsmith stages it and continues. That stays true in 2.0.
-
-A truncated or corrupt library is a different case. The file starts with the ELF signature, and
-scratchsmith cannot read its list of dependencies. Today scratchsmith stages the damaged file
-and resolves nothing below it. The image can then ship without libraries that the program needs
-at run time, and the pack still exits `0`.
-
-Replace the file with an intact copy. Reinstall the package that owns it, or rebuild it.
 
 ### `$PLATFORM` with no value
 
@@ -214,3 +200,4 @@ In `scratchsmith.toml`, write `packages = ["report"]`. To take the 2.0 default n
 | `--label NAME` with no `=` | 1.5.0 | A usage error, exit code 2 | `--label NAME=value`, or `--label NAME=` for an empty value |
 | `--env NAME` with no `=` | 1.5.0 | A usage error, exit code 2 | `--env NAME=value` |
 | A `label` or `env` entry with no `=` in `scratchsmith.toml` | 1.5.0 | An error, exit code 1 | `"NAME=value"` |
+| A library that starts like an ELF and cannot be parsed | 1.6.0 | An error. `pack` and `graph` exit `1` and name the file | Replace the damaged file with an intact copy |

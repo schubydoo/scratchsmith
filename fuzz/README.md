@@ -27,12 +27,12 @@ outer parse. The `unpack_structured` target assembles a real OCI-layout archive 
 refuses to write a `..` entry, so neither builder reaches the escaping-entry bail in
 `unpack::run`. The unit tests cover that path instead. Keep both targets.
 
-The `resolve_graph` target reaches the "starts like an ELF and cannot be parsed" warning by one
-route only. Every library that the target creates also gets scripted facts. So the one file with
-the ELF magic and no facts is the target's own loader, `/lib64/ld-fuzz.so.2`. A `DT_NEEDED`
-entry must name it, which is why `resolve_graph.dict` holds that literal. Its line-break
-assertion exercises the search-path entry in the `$PLATFORM` warning. It does not exercise a
-file name, because every file name that the target creates is a safe one.
+The `resolve_graph` target reaches the "starts like an ELF and cannot be parsed" error for a
+library by one route only. Every library that the target creates also gets scripted facts. So
+the one file with the ELF magic and no facts is the target's own loader, `/lib64/ld-fuzz.so.2`.
+A `DT_NEEDED` entry must name it, which is why `resolve_graph.dict` holds that literal. Its
+line-break assertion exercises the search-path entry in the `$PLATFORM` warning. It does not
+exercise a file name, because every file name that the target creates is a safe one.
 
 ## Seeds
 
