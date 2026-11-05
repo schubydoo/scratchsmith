@@ -7,10 +7,11 @@
    its entries are searched in order. An empty entry means the directory the program starts in.
    A build cannot know that directory, so Scratchsmith does not search an empty entry. If the
    split entries miss, a string that holds `:` is also tried whole as one directory, before the
-   default directories. The loader finds a library there only through the image's `ld.so.cache`.
-   If `ldconfig` does not cache the library under the needed name, Scratchsmith does not take
-   it. The name must start with `lib` or `ld-` and hold `.so`, or start with `ld.so.` or
-   `ld64.so.`. The library's own soname must be that name, or absent. Scratchsmith never scrapes
+   default directories. The loader finds a `DT_NEEDED` library there only through the image's
+   `ld.so.cache`. If `ldconfig` does not cache the library under the needed name, Scratchsmith
+   does not take it. The name must start with `lib` or `ld-` and hold `.so`, or start with
+   `ld.so.` or `ld64.so.`. The library's own soname must be that name, or absent. An `--include`
+   file in that directory stages with no such check. Scratchsmith never scrapes
    the host's `ldd`, `ld.so.cache`, or `LD_LIBRARY_PATH`, so the result is deterministic.
 2. **Stage**: copy the interpreter to its verbatim path, mirror the libraries, recreate
    versioned-soname symlinks, regenerate `ld.so.cache`, and add the glibc NSS pieces.

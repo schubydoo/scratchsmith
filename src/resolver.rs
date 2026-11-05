@@ -8,8 +8,8 @@
 //! Each RPATH or RUNPATH string is split on ':' into entries, and `$ORIGIN`, `$LIB` and
 //! `$PLATFORM` are expanded inside each entry, not searched. After all split entries miss, a
 //! string that holds ':' is also tried whole as one directory, before the default dirs. ld.so
-//! finds a library there only through the image's ld.so.cache, so a file counts only when
-//! ldconfig caches it under the NEEDED name.
+//! finds a library there only through the image's ld.so.cache, so a DT_NEEDED file counts only
+//! when ldconfig caches it under the NEEDED name. An `--include` file there counts as in 1.x.
 
 use anyhow::{bail, Context, Result};
 use std::collections::{HashSet, VecDeque};
@@ -530,16 +530,20 @@ pub fn resolve_with(
         child_rpaths.extend(inherited_rpaths.iter().cloned());
         let mut child_literals = own_literals;
         child_literals.extend(inherited_literals.iter().cloned());
-        let inherited_all: Vec<PathBuf> = inherited_rpaths
-            .iter()
-            .chain(&inherited_literals)
-            .cloned()
-            .collect();
-
         for (i, soname) in obj.needed.iter().enumerate() {
+            // A DT_NEEDED name in a whole-string dir loads only through the cache. An
+            // --include is the operator's file, which the program may open by path or by its
+            // SONAME, so it stages from there as in 1.x.
+            let in_literals = |dirs: &[PathBuf], not_cached: &mut Vec<String>| {
+                if i < declared {
+                    find_cached(soname, dirs, source, not_cached)
+                } else {
+                    find_lib(soname, dirs, obj_dir, &sysroot.root)
+                }
+            };
             let mut not_cached = Vec::new();
             let found = find_lib(soname, &search, obj_dir, &sysroot.root)
-                .or_else(|| find_cached(soname, &literals, source, &mut not_cached))
+                .or_else(|| in_literals(&literals, &mut not_cached))
                 .or_else(|| find_lib(soname, &sysroot.default_dirs, obj_dir, &sysroot.root));
             let Some(found) = found else {
                 for hint in not_cached {
@@ -547,9 +551,12 @@ pub fn resolve_with(
                 }
                 // RUNPATH hides an ancestor's RPATH from this object. If the library sits
                 // there, say so, so the user is not told only that it is missing. The probe
-                // names the cause and nothing more: the soname stays missing.
+                // names the cause and nothing more: the soname stays missing. An inherited
+                // whole-string dir counts only as a RUNPATH entry of this object would count.
                 if !searches_rpath {
-                    if let Some(hit) = find_lib(soname, &inherited_all, obj_dir, &sysroot.root) {
+                    let probe = find_lib(soname, &inherited_rpaths, obj_dir, &sysroot.root)
+                        .or_else(|| in_literals(&inherited_literals, &mut Vec::new()));
+                    if let Some(hit) = probe {
                         let dir = hit.parent().unwrap_or(Path::new("/"));
                         push_unique(
                             &mut resolution.hints,
@@ -711,8 +718,8 @@ fn literal_dirs(
 // The first copy of `soname` in a whole-string directory that ld.so finds through the cache.
 // glibc 2.41 ldconfig (`search_dir`) caches a file only if its name passes `_dl_is_dso`, and
 // keys it by DT_SONAME (the file name only without one), while ld.so looks up the NEEDED name.
-// Each copy that fails either rule adds a hint to `not_cached`. A file that is not regular, or
-// does not read as an ELF, is kept: the walk refuses it with its own error, as before.
+// Each copy that fails either rule adds a hint to `not_cached`. A file whose name passes but that
+// is not regular, or does not read as an ELF, is kept: the walk refuses it with its own error.
 fn find_cached(
     soname: &str,
     dirs: &[PathBuf],
@@ -2497,6 +2504,79 @@ mod tests {
             "{res:?}"
         );
         assert!(res.missing.is_empty() && res.hints.is_empty(), "{res:?}");
+    }
+
+    #[test]
+    fn an_include_in_a_colon_dir_stages_whatever_its_name_and_soname() {
+        // --include is the operator's request to stage a file, which the program may open by
+        // path or by its SONAME. So the ldconfig rule for DT_NEEDED names does not apply: a
+        // data file, a plugin with a non-lib name and a dev name with another SONAME all
+        // stage from x:y, as in 1.x, and a same-named default-dir copy does not take over.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        let conf = root.join("app/x:y/app.conf");
+        let plugin = root.join("app/x:y/plugin.so");
+        let default_plugin = root.join("usr/lib/plugin.so");
+        let devname = root.join("app/x:y/libfoo.so");
+        for p in [&exe, &conf, &plugin, &default_plugin, &devname] {
+            touch(p);
+        }
+        let mut dev_info = elf(&[], &[], &[], None);
+        dev_info.soname = Some("libfoo.so.1".into());
+        // app.conf has no facts: the source reads it as a file that is not an ELF.
+        let infos = HashMap::from([
+            (canonical(&exe), elf(&[], &[], &["$ORIGIN/x:y"], None)),
+            (canonical(&plugin), elf(&[], &[], &[], None)),
+            (canonical(&default_plugin), elf(&[], &[], &[], None)),
+            (canonical(&devname), dev_info),
+        ]);
+        let includes = ["app.conf", "plugin.so", "libfoo.so"].map(String::from);
+        let res = resolve_with(&exe, &Sysroot::new(root), &includes, &MapSource { infos }).unwrap();
+        assert!(res.missing.is_empty() && res.hints.is_empty(), "{res:?}");
+        let staged: Vec<_> = res.libs.iter().map(|l| l.path.clone()).collect();
+        assert_eq!(
+            staged,
+            [canonical(&conf), canonical(&plugin), canonical(&devname)],
+            "{res:?}"
+        );
+    }
+
+    #[test]
+    fn the_runpath_hint_does_not_advise_a_colon_dir_that_ldconfig_skips() {
+        // exe (RPATH `$ORIGIN/x:y`) -> libmid (RUNPATH elsewhere) -> foo.so and libbar.so,
+        // both only in x:y. A RUNPATH that lists x:y would find libbar.so through the cache,
+        // but not foo.so, so only libbar.so gets that advice.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/exe");
+        let mid = root.join("app/x:y/libmid.so");
+        let foo = root.join("app/x:y/foo.so");
+        let bar = root.join("app/x:y/libbar.so");
+        for p in [&exe, &mid, &foo, &bar] {
+            touch(p);
+        }
+        let infos = HashMap::from([
+            (
+                canonical(&exe),
+                elf(&["libmid.so"], &["$ORIGIN/x:y"], &[], None),
+            ),
+            (
+                canonical(&mid),
+                elf(&["foo.so", "libbar.so"], &[], &["/opt/none"], None),
+            ),
+            (canonical(&foo), elf(&[], &[], &[], None)),
+            (canonical(&bar), elf(&[], &[], &[], None)),
+        ]);
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert_eq!(res.missing, ["foo.so", "libbar.so"], "{res:?}");
+        assert_eq!(res.hints.len(), 1, "{:?}", res.hints);
+        assert!(
+            res.hints[0].starts_with("`libbar.so` is in ")
+                && res.hints[0].contains("a RUNPATH that lists"),
+            "{}",
+            res.hints[0]
+        );
     }
 
     #[test]

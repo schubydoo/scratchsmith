@@ -698,6 +698,67 @@ fn a_library_that_ldconfig_does_not_cache_in_a_colon_directory_is_missing() {
 }
 
 #[test]
+fn an_include_in_a_colon_directory_stages_as_in_1x() {
+    // The ldconfig rule is for DT_NEEDED names. An --include file is the operator's: a data
+    // file, a plugin the program opens by path, or a dev name whose SONAME differs. Each one
+    // in `x:y`, reached by RUNPATH `$ORIGIN/x:y`, stages from there as before.
+    if !cc_available() {
+        skip_required("no C compiler");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let libdir = dir.join("x:y");
+    std::fs::create_dir(&libdir).unwrap();
+    std::fs::write(dir.join("foo.c"), "int foo(void){return 42;}").unwrap();
+    std::fs::write(dir.join("main.c"), "int main(void){return 0;}").unwrap();
+    std::fs::write(libdir.join("app.conf"), "key = value\n").unwrap();
+    let p = |name: &str| dir.join(name).to_str().unwrap().to_string();
+    cc(&["-shared", "-fPIC", "-o", &p("x:y/plugin.so"), &p("foo.c")]);
+    cc(&[
+        "-shared",
+        "-fPIC",
+        "-Wl,-soname,libfoo.so.1",
+        "-o",
+        &p("x:y/libfoo.so.1.2"),
+        &p("foo.c"),
+    ]);
+    std::os::unix::fs::symlink("libfoo.so.1.2", libdir.join("libfoo.so")).unwrap();
+    cc(&[
+        "-Wl,--enable-new-dtags",
+        "-Wl,-rpath,$ORIGIN/x:y",
+        "-o",
+        &p("app"),
+        &p("main.c"),
+    ]);
+
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let staged_dir = libdir.canonicalize().unwrap();
+    // Check every shape before failing, so one report names each one that broke.
+    let mut broken = Vec::new();
+    for (include, file) in [
+        ("app.conf", "app.conf"),
+        ("plugin.so", "plugin.so"),
+        ("libfoo.so", "libfoo.so.1.2"),
+    ] {
+        let rootfs = dir.join(format!("rootfs-{include}"));
+        let out = Command::new(bin)
+            .args(["pack", "-n", "-o", rootfs.to_str().unwrap()])
+            .args(["--include", include, &p("app")])
+            .output()
+            .expect("run");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let staged = rootfs
+            .join(staged_dir.strip_prefix("/").unwrap())
+            .join(file);
+        if !out.status.success() || !staged.is_file() {
+            broken.push(format!("--include {include}: {:?}: {stderr}", out.status));
+        }
+    }
+    assert!(broken.is_empty(), "{broken:#?}");
+}
+
+#[test]
 fn a_truncated_program_interpreter_gives_graph_and_pack_the_same_error() {
     // libc.so.6 lists the host loader as DT_NEEDED, not this copy, so only PT_INTERP reaches it.
     if !cc_available() {

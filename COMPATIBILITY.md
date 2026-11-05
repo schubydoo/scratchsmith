@@ -103,7 +103,8 @@ Each item below warned on stderr before 2.0, from the release that the Deprecati
 with five exceptions. The `--no-build` output directory that cannot be listed had no warning.
 An `--include` file that is not a regular file and starts like an ELF had no warning.
 A program or an `--include` library at a package record path had no warning.
-A library that `ldconfig` does not cache in a directory whose name holds `:` had no warning.
+A `DT_NEEDED` library that `ldconfig` does not cache in a directory whose name holds `:` had no
+warning.
 The last item changed an exit code with no warning.
 The [Deprecations](docs/deprecations.md) page lists what to write instead.
 
@@ -139,8 +140,9 @@ The [Deprecations](docs/deprecations.md) page lists what to write instead.
   fails, with exit code 1. Before, the pack exited 0, but the record replaced the file,
   and with `sbom` the pack then deleted it. 1.x did not warn for it. Remove `sbom` and `image`
   from `--packages`, or move the file on the host.
-- A library can sit only in a directory whose name holds `:`, such as `x:y` from `RUNPATH`
-  `$ORIGIN/x:y`. If `ldconfig` does not cache it under the needed name, it is now missing.
+- A library that the program or a library needs (`DT_NEEDED`) can sit only in a directory whose
+  name holds `:`, such as `x:y` from `RUNPATH` `$ORIGIN/x:y`. If `ldconfig` does not cache it
+  under the needed name, it is now missing. An `--include` file there still stages as in 1.x.
   `ldconfig` caches a name that starts with `lib` or `ld-` and holds `.so`. It also caches a name
   that starts with `ld.so.` or `ld64.so.`. The library's soname must be that name, or absent.
   `pack` and `graph` fail with exit code 1 and a `note:` line. Before, the pack exited 0, and the

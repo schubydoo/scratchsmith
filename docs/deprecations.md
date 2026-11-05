@@ -15,7 +15,7 @@ default. It also shows five changes in 2.0.0 with no warning first:
 - an output directory that cannot be listed
 - an `--include` file that is not a regular file
 - a program or a library at a package record path
-- a library in a directory whose name holds `:`
+- a `DT_NEEDED` library in a directory whose name holds `:`
 
 A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.
@@ -103,7 +103,7 @@ No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list
 | `$PLATFORM` in a search path, on an architecture with no value for it | 1.6.0 | An error. `pack` and `graph` exit `1` and name the file that holds the search path | Write the directory name in the path |
 | A program interpreter (`PT_INTERP`) that starts like an ELF and cannot be parsed | 1.8.0 | An error. `pack` and `graph` exit `1` and name the file | Replace the damaged loader with an intact copy |
 | An explicit `sbom` or `image` in `--packages`, with the program or an `--include` library at a package record path on the host | Not warned | An error. `pack` exits `1` and names the path. 1.x exited 0, and the record replaced the file | Remove `sbom` and `image` from `--packages`, or move the file on the host |
-| A library found only in a directory whose name holds `:`, which `ldconfig` does not cache under the needed name | Not warned | Missing. `pack` and `graph` exit `1`, and a `note:` line names the directory. 1.x exited 0, and the image exited 127 at start | Move the library to a directory with no `:` in its name |
+| A `DT_NEEDED` library only in a directory whose name holds `:`, which `ldconfig` does not cache | Not warned | Missing. `pack` and `graph` exit `1`, and a `note:` line names the directory. 1.x exited 0, and the image exited 127 at start. An `--include` file there still stages | Move the library to a directory with no `:` in its name |
 
 ### A library found only through an inherited `RPATH`
 
