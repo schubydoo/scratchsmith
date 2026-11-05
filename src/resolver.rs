@@ -447,7 +447,8 @@ pub fn resolve_with(
     }
 
     // Breadth-first walk. Each item carries the transitive RPATH dirs contributed
-    // by its ancestors — RPATH is inherited down the tree, RUNPATH is not.
+    // by its ancestors — RPATH is inherited down the tree, RUNPATH is not. The two lists are
+    // the split entries and the whole-string fallbacks (see `literal_dirs`).
     let mut visited = HashSet::new();
     visited.insert(root_path.clone());
     let mut queue = VecDeque::new();
@@ -456,11 +457,13 @@ pub fn resolve_with(
     queue.push_back((
         root_path,
         root_info.clone(),
-        Vec::<PathBuf>::new(),
+        (Vec::<PathBuf>::new(), Vec::<PathBuf>::new()),
         declared_needed,
     ));
 
-    while let Some((obj_path, obj, inherited_rpaths, declared)) = queue.pop_front() {
+    while let Some((obj_path, obj, (inherited_rpaths, inherited_literals), declared)) =
+        queue.pop_front()
+    {
         let obj_dir = obj_path.parent().unwrap_or(Path::new("/"));
 
         // One glibc rule, read twice below: an object that declares RUNPATH searches NO
@@ -495,9 +498,11 @@ pub fn resolve_with(
         }
         let own_rpaths = build_dirs(used_rpaths, obj_dir, &sysroot.root, &root_info);
         let runpath_dirs = build_dirs(&obj.runpaths, obj_dir, &sysroot.root, &root_info);
+        let own_literals = literal_dirs(used_rpaths, obj_dir, &sysroot.root, &root_info);
+        let runpath_literals = literal_dirs(&obj.runpaths, obj_dir, &sysroot.root, &root_info);
 
         // Search order: RPATH (own, then ancestors' — transitive) -> RUNPATH (this
-        // object only) -> default dirs. LD_LIBRARY_PATH is deliberately omitted, and so is
+        // object only) -> the whole-string fallbacks, in the same order -> default dirs. LD_LIBRARY_PATH is deliberately omitted, and so is
         // the host's /etc/ld.so.cache: resolution never trusts the host's loader state.
         let mut search: Vec<PathBuf> = Vec::new();
         search.extend(own_rpaths.iter().cloned());
@@ -505,6 +510,11 @@ pub fn resolve_with(
             search.extend(inherited_rpaths.iter().cloned());
         }
         search.extend(runpath_dirs);
+        search.extend(own_literals.iter().cloned());
+        if searches_rpath {
+            search.extend(inherited_literals.iter().cloned());
+        }
+        search.extend(runpath_literals);
         search.extend(sysroot.default_dirs.iter().cloned());
 
         // Children inherit the RPATH view this object searched (own + ancestors'), never its
@@ -515,6 +525,13 @@ pub fn resolve_with(
         // DT_RPATH entry there, so no later ancestor walk sees it. Measured on glibc 2.41.
         let mut child_rpaths = own_rpaths;
         child_rpaths.extend(inherited_rpaths.iter().cloned());
+        let mut child_literals = own_literals;
+        child_literals.extend(inherited_literals.iter().cloned());
+        let inherited_all: Vec<PathBuf> = inherited_rpaths
+            .iter()
+            .chain(&inherited_literals)
+            .cloned()
+            .collect();
 
         for (i, soname) in obj.needed.iter().enumerate() {
             let Some(found) = find_lib(soname, &search, obj_dir, &sysroot.root) else {
@@ -522,7 +539,7 @@ pub fn resolve_with(
                 // there, say so, so the user is not told only that it is missing. The probe
                 // names the cause and nothing more: the soname stays missing.
                 if !searches_rpath {
-                    if let Some(hit) = find_lib(soname, &inherited_rpaths, obj_dir, &sysroot.root) {
+                    if let Some(hit) = find_lib(soname, &inherited_all, obj_dir, &sysroot.root) {
                         let dir = hit.parent().unwrap_or(Path::new("/"));
                         push_unique(
                             &mut resolution.hints,
@@ -604,7 +621,12 @@ pub fn resolve_with(
                 }
                 Some(child) => {
                     let declared = child.needed.len();
-                    queue.push_back((real, child, child_rpaths.clone(), declared));
+                    queue.push_back((
+                        real,
+                        child,
+                        (child_rpaths.clone(), child_literals.clone()),
+                        declared,
+                    ));
                 }
                 // The name came out of an ELF: a path, or a bare name found through a search
                 // path the ELF set, can point at any host file, which would then ship in the
@@ -655,16 +677,35 @@ fn search_entries(raw: &[String]) -> impl Iterator<Item = &str> {
 // absolute paths inside the sysroot, and treat anything relative as origin-relative.
 fn build_dirs(raw: &[String], origin_dir: &Path, root: &Path, root_info: &ElfInfo) -> Vec<PathBuf> {
     search_entries(raw)
-        .map(|entry| {
-            let expanded = expand_tokens(entry, origin_dir, root_info);
-            let p = Path::new(&expanded);
-            if p.is_absolute() {
-                reroot(root, p)
-            } else {
-                origin_dir.join(p)
-            }
-        })
+        .map(|entry| entry_dir(entry, origin_dir, root, root_info))
         .collect()
+}
+
+// Each string that holds a ':', read whole as one directory, as 1.x read it. ld.so never
+// searches that directory, but the staged ld.so.cache lists every directory a library came
+// from, and ldconfig keeps a `:` in a directory name. So a library found only there loads from
+// the cache, after RPATH and RUNPATH miss. Measured with a v1.9.0 image on glibc 2.41.
+fn literal_dirs(
+    raw: &[String],
+    origin_dir: &Path,
+    root: &Path,
+    root_info: &ElfInfo,
+) -> Vec<PathBuf> {
+    raw.iter()
+        .filter(|list| list.contains(':'))
+        .map(|list| entry_dir(list, origin_dir, root, root_info))
+        .collect()
+}
+
+// One search-path entry as a concrete directory.
+fn entry_dir(entry: &str, origin_dir: &Path, root: &Path, root_info: &ElfInfo) -> PathBuf {
+    let expanded = expand_tokens(entry, origin_dir, root_info);
+    let p = Path::new(&expanded);
+    if p.is_absolute() {
+        reroot(root, p)
+    } else {
+        origin_dir.join(p)
+    }
 }
 
 // Find the first search dir containing `soname`. A soname with a slash is a path,
@@ -2041,7 +2082,7 @@ mod tests {
         let mut infos =
             HashMap::from([(canonical(&exe), elf(&["libfoo.so"], rpaths, runpaths, None))]);
         // Every copy the tests place is a parsable leaf.
-        for dir in ["app", "app/a", "app/b", "app/x86_64"] {
+        for dir in ["app", "app/a", "app/b", "app/x86_64", "app/x", "app/x:y"] {
             infos.insert(
                 canonical(&root.join(dir).join("libfoo.so")),
                 elf(&[], &[], &[], None),
@@ -2196,6 +2237,46 @@ mod tests {
             "{}",
             res.hints[0]
         );
+    }
+
+    #[test]
+    fn a_directory_named_with_a_colon_is_still_found_after_the_split_misses() {
+        // ld.so splits `$ORIGIN/x:y` into `$ORIGIN/x` and `y`, but the image's ld.so.cache
+        // lists the staged `x:y` directory, so 1.x images with it start. Keep that result.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let colon = root.join("app/x:y/libfoo.so");
+        touch(&colon);
+        let list = "$ORIGIN/x:y";
+        assert_eq!(
+            resolve_one(root, &[list], &[]),
+            Some(canonical(&colon)),
+            "RPATH"
+        );
+        assert_eq!(
+            resolve_one(root, &[], &[list]),
+            Some(canonical(&colon)),
+            "RUNPATH"
+        );
+        // A copy that a split entry reaches comes first, as the loader takes it.
+        let split = root.join("app/x/libfoo.so");
+        touch(&split);
+        assert_eq!(resolve_one(root, &[], &[list]), Some(canonical(&split)));
+
+        // An inherited RPATH keeps the whole-string reading for the child too.
+        let exe = root.join("app/exe");
+        let mid = root.join("app/x:y/libmid.so");
+        let leaf = root.join("app/x:y/libleaf.so");
+        for p in [&mid, &leaf] {
+            touch(p);
+        }
+        let infos = HashMap::from([
+            (canonical(&exe), elf(&["libmid.so"], &[list], &[], None)),
+            (canonical(&mid), elf(&["libleaf.so"], &[], &[], None)),
+            (canonical(&leaf), elf(&[], &[], &[], None)),
+        ]);
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert!(has(&res, "libleaf.so") && res.missing.is_empty(), "{res:?}");
     }
 
     #[test]
