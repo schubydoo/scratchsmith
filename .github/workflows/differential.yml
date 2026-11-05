@@ -54,4 +54,27 @@ jobs:
           export SCRATCHSMITH_DIFF_SEED="${SEED_INPUT:-$RUN_ID}"
           export SCRATCHSMITH_DIFF_CASES="${CASES_INPUT:-3000}"
           echo "seed $SCRATCHSMITH_DIFF_SEED, $SCRATCHSMITH_DIFF_CASES cases"
-          cargo test --test differential -- --nocapture
+          cargo test --test differential -- --nocapture 2>&1 | tee sweep.log
+      # The failure email links to this run. Put each broken case at the top of it, so the
+      # reader does not have to search a long log for the seeds.
+      - name: Summarize broken cases
+        if: failure()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Differential sweep failed"
+            echo
+            echo "Each line is one broken case. To repeat one, run:"
+            echo
+            echo '```sh'
+            echo 'SCRATCHSMITH_DIFF_SEED=<seed> SCRATCHSMITH_DIFF_CASES=1 cargo test --test differential'
+            echo '```'
+            echo
+            if [ -f sweep.log ] && grep -qE '^seed 0x[0-9a-f]+: ' sweep.log; then
+              # The backticks are Markdown for the summary, not shell.
+              # shellcheck disable=SC2016
+              grep -E '^seed 0x[0-9a-f]+: ' sweep.log | sed -E 's/^(seed 0x[0-9a-f]+): /- `\1`: /'
+            else
+              echo "No broken case was printed, so the build or the setup failed. Read the Sweep step log."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
