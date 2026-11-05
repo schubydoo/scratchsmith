@@ -6,7 +6,8 @@
 //! object's own, then its ancestors' — RPATH is transitive, and all of it is ignored when
 //! the object also declares RUNPATH), then its own DT_RUNPATH, then the sysroot default dirs.
 //! Each RPATH or RUNPATH string is split on ':' into entries, and `$ORIGIN`, `$LIB` and
-//! `$PLATFORM` are expanded inside each entry, not searched.
+//! `$PLATFORM` are expanded inside each entry, not searched. After all split entries miss, a
+//! string that holds ':' is also tried whole as one directory, before the default dirs.
 
 use anyhow::{bail, Context, Result};
 use std::collections::{HashSet, VecDeque};
@@ -502,8 +503,9 @@ pub fn resolve_with(
         let runpath_literals = literal_dirs(&obj.runpaths, obj_dir, &sysroot.root, &root_info);
 
         // Search order: RPATH (own, then ancestors' — transitive) -> RUNPATH (this
-        // object only) -> the whole-string fallbacks, in the same order -> default dirs. LD_LIBRARY_PATH is deliberately omitted, and so is
-        // the host's /etc/ld.so.cache: resolution never trusts the host's loader state.
+        // object only) -> the whole-string fallbacks, in the same order -> default dirs.
+        // LD_LIBRARY_PATH is deliberately omitted, and so is the host's /etc/ld.so.cache:
+        // resolution never trusts the host's loader state.
         let mut search: Vec<PathBuf> = Vec::new();
         search.extend(own_rpaths.iter().cloned());
         if searches_rpath {
