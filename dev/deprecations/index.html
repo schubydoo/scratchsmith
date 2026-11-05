@@ -657,6 +657,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#a-command-line-refused-after-the-parse-exits-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A command line refused after the parse exits 2
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1020,6 +1031,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#a-command-line-refused-after-the-parse-exits-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A command line refused after the parse exits 2
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1053,7 +1075,8 @@ and what you write instead.</p>
 <p>This page has one list for each kind of change. Three kinds change only in a major version:
 deprecated input shapes, tolerances, and changing defaults. Refused input is a fourth kind,
 because a minor release can refuse input that is the attack itself. The last list, Removed in
-2.0.0, shows what version 2.0.0 now rejects, after its deprecation cycle ended.</p>
+2.0.0, shows what version 2.0.0 now rejects, after its deprecation cycle ended. It also shows one
+exit code that changed in 2.0.0 with no cycle, and it says why.</p>
 <p>A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.</p>
 <p>A tolerance is different. Scratchsmith accepts input today that it cannot use in full, and the
@@ -1239,7 +1262,7 @@ warning.</p>
 <tr>
 <td>A <code>label</code> or <code>env</code> entry with no <code>=</code> in <code>scratchsmith.toml</code></td>
 <td>1.5.0</td>
-<td>An error, exit code 1</td>
+<td>A usage error, exit code 2</td>
 <td><code>"NAME=value"</code></td>
 </tr>
 <tr>
@@ -1254,6 +1277,12 @@ warning.</p>
 <td>Reported as missing, and <code>pack</code> and <code>graph</code> fail</td>
 <td>Give that object the directory in its own <code>RUNPATH</code></td>
 </tr>
+<tr>
+<td>A command line refused after the parse, such as <code>--watch --format json</code></td>
+<td>Not warned</td>
+<td>A usage error, exit code 2. 1.x exited 1</td>
+<td>Fix the command line. A script that tests for exactly <code>1</code> must also accept <code>2</code></td>
+</tr>
 </tbody>
 </table>
 <h3 id="a-library-found-only-through-an-inherited-rpath">A library found only through an inherited <code>RPATH</code><a class="headerlink" href="#a-library-found-only-through-an-inherited-rpath" title="Permanent link">&para;</a></h3>
@@ -1265,6 +1294,14 @@ needs the file. To fix it, link the library that needs the file with a <code>RUN
 holds the directory:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-shared<span class="w"> </span>-fPIC<span class="w"> </span>-Wl,--enable-new-dtags<span class="w"> </span>-Wl,-rpath,/opt/app/lib<span class="w"> </span>-o<span class="w"> </span>libmid.so<span class="w"> </span>mid.c<span class="w"> </span>-lleaf
 </code></pre></div>
+<h3 id="a-command-line-refused-after-the-parse-exits-2">A command line refused after the parse exits 2<a class="headerlink" href="#a-command-line-refused-after-the-parse-exits-2" title="Permanent link">&para;</a></h3>
+<p>Scratchsmith refuses some command lines only after the parse, because the refusal needs a
+second flag or the config. Examples are <code>--watch --format json</code>, <code>pack</code> with no binary, and one
+<code>--add-file</code> image path given twice. In 1.x these refusals exited <code>1</code>, the code for a failed
+pack, and printed no warning about a change. In 2.0.0 they exit <code>2</code>, the same code as an
+argument-parse error. This change had no deprecation cycle, because the 1.x contract promised
+only a non-zero code for these refusals. A script that tests for exactly <code>1</code> must also accept
+<code>2</code>.</p>
 
 
 

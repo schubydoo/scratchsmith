@@ -1474,8 +1474,9 @@ that the layer stays reproducible. A source at mode <code>0600</code> is therefo
 the image. Do not add a secret this way. Only a <code>--no-build --output</code> rootfs keeps the source
 bits.</p>
 <p>With the default <code>--symlinks copy-all</code>, the flag takes regular files only. If the source is
-missing or is a directory, the pack fails and names the path. If <code>DST</code> is already in the image,
-the pack fails as well, so a second entry for one path cannot quietly replace the first. A file
+missing or is a directory, the pack fails and names the path. One <code>DST</code> given in two entries is
+a usage error with exit code 2, so a second entry cannot quietly replace the first. If <code>DST</code> is
+already in the image for another reason, the pack fails as well. A file
 you asked for is never skipped without a word. The added files count toward <code>--max-size</code>.</p>
 <p>Another <code>--symlinks</code> mode changes two of those rules, and only for a source that is itself a
 symlink. A preserved link is staged as a link, so a link to a directory no longer fails. Under

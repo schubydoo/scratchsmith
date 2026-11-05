@@ -775,7 +775,14 @@ stable contract. A breaking change to any of them requires a new major version:<
 <li><strong><code>scratchsmith.toml</code></strong>: the configuration keys and their types (the <a href="../configuration/">Configuration</a> reference).</li>
 <li><strong><code>--format json</code></strong>: the field names and types of the <code>pack</code>, <code>index</code>, <code>graph</code>, <code>diff</code>, and <code>unpack</code>
   reports (the schema CI gates consume). Each is pinned by a golden test, so a change is always deliberate.</li>
-<li><strong>Exit codes</strong>: <code>0</code> on success, <code>2</code> on an argument-parse error, and non-zero on any other failure.</li>
+<li><strong>Exit codes</strong>: <code>0</code> on success. <code>2</code> on a usage error: an argument-parse error, or a command line
+  that scratchsmith refuses after the parse, such as <code>--watch --format json</code> or <code>pack</code> with no
+  binary. <code>1</code> on any other failure, such as a failed pack. Before 2.0.0, a refusal made after the
+  parse exited <code>1</code>.
+  For <code>scratchsmith.toml</code> the same rule holds. A value that parses and is then refused exits <code>2</code>,
+  for example a <code>label</code> with no <code>=</code>. A file that cannot be read or parsed exits <code>1</code>, for example a
+  value of the wrong type or an unknown key. A nested <code>[profile.a.profile.b]</code> table is refused
+  when the file loads, so it exits <code>1</code> too.</li>
 </ul>
 <p><strong>Not</strong> frozen (these can change in any release): human-readable text and warning wording, log
 output, <code>doctor</code>'s exact phrasing, the Rust <strong>library API</strong>, and the exact bytes of the produced
