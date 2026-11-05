@@ -57,8 +57,13 @@ struct Lib {
     // interesting part is the PARTIALLY BUILT `Resolution` that precedes the failure, since
     // the library is pushed to `libs` before its facts are read.
     unreadable: bool,
-    // Write data with no ELF magic: drives the refusal of a non-ELF file an ELF names.
+    // Write data with no ELF magic. With `no_facts`, drives the refusal of a non-ELF file an
+    // ELF names.
     non_elf: bool,
+    // Script no facts, so the source judges the file by its bytes: with the ELF magic it fails
+    // as "starts like an ELF and cannot be parsed" in the walk. Without this, the one file
+    // with no facts is the loader, and a corrupt loader fails at PT_INTERP before the walk.
+    no_facts: bool,
 }
 
 // The buckets a real file may sit in: a couple of Sysroot default dirs plus the binary's own
@@ -209,7 +214,9 @@ fuzz_target!(|scn: Scenario| {
         if write(&path, magic).is_err() {
             continue;
         }
-        infos.insert(canonical(&path), lib.facts.into_elf());
+        if !lib.no_facts {
+            infos.insert(canonical(&path), lib.facts.into_elf());
+        }
         // The library is still a real file and still resolves; only READING its facts fails.
         // That is the shape that matters: it lands in `libs` before the read, so this drives
         // the resolver's propagation out of a partially built `Resolution`.
