@@ -861,7 +861,7 @@ build. It is purpose-built for the hard case and useful for the easy one.</p>
 <ul>
 <li><strong>glibc / host-arch only (for now).</strong> Dynamic musl/Alpine binaries are detected by their
   interpreter and <strong>rejected with a clear error</strong> before anything is staged. You never get a
-  silently broken image. This is a v1 scope choice, not a permanent boundary: musl uses a
+  silently broken image. This is a scope choice, not a permanent boundary: musl uses a
   different loader model and has no NSS, so it needs its own resolver backend (a possible
   future addition). (A <em>static</em> musl binary is a single self-contained file and packs fine
   today.) No cross-arch resolution yet.</li>

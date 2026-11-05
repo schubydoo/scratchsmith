@@ -1157,7 +1157,9 @@
 <p>Give <code>--output</code> a new directory or an empty one. Scratchsmith does not empty the directory, so
 a directory that holds anything is an error, and nothing is staged. A file is an error
 too. A directory that scratchsmith cannot list is an error, because it cannot prove the directory
-is empty. Remove the old directory first, or choose another.</p>
+is empty. Remove the old directory first, or choose another. A pack that fails after it starts
+to stage, for example on <code>--deny</code>, leaves the partial tree in the directory. Remove the directory
+before you run the pack again.</p>
 <p>Or write a <strong>daemonless OCI archive</strong> (loadable by skopeo/buildah, and pushable to a registry with
 no Docker daemon):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--oci-archive<span class="w"> </span>./app.oci.tar<span class="w"> </span>./app
@@ -1311,9 +1313,10 @@ before. The scan did not see them.</p>
 <a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"deb"</span><span class="p">,</span>
 <a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">  </span><span class="nt">"files"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 <a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">    </span><span class="s2">"/lib64/ld-linux-x86-64.so.2"</span><span class="p">,</span>
-<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">    </span><span class="s2">"/usr/lib/x86_64-linux-gnu/libc.so.6"</span>
-<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">  </span><span class="p">]</span>
-<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="p">}</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">    </span><span class="s2">"/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"</span><span class="p">,</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="w">    </span><span class="s2">"/usr/lib/x86_64-linux-gnu/libc.so.6"</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a><span class="p">}</span>
 </code></pre></div>
 <ul>
 <li><code>source</code> is the source package, which is the name that security advisories use.</li>
@@ -1504,7 +1507,7 @@ happens instead.</p>
 <tbody>
 <tr>
 <td><code>copy-all</code></td>
-<td>The target's content. An <code>--add-file</code> source gets it at the named path. The packed binary gets it at its real path, with nothing at the named path. This is the default, and what every earlier release did.</td>
+<td>The target's content. An <code>--add-file</code> source gets it at the named path. The packed binary gets it at its real path, with nothing at the named path. This is the default, and the only behavior before 1.4.0.</td>
 </tr>
 <tr>
 <td><code>preserve</code></td>
@@ -1556,7 +1559,8 @@ list. Locale data counts toward <code>--max-size</code>.</p>
 </code></pre></div>
 <p>The tree shows each library in full the first time. A later repeat is marked <code>(*)</code>, so
 a shared dependency or a cycle does not print twice. A dependency that does not resolve is
-shown as <code>(missing)</code>. The last line names the loader (<code>PT_INTERP</code>).</p>
+shown as <code>(missing)</code>, and <code>graph</code> then exits with code 1 after it prints the tree. If the binary
+has a loader (<code>PT_INTERP</code>), the last line names it.</p>
 <h2 id="gate-on-libraries">Gate on libraries<a class="headerlink" href="#gate-on-libraries" title="Permanent link">&para;</a></h2>
 <p>To enforce a library policy in CI, fail the pack on a forbidden library or a missing required
 one:</p>
@@ -1616,6 +1620,8 @@ index by digest.</p>
 command. So <code>--healthcheck /app --healthcheck --health</code> is the one command <code>["/app", "--health"]</code>,
 not two healthchecks. It is the same as <code>healthcheck = ["/app", "--health"]</code> in the
 <a href="../configuration/">configuration file</a>.</p>
+<p>Each <code>--env</code> and <code>--label</code> entry needs an <code>=</code>. An entry with no <code>=</code> is an error with exit code 2.
+To set an empty value, end the entry with <code>=</code>, as in <code>--label build=</code>.</p>
 <h2 id="pack-again-on-every-change">Pack again on every change<a class="headerlink" href="#pack-again-on-every-change" title="Permanent link">&para;</a></h2>
 <p>While you develop the program that you pack, <code>--watch</code> packs it again after each build. It
 packs one time, and then packs again each time the binary changes:</p>
@@ -1650,7 +1656,8 @@ see <strong><a href="../github-action/">GitHub Action</a></strong>.</p>
 <h2 id="run-pack-in-a-container-the-toolbox-image">Run <code>pack</code> in a container — the <code>:toolbox</code> image<a class="headerlink" href="#run-pack-in-a-container-the-toolbox-image" title="Permanent link">&para;</a></h2>
 <p>The <code>FROM scratch</code> release image carries the binary and nothing else: no shell, no tools, and no
 certificate store. It runs every subcommand that needs no external tool. That is <code>lint</code>,
-<code>doctor</code>, <code>graph</code>, <code>diff</code>, <code>unpack</code>, and <code>index</code>, plus the <code>--version</code> and <code>--completions</code> flags.
+<code>doctor</code>, <code>graph</code>, <code>diff</code>, <code>unpack</code>, and <code>index</code> without <code>--sign</code>, plus the <code>--version</code> and
+<code>--completions</code> flags.
 <code>doctor</code> is the one that looks like an exception: it probes for each external tool and reports
 every one as missing, which is the right answer on an image that carries none.</p>
 <p><code>index</code> reaches a registry over HTTPS, which needs a list of trusted certificate authorities.
@@ -1669,8 +1676,9 @@ variable.</p>
 <p>One subcommand does not run there. <code>pack</code> needs ldconfig, strip, and the SBOM tools.</p>
 <p>The <strong><code>:toolbox</code></strong> image bundles the <code>pack</code> toolchain (ldconfig, strip, syft, grype, cosign,
 upx, tini, the docker CLI) on a Wolfi base. With it, <code>pack</code> itself runs inside a container.
-That image has no dpkg and no rpm database, so <code>--packages</code> has no data there: <code>packages</code> is
-<code>null</code>, and the <code>sbom</code> and <code>image</code> outputs fail.</p>
+That image has no dpkg and no rpm database, so <code>--packages</code> has no data there. The <code>packages</code>
+field is <code>null</code>. An <code>image</code> output that you set fails. If <code>--sbom</code> or <code>--scan</code> is on, a <code>sbom</code>
+output that you set fails too. The default stays quiet.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1"># Daemonless — no socket needed; write an OCI archive or push straight to a registry.</span>
 <a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="w">  </span>pack<span class="w"> </span>--oci-archive<span class="w"> </span>app.oci.tar<span class="w"> </span>./app

@@ -876,7 +876,7 @@ report, a non-root image, and no Dockerfile, it is equally handy. More:
 <td>✅</td>
 </tr>
 <tr>
-<td>Image metadata: labels (<code>--label</code>), <code>HEALTHCHECK</code> (<code>--healthcheck</code>)</td>
+<td>Image metadata: <code>--entrypoint</code>, <code>--cmd</code>, <code>--env</code>, <code>--workdir</code>, <code>--user</code>, labels (<code>--label</code>), <code>HEALTHCHECK</code> (<code>--healthcheck</code>)</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -928,7 +928,7 @@ report, a non-root image, and no Dockerfile, it is equally handy. More:
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>Image diff</strong>: <code>diff &lt;a&gt; &lt;b&gt;</code> (files added, removed and changed, plus the size delta, and <code>--exit-code</code> gates CI)</td>
+<td><strong>Rootfs diff</strong>: <code>diff &lt;a&gt; &lt;b&gt;</code> (compare two staged rootfs directories: files added, removed and changed, plus the size delta, and <code>--exit-code</code> gates CI. To compare images, <code>unpack</code> them first)</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -943,7 +943,7 @@ report, a non-root image, and no Dockerfile, it is equally handy. More:
 <li><a href="usage/">Usage</a>: pack recipes and daemonless output.</li>
 <li><a href="github-action/">GitHub Action</a>: pack in a CI workflow with the composite action.</li>
 <li><a href="configuration/">Configuration</a>: the <code>scratchsmith.toml</code> key reference and profiles.</li>
-<li><a href="deprecations/">Deprecations</a>: what a warning means, what ends in 2.0, and what to write instead.</li>
+<li><a href="deprecations/">Deprecations</a>: what a warning means, what 2.0 removed, and what to write instead.</li>
 <li><a href="verifying/">Verifying releases</a>: cosign signatures, SLSA provenance, and the SBOM.</li>
 <li><a href="comparison/">Comparison &amp; limitations</a>: how it compares, and what it does not do.</li>
 <li><a href="architecture/">Architecture</a>: how resolve → stage → assemble works, and the 1.0 stability contract.</li>

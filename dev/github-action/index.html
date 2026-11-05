@@ -843,7 +843,7 @@ the <code>packages</code> input to <code>none</code>.</p>
 <tr>
 <td><code>env</code></td>
 <td></td>
-<td>Image environment entries, one <code>KEY=VALUE</code> per line.</td>
+<td>Image environment entries, one <code>KEY=VALUE</code> per line. A line with no <code>=</code> fails the pack. Write <code>KEY=</code> for an empty value.</td>
 </tr>
 <tr>
 <td><code>workdir</code></td>
@@ -858,7 +858,7 @@ the <code>packages</code> input to <code>none</code>.</p>
 <tr>
 <td><code>label</code></td>
 <td></td>
-<td>OCI image labels, one <code>KEY=VALUE</code> per line.</td>
+<td>OCI image labels, one <code>KEY=VALUE</code> per line. A line with no <code>=</code> fails the pack. Write <code>KEY=</code> for an empty value.</td>
 </tr>
 <tr>
 <td><code>healthcheck</code></td>
@@ -878,7 +878,7 @@ the <code>packages</code> input to <code>none</code>.</p>
 <tr>
 <td><code>smoke</code></td>
 <td><code>false</code></td>
-<td>After the build, run the image once. If the binary cannot start, the job fails.</td>
+<td>After the build, run the image once. If the binary cannot start, the job fails. It cannot be combined with <code>output</code>, because <code>output</code> builds no image.</td>
 </tr>
 <tr>
 <td><code>sbom</code></td>

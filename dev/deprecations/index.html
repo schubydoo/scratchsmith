@@ -1000,9 +1000,9 @@
 
 
 <h1 id="deprecations">Deprecations<a class="headerlink" href="#deprecations" title="Permanent link">&para;</a></h1>
-<p>Scratchsmith keeps the version 1.0 contract in
+<p>Scratchsmith keeps its contract in
 <a href="https://github.com/schubydoo/scratchsmith/blob/main/COMPATIBILITY.md">COMPATIBILITY.md</a>.
-Nothing on that contract disappears without notice. This page lists everything on the way out,
+Only a major version can change it, and nothing on it disappears without notice. This page lists everything on the way out,
 and what you write instead.</p>
 <p>This page has one list for each kind of change. Two kinds change only in a major version:
 deprecated input shapes and tolerances. Refused input is a third kind, because a minor release
@@ -1091,18 +1091,18 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.<
 <td><code>--env NAME</code> with no <code>=</code></td>
 <td>1.5.0</td>
 <td>A usage error, exit code 2</td>
-<td><code>--env NAME=value</code></td>
+<td><code>--env NAME=value</code>, or <code>--env NAME=</code> for an empty value</td>
 </tr>
 <tr>
 <td>A <code>label</code> or <code>env</code> entry with no <code>=</code> in <code>scratchsmith.toml</code></td>
 <td>1.5.0</td>
 <td>A usage error, exit code 2</td>
-<td><code>"NAME=value"</code></td>
+<td><code>"NAME=value"</code>, or <code>"NAME="</code> for an empty value</td>
 </tr>
 <tr>
 <td>A library that starts like an ELF and cannot be parsed</td>
 <td>1.6.0</td>
-<td>An error. <code>pack</code> and <code>graph</code> exit <code>1</code> and name the file. 1.x did not warn for a file that is not a regular file, such as a FIFO named with <code>--include</code>, so that case fails now with no earlier warning</td>
+<td>An error. <code>pack</code> and <code>graph</code> exit <code>1</code> and name the file. 1.x did not warn for a file that is not a regular file, such as a FIFO named with <code>--include</code>. <code>graph</code> now fails on it with no earlier warning. <code>pack</code> already refused it in 1.x</td>
 <td>Replace the damaged file with an intact copy</td>
 </tr>
 <tr>
@@ -1148,7 +1148,7 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.<
 <td>Replace the damaged loader with an intact copy</td>
 </tr>
 <tr>
-<td>An explicit <code>sbom</code> or <code>image</code> in <code>--packages</code>, with the program or an <code>--include</code> library at a package record path on the host</td>
+<td>The program or an <code>--include</code> library at a package record path on the host. This applies to an explicit <code>image</code> in <code>--packages</code>, or an explicit <code>sbom</code> with <code>--sbom</code> or <code>--scan</code></td>
 <td>Not warned</td>
 <td>An error. <code>pack</code> exits <code>1</code> and names the path. 1.x exited 0, and the record replaced the file</td>
 <td>Remove <code>sbom</code> and <code>image</code> from <code>--packages</code>, or move the file on the host</td>

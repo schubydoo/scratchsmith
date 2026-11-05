@@ -757,7 +757,8 @@
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <ol>
 <li><strong>Resolve</strong>: emulate the <code>ld.so</code> search order from the ELF itself (RPATH is transitive,
-   RUNPATH is not, <code>$ORIGIN</code> is per-object). Each RPATH or RUNPATH string is a <code>:</code> list, and
+   RUNPATH is not, <code>$ORIGIN</code> is per-object). An object that has RUNPATH searches no RPATH,
+   neither its own nor one it inherits. Each RPATH or RUNPATH string is a <code>:</code> list, and
    its entries are searched in order. An empty entry means the directory the program starts in.
    A build cannot know that directory, so Scratchsmith does not search an empty entry. If the
    split entries miss, a string that holds <code>:</code> is also tried whole as one directory, before the

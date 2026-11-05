@@ -764,7 +764,7 @@ file</strong>.</p>
 <tr>
 <td><code>env</code></td>
 <td><code>--env</code></td>
-<td>Image environment entries, each <code>KEY=VALUE</code> (list).</td>
+<td>Image environment entries, each <code>KEY=VALUE</code> (list). An entry with no <code>=</code> fails the pack with exit code 2. Write <code>KEY=</code> for an empty value.</td>
 </tr>
 <tr>
 <td><code>workdir</code></td>
@@ -779,7 +779,7 @@ file</strong>.</p>
 <tr>
 <td><code>label</code></td>
 <td><code>--label</code></td>
-<td>OCI image label <code>KEY=VALUE</code> (list, and <code>--label</code> is repeatable).</td>
+<td>OCI image label <code>KEY=VALUE</code> (list, and <code>--label</code> is repeatable). An entry with no <code>=</code> fails the pack with exit code 2. Write <code>KEY=</code> for an empty value.</td>
 </tr>
 <tr>
 <td><code>healthcheck</code></td>
@@ -889,7 +889,7 @@ file</strong>.</p>
 <tr>
 <td><code>push</code></td>
 <td><code>--push</code></td>
-<td>Push the image straight to this registry reference, daemonless.</td>
+<td>Push the image straight to this registry reference, daemonless. A sink on the command line (<code>--push</code>, <code>--oci-archive</code> or <code>--no-build</code>) replaces this key. If the file also sets <code>sign</code>, <code>--oci-archive</code> or <code>--no-build</code> leaves it no push target, and the pack fails with exit code 2.</td>
 </tr>
 <tr>
 <td><code>max-size</code></td>
@@ -903,6 +903,9 @@ file</strong>.</p>
 </tr>
 </tbody>
 </table>
+<p>A key that is not in this table, or a value of the wrong type, fails the pack with exit code 1.
+A relative path in the file is read from the directory where you run scratchsmith, not from the
+directory of the file.</p>
 <p>A full config file, and how to run it:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># scratchsmith.toml — loaded with `scratchsmith pack --config scratchsmith.toml`.</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">binary</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"./dist/app"</span>
@@ -955,8 +958,12 @@ per-environment overrides go in the profile:</p>
 <a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
 </code></pre></div>
 <p>Values layer in this order, <strong>last wins</strong>: base config → the selected <code>[profile.&lt;name&gt;]</code> → any
-command-line flag. Booleans OR together, so a profile can switch something <strong>on</strong> but not off.
-A scalar is replaced by the more specific layer. A non-empty list replaces the one beneath it.</p>
+command-line flag. Booleans OR together, so a profile or a flag can switch something <strong>on</strong> but
+not off. To switch it off, remove the key from the file. A scalar is replaced by the more specific
+layer. A non-empty list replaces the one beneath it.</p>
+<p>Profiles do not nest. A table such as <code>[profile.a.profile.b]</code> fails the pack with exit code 1,
+and the error names each nested table by its full path. Move each one to a top-level
+<code>[profile.&lt;name&gt;]</code> table. See <a href="../deprecations/#removed-in-200">Deprecations</a>.</p>
 
 
 
