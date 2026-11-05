@@ -761,9 +761,12 @@
    its entries are searched in order. An empty entry means the directory the program starts in.
    A build cannot know that directory, so Scratchsmith does not search an empty entry. If the
    split entries miss, a string that holds <code>:</code> is also tried whole as one directory, before the
-   default directories. When a library comes from that directory, the image's <code>ld.so.cache</code> lists
-   it. Scratchsmith never scrapes the host's <code>ldd</code>, <code>ld.so.cache</code>, or <code>LD_LIBRARY_PATH</code>, so the
-   result is deterministic.</li>
+   default directories. The loader finds a <code>DT_NEEDED</code> library there only through the image's
+   <code>ld.so.cache</code>. If <code>ldconfig</code> does not cache the library under the needed name, Scratchsmith
+   does not take it. The name must start with <code>lib</code> or <code>ld-</code> and hold <code>.so</code>, or start with
+   <code>ld.so.</code> or <code>ld64.so.</code>. The library's own soname must be that name, or absent. An <code>--include</code>
+   file in that directory stages with no such check. Scratchsmith never scrapes
+   the host's <code>ldd</code>, <code>ld.so.cache</code>, or <code>LD_LIBRARY_PATH</code>, so the result is deterministic.</li>
 <li><strong>Stage</strong>: copy the interpreter to its verbatim path, mirror the libraries, recreate
    versioned-soname symlinks, regenerate <code>ld.so.cache</code>, and add the glibc NSS pieces.</li>
 <li><strong>Assemble</strong>: build a non-root image with reproducible layers (sorted entries, zeroed

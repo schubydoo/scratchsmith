@@ -1008,12 +1008,13 @@ and what you write instead.</p>
 deprecated input shapes and tolerances. Refused input is a third kind, because a minor release
 can refuse input that is the attack itself. The last list, Removed in 2.0.0, shows what version
 2.0.0 changed after its deprecation cycle ended. Most inputs there now fail, and one gets a new
-default. It also shows four changes in 2.0.0 with no warning first:</p>
+default. It also shows five changes in 2.0.0 with no warning first:</p>
 <ul>
 <li>an exit code</li>
 <li>an output directory that cannot be listed</li>
 <li>an <code>--include</code> file that is not a regular file</li>
 <li>a program or a library at a package record path</li>
+<li>a <code>DT_NEEDED</code> library in a directory whose name holds <code>:</code></li>
 </ul>
 <p>A deprecated input shape still works. Scratchsmith accepts it, prints one warning line to
 standard error, and exits with the same code as before. The next major version refuses it.</p>
@@ -1151,6 +1152,12 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.<
 <td>Not warned</td>
 <td>An error. <code>pack</code> exits <code>1</code> and names the path. 1.x exited 0, and the record replaced the file</td>
 <td>Remove <code>sbom</code> and <code>image</code> from <code>--packages</code>, or move the file on the host</td>
+</tr>
+<tr>
+<td>A <code>DT_NEEDED</code> library only in a directory whose name holds <code>:</code>, which <code>ldconfig</code> does not cache</td>
+<td>Not warned</td>
+<td>Missing. <code>pack</code> and <code>graph</code> exit <code>1</code>, and a <code>note:</code> line names the directory. 1.x exited 0, and the image exited 127 at start. An <code>--include</code> file there still stages</td>
+<td>Move the library to a directory with no <code>:</code> in its name</td>
 </tr>
 </tbody>
 </table>
