@@ -256,10 +256,15 @@ fn a_bad_locale_name_is_a_usage_error() {
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
-    for (locale, needle) in [("", "must not be empty"), ("a/b", "not a path")] {
+    // A refused pack can leave staged files behind, and `--no-build` refuses a used directory,
+    // so each case gets its own.
+    for (i, (locale, needle)) in [("", "must not be empty"), ("a/b", "not a path")]
+        .into_iter()
+        .enumerate()
+    {
         let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
             .args(["pack", "--no-build", "--packages", "none", "-o"])
-            .arg(tmp.path().join("rootfs"))
+            .arg(tmp.path().join(format!("rootfs-{i}")))
             .args(["--locale", locale, bin])
             .output()
             .unwrap();
@@ -299,24 +304,6 @@ fn a_locale_already_in_the_tree_is_not_a_usage_error() {
         "en_US.UTF-8",
     );
     assert_eq!(code, Some(1), "--add-file into the locale: {stderr}");
-    assert!(stderr.contains("already in the image"), "{stderr}");
-    // A reused --no-build output dir still holds the locale from the first pack.
-    let Some(host) = std::fs::read_dir("/usr/lib/locale")
-        .into_iter()
-        .flatten()
-        .flatten()
-        .find(|e| e.path().is_dir())
-    else {
-        skip_required("no locale directory under /usr/lib/locale");
-        return;
-    };
-    let name = host.file_name();
-    let name = name.to_str().unwrap();
-    let rootfs = tmp.path().join("rootfs-reused");
-    let (code, stderr) = pack(&rootfs, &[], name);
-    assert_eq!(code, Some(0), "first pack: {stderr}");
-    let (code, stderr) = pack(&rootfs, &[], name);
-    assert_eq!(code, Some(1), "second pack into the same dir: {stderr}");
     assert!(stderr.contains("already in the image"), "{stderr}");
 }
 
@@ -1101,7 +1088,12 @@ fn a_second_pack_into_the_same_directory_is_refused_before_any_staging() {
 
     let second = pack_no_build_into(bin, &rootfs);
     let stderr = String::from_utf8_lossy(&second.stderr);
-    assert!(!second.status.success(), "the second pack must fail");
+    // A pack failure (1), not a usage error (2): the command line is fine, the directory is not.
+    assert_eq!(
+        second.status.code(),
+        Some(1),
+        "the second pack must fail: {stderr}"
+    );
     assert!(
         stderr.contains("is not empty") && stderr.contains("choose another directory"),
         "the error must name the problem and the fix: {stderr}"
@@ -2283,12 +2275,24 @@ fn a_write_error_while_staging_the_default_records_fails_the_pack() {
         common::skip_optional("root ignores directory permissions");
         return;
     }
-    // A reused `--no-build` output dir whose record directory takes no new file.
+    // The output dir must be new, so the record directory that takes no new file is made
+    // mid-pack: a dpkg-query wrapper creates it read-only during the owner lookup, after the
+    // tree is staged and before the records are.
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|d| d.join("dpkg-query"))
+        .find(|p| p.is_file())
+        .unwrap();
+    let wrapper = format!(
+        r#"for a; do [ "$a" = -S ] && mkdir -p "$OUT/var/lib/dpkg/status.d" && chmod 555 "$OUT/var/lib/dpkg/status.d"; done
+exec '{}' "$@""#,
+        real.display()
+    );
     let tmp = tempfile::tempdir().unwrap();
-    let tools = fake_tools(tmp.path(), &[("syft", FAKE_RECORD_READER)]);
+    let tools = fake_tools(
+        tmp.path(),
+        &[("syft", FAKE_RECORD_READER), ("dpkg-query", &wrapper)],
+    );
     let status_d = tmp.path().join("out/var/lib/dpkg/status.d");
-    std::fs::create_dir_all(&status_d).unwrap();
-    std::fs::set_permissions(&status_d, std::fs::Permissions::from_mode(0o555)).unwrap();
 
     // A broken output tree is not a record the default can skip: the pack fails.
     let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
@@ -2299,11 +2303,20 @@ fn a_write_error_while_staging_the_default_records_fails_the_pack() {
         .arg(bin)
         .env("PATH", &tools)
         .env("ASKED", tmp.path().join("out.asked"))
+        .env("OUT", tmp.path().join("out"))
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("writing "), "{stderr}");
+    assert!(
+        stderr.contains(&format!("writing {}", status_d.display())),
+        "{stderr}"
+    );
+    assert_eq!(
+        std::fs::metadata(&status_d).unwrap().permissions().mode() & 0o777,
+        0o555,
+        "the wrapper must have made the record directory read-only"
+    );
 }
 
 #[test]
