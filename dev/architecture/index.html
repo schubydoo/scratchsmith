@@ -757,8 +757,13 @@
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <ol>
 <li><strong>Resolve</strong>: emulate the <code>ld.so</code> search order from the ELF itself (RPATH is transitive,
-   RUNPATH is not, <code>$ORIGIN</code> is per-object). It never scrapes the host's <code>ldd</code>, <code>ld.so.cache</code>,
-   or <code>LD_LIBRARY_PATH</code>, so the result is deterministic.</li>
+   RUNPATH is not, <code>$ORIGIN</code> is per-object). Each RPATH or RUNPATH string is a <code>:</code> list, and
+   its entries are searched in order. An empty entry means the directory the program starts in.
+   A build cannot know that directory, so Scratchsmith does not search an empty entry. If the
+   split entries miss, a string that holds <code>:</code> is also tried whole as one directory, before the
+   default directories. When a library comes from that directory, the image's <code>ld.so.cache</code> lists
+   it. Scratchsmith never scrapes the host's <code>ldd</code>, <code>ld.so.cache</code>, or <code>LD_LIBRARY_PATH</code>, so the
+   result is deterministic.</li>
 <li><strong>Stage</strong>: copy the interpreter to its verbatim path, mirror the libraries, recreate
    versioned-soname symlinks, regenerate <code>ld.so.cache</code>, and add the glibc NSS pieces.</li>
 <li><strong>Assemble</strong>: build a non-root image with reproducible layers (sorted entries, zeroed
