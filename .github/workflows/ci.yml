@@ -117,6 +117,14 @@ jobs:
       # ⚠️ Required by tests/common::skip_required, like upx above.
       - name: Install syft
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      # tests/differential.rs runs each packed rootfs with `unshare -r chroot`, and Ubuntu's
+      # AppArmor can restrict unprivileged user namespaces.
+      # ⚠️ Required by tests/common::skip_required, like upx above.
+      - name: Allow unprivileged user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - name: Test (nextest → JUnit)
         run: cargo nextest run --all-features --profile ci
       # nextest does not run doctests; run them separately (reuses the build cache).
@@ -160,6 +168,12 @@ jobs:
       # ⚠️ Required by tests/common::skip_required — see the note on the test job's copy.
       - name: Install syft
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      # ⚠️ Required by tests/common::skip_required — see the note on the test job's copy.
+      - name: Allow unprivileged user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - name: Coverage (lcov + line floor)
         run: cargo llvm-cov --all-features --lcov --output-path lcov.info --fail-under-lines 90
       - name: Upload to Codecov

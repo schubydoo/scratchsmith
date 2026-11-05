@@ -33,12 +33,14 @@ and `cargo test` still passes:
 - `upx`: the compression tests
 - `tini`: the `--init` test. With `tini` absent, a companion test instead checks that
   `--init` *fails loudly*.
+- unprivileged user namespaces (`unshare -r`): the differential pack-and-run test
 
 **In CI, some of those stop being optional.** A skipped test is recorded as a pass. A runner
 that loses a tool then reports a green suite having run nothing.
 
-Seven tools are strict in CI: `cc`, `strip`, `upx`, Docker, `getent`, `/usr/bin/id` and `syft`. A
-missing one **fails** the test instead of skipping it. The workflow installs or guarantees all seven, so a
+Eight tools are strict in CI: `cc`, `strip`, `upx`, Docker, `getent`, `/usr/bin/id`, `syft` and
+`unshare -r`. A missing one **fails** the test instead of skipping it. The workflow installs or
+guarantees all eight, so a
 miss there is a broken runner. If the `CI` environment variable holds anything other than an opt-out
 word, the strict gate turns on. The opt-out words are `0`, `false`, `no`, `off` and the empty
 string, in any case.
@@ -54,6 +56,12 @@ The `--sbom` test is a special case. It runs with `syft` and without it. With `s
 the test asserts success. With `syft` absent, it asserts a clean "missing syft must fail"
 error. On your own machine the suite is green either way. The `--packages` tests need `syft`
 for the SBOM, so in CI a missing `syft` fails them.
+
+`tests/differential.rs` uses the real glibc loader as the reference. It compiles random library
+layouts with `cc`, packs each one, and runs the packed rootfs in a chroot. If `pack` exits 0, the
+program must start. Every PR runs 64 fixed cases, and the nightly `differential.yml` workflow
+runs thousands from a new seed. A failure prints the seed of each broken case. To repeat one,
+set `SCRATCHSMITH_DIFF_SEED=<seed>` and `SCRATCHSMITH_DIFF_CASES=1`.
 
 ```sh
 git clone https://github.com/schubydoo/scratchsmith
