@@ -218,10 +218,6 @@ pub struct Resolution {
     /// Parent->child edges, keyed by real path, for graph reconstruction. Unlike `libs`,
     /// this keeps every edge (repeats, diamonds, unresolved), so no edge dangles.
     pub edges: Vec<DepEdge>,
-    /// Inputs the resolver tolerated and scratchsmith 2.0 will reject, one line each. The
-    /// resolution itself is unchanged by them; callers print them with
-    /// `warn_about_tolerances`.
-    pub warnings: Vec<String>,
     /// Why a soname in `missing` is missing, when the resolver can tell, one line each.
     /// Diagnosis only: nothing here is resolved or staged. Callers print them with
     /// `print_hints`.
@@ -239,18 +235,8 @@ impl Resolution {
             .map(|i| i.image_path.display().to_string())
     }
 
-    /// Print each tolerance warning as one stderr line, never stdout: stdout carries the
-    /// `--format json` report (`COMPATIBILITY.md`). The exit code stays where it is.
-    pub fn warn_about_tolerances(&self) {
-        for w in &self.warnings {
-            eprintln!(
-                "warning: {w} scratchsmith 2.0 rejects it. See {}",
-                crate::image::DEPRECATIONS_URL
-            );
-        }
-    }
-
-    /// Print each hint as one stderr line, never stdout, for the same reason as above.
+    /// Print each hint as one stderr line, never stdout: stdout carries the `--format json`
+    /// report (`COMPATIBILITY.md`).
     pub fn print_hints(&self) {
         for h in &self.hints {
             eprintln!("note: {h}");
@@ -1323,7 +1309,6 @@ mod tests {
             )
             .unwrap();
             assert!(has(&res, &include), "{include}: {:?}", res.libs);
-            assert!(res.warnings.is_empty(), "{include}: {:?}", res.warnings);
         }
 
         // The operator's choice does not cover a corrupt ELF: its own DT_NEEDED are unknown.
@@ -1415,7 +1400,7 @@ mod tests {
         assert_eq!(resolved.image_path, PathBuf::from(interp));
         assert_eq!(resolved.source, canonical(&loader));
         assert!(has(&res, "../lib/libfoo.so"), "{:?}", res.libs);
-        assert!(res.missing.is_empty() && res.warnings.is_empty());
+        assert!(res.missing.is_empty());
     }
 
     #[test]
@@ -1774,7 +1759,7 @@ mod tests {
         let root = tmp.path();
         let exe = root.join("app/exe");
         touch(&exe);
-        // `Err` carries the error text, `Ok` the warnings of a resolution that went through.
+        // `Err` carries the error text, `Ok` a resolution that went through.
         let resolve_with_needed =
             |machine: u16, needed: &[&str], rpaths: &[&str], runpaths: &[&str]| {
                 // One bare soname, so the object has a search to run. It need not resolve.
@@ -1782,13 +1767,13 @@ mod tests {
                 info.machine = machine;
                 let infos = HashMap::from([(canonical(&exe), info)]);
                 resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos })
-                    .map(|r| r.warnings)
+                    .map(|_| ())
                     .map_err(|e| format!("{e:#}"))
             };
         let resolve_as = |machine: u16, rpaths: &[&str], runpaths: &[&str]| {
             resolve_with_needed(machine, &["libx.so"], rpaths, runpaths)
         };
-        let clean = |r: Result<Vec<String>, String>| r.is_ok_and(|w| w.is_empty());
+        let clean = |r: Result<(), String>| r.is_ok();
         let riscv = goblin::elf::header::EM_RISCV;
 
         let e = resolve_as(riscv, &[], &["/opt/$PLATFORM/lib", "/opt/plain"]).unwrap_err();
@@ -1925,7 +1910,6 @@ mod tests {
         let mut missing = res.missing.clone();
         missing.sort();
         assert_eq!(missing, ["libdeep.so", "libown.so"]);
-        assert!(res.warnings.is_empty(), "{:?}", res.warnings);
     }
 
     #[test]
@@ -1972,7 +1956,6 @@ mod tests {
         let res = resolve(graph(&["/opt/elsewhere"])).unwrap();
         assert_eq!(leaf_path(&res), None);
         assert_eq!(res.missing, ["libleaf.so"]);
-        assert!(res.warnings.is_empty(), "{:?}", res.warnings);
         // The exe's own lookup still searches its RPATH.
         assert!(has(&res, "libmid.so"));
         // One hint names the cause and the fix: the dir, the object, RUNPATH.
@@ -1994,14 +1977,12 @@ mod tests {
         touch(&system_leaf);
         let res = resolve(graph(&["/opt/elsewhere"])).unwrap();
         assert_eq!(leaf_path(&res), Some(canonical(&system_leaf)));
-        assert!(res.warnings.is_empty(), "{:?}", res.warnings);
         assert!(res.hints.is_empty(), "{:?}", res.hints);
 
         // Without RUNPATH on libmid the inherited RPATH is in force and comes first, as it
         // always did, with nothing to warn about.
         let res = resolve(graph(&[])).unwrap();
         assert_eq!(leaf_path(&res), Some(canonical(&rpath_leaf)));
-        assert!(res.warnings.is_empty(), "{:?}", res.warnings);
     }
 
     #[test]
@@ -2038,7 +2019,6 @@ mod tests {
             .map(|l| l.path.clone());
         assert_eq!(leaf_path, Some(canonical(&leaf)));
         assert!(res.missing.is_empty(), "{:?}", res.missing);
-        assert!(res.warnings.is_empty(), "{:?}", res.warnings);
     }
 
     #[test]

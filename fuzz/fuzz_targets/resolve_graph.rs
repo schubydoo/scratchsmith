@@ -228,7 +228,7 @@ fuzz_target!(|scn: Scenario| {
     let sysroot = Sysroot::new(root);
     let includes: Vec<String> = scn.includes.into_iter().take(8).collect();
     let resolved = resolve_with(&exe, &sysroot, &includes, &MapSource { infos, unreadable });
-    // A warning or error quotes strings that came out of the packed binary and is printed to
+    // A hint or error quotes strings that came out of the packed binary and is printed to
     // the user's terminal as it is. None may carry a character that breaks or reorders a line:
     // a raw newline or escape would let the input forge a line of scratchsmith's own output.
     // The unit test checks one input; this checks every one the engine finds.
@@ -240,7 +240,6 @@ fuzz_target!(|scn: Scenario| {
     //
     // `is_control` is the Cc category only. The line and paragraph separators and the
     // bidirectional overrides are not in it, and each one also breaks or reverses a line.
-    // A hint is printed the same way, so it is held to the same rule.
     use scratchsmith::resolver::breaks_a_line;
     let resolution = match resolved {
         Ok(resolution) => resolution,
@@ -255,10 +254,10 @@ fuzz_target!(|scn: Scenario| {
             return;
         }
     };
-    for warning in resolution.warnings.iter().chain(&resolution.hints) {
+    for hint in &resolution.hints {
         assert!(
-            !warning.chars().any(breaks_a_line),
-            "a warning carries a character that breaks a line: {warning:?}"
+            !hint.chars().any(breaks_a_line),
+            "a hint carries a character that breaks a line: {hint:?}"
         );
     }
 });

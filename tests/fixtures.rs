@@ -393,10 +393,6 @@ fn a_library_with_runpath_resolves_like_the_loader_not_through_an_inherited_rpat
         .expect("run");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "an incomplete graph must fail");
-    assert!(
-        !stderr.contains("rejects it"),
-        "no fallback warning: {stderr}"
-    );
     // Both commands name the cause and the fix, not only "missing".
     let real_libs = std::fs::canonicalize(&libs).unwrap();
     let hint = format!(
