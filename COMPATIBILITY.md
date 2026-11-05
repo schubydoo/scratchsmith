@@ -99,7 +99,8 @@ change:
 
 ## Breaking changes in 2.0.0
 
-Each item below warned on stderr before 2.0, from the release that the Deprecations page names.
+Each item below warned on stderr before 2.0, from the release that the Deprecations page names,
+except the last one, which changed an exit code with no warning.
 The [Deprecations](docs/deprecations.md) page lists what to write instead.
 
 - A library that sits only in an inherited `RPATH` directory, needed by an object that has
@@ -108,8 +109,11 @@ The [Deprecations](docs/deprecations.md) page lists what to write instead.
   Before, scratchsmith warned and ignored the table. Move it to a top-level `[profile.b]` table.
 - `--label NAME` and `--env NAME` with no `=` are now a usage error, with exit code 2. Before,
   they warned and packed anyway. Write `NAME=value`, or `NAME=` for an empty value.
-- A `label` or `env` entry with no `=` in `scratchsmith.toml` is now an error, with exit code 1.
+- A `label` or `env` entry with no `=` in `scratchsmith.toml` is now a usage error, with exit code 2.
   Write each entry as `NAME=value`.
+- A command line that scratchsmith refuses only after the parse now exits 2, not 1. Examples are
+  `--watch --format json`, `pack` with no binary, and one `--add-file` image path given twice.
+  This had no warning before 2.0. A script that tests for exactly `1` must also accept `2`.
 
 ## Reporting a compatibility regression
 
