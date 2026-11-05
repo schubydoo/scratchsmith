@@ -576,23 +576,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Tolerances ending in 2.0">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#platform-with-no-value" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        $PLATFORM with no value
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -634,6 +617,17 @@
     <span class="md-ellipsis">
       
         An output directory that cannot be listed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#platform-with-no-value" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        $PLATFORM with no value
       
     </span>
   </a>
@@ -922,23 +916,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Tolerances ending in 2.0">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#platform-with-no-value" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        $PLATFORM with no value
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -980,6 +957,17 @@
     <span class="md-ellipsis">
       
         An output directory that cannot be listed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#platform-with-no-value" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        $PLATFORM with no value
       
     </span>
   </a>
@@ -1084,30 +1072,12 @@ gzipping the layer does not help, because a gzip layer stops at the same limit.<
 <td>2.0.0</td>
 <td>Replace the damaged file</td>
 </tr>
-<tr>
-<td><code>$PLATFORM</code> in a search path, on an architecture with no value for it</td>
-<td>1.6.0</td>
-<td>2.0.0</td>
-<td>Write the directory name in the path</td>
-</tr>
 </tbody>
 </table>
-<p>These warnings come from <code>pack</code> and from <code>graph</code>, because both resolve the same
-dependency tree.</p>
+<p>This warning comes from <code>pack</code> and from <code>graph</code>, because both resolve the same dependency tree.</p>
 <p>The interpreter warning stays only when no library lists the loader as <code>DT_NEEDED</code>. On a usual
 glibc sysroot <code>libc.so.6</code> lists it, so the dependency walk reads the loader as a library and the
 pack fails with the unparsable-ELF error.</p>
-<h3 id="platform-with-no-value"><code>$PLATFORM</code> with no value<a class="headerlink" href="#platform-with-no-value" title="Permanent link">&para;</a></h3>
-<p>A library search path is an <code>RPATH</code> or a <code>RUNPATH</code> entry in the binary, or in a library that the
-binary needs. It can contain the token <code>$PLATFORM</code>, and the loader replaces that token with the
-name of the processor type. Scratchsmith knows that name for <code>x86_64</code> and <code>aarch64</code> only.</p>
-<p>On any other architecture, scratchsmith removes the token and searches what is left. A path
-such as <code>/opt/app/lib/$PLATFORM</code> becomes <code>/opt/app/lib/</code>, which is the parent directory. A
-library with the same name in that directory then ships in place of the correct one.</p>
-<p>The warning names the file that holds the search path. When you link that file, write the
-directory name in the search path and do not use the token:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-Wl,-rpath,/opt/app/lib/riscv64<span class="w"> </span>-o<span class="w"> </span>myapp<span class="w"> </span>main.c
-</code></pre></div>
 <h2 id="removed-in-200">Removed in 2.0.0<a class="headerlink" href="#removed-in-200" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1179,6 +1149,12 @@ directory name in the search path and do not use the token:</p>
 <td>An error. <code>pack</code> exits <code>1</code></td>
 <td>A directory that you can read, or a new one</td>
 </tr>
+<tr>
+<td><code>$PLATFORM</code> in a search path, on an architecture with no value for it</td>
+<td>1.6.0</td>
+<td>An error. <code>pack</code> and <code>graph</code> exit <code>1</code> and name the file that holds the search path</td>
+<td>Write the directory name in the path</td>
+</tr>
 </tbody>
 </table>
 <h3 id="a-library-found-only-through-an-inherited-rpath">A library found only through an inherited <code>RPATH</code><a class="headerlink" href="#a-library-found-only-through-an-inherited-rpath" title="Permanent link">&para;</a></h3>
@@ -1188,7 +1164,7 @@ that it needs. Scratchsmith now applies that rule with no fallback, so the libra
 as it is for the loader. A <code>note:</code> line on stderr names the directory and the library that
 needs the file. To fix it, link the library that needs the file with a <code>RUNPATH</code> that
 holds the directory:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-shared<span class="w"> </span>-fPIC<span class="w"> </span>-Wl,--enable-new-dtags<span class="w"> </span>-Wl,-rpath,/opt/app/lib<span class="w"> </span>-o<span class="w"> </span>libmid.so<span class="w"> </span>mid.c<span class="w"> </span>-lleaf
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-shared<span class="w"> </span>-fPIC<span class="w"> </span>-Wl,--enable-new-dtags<span class="w"> </span>-Wl,-rpath,/opt/app/lib<span class="w"> </span>-o<span class="w"> </span>libmid.so<span class="w"> </span>mid.c<span class="w"> </span>-lleaf
 </code></pre></div>
 <h3 id="a-command-line-refused-after-the-parse-exits-2">A command line refused after the parse exits 2<a class="headerlink" href="#a-command-line-refused-after-the-parse-exits-2" title="Permanent link">&para;</a></h3>
 <p>Scratchsmith refuses some command lines only after the parse, because the refusal needs a
@@ -1203,6 +1179,19 @@ only a non-zero code for these refusals. A script that tests for exactly <code>1
 that it had no permission to list, so it printed no warning and packed into it. Version 2.0.0 refuses
 that <code>DIR</code>, because it cannot prove that the directory is empty. This change had no warning
 before 2.0. Give the pack a directory that you can read, or a new one.</p>
+<h3 id="platform-with-no-value"><code>$PLATFORM</code> with no value<a class="headerlink" href="#platform-with-no-value" title="Permanent link">&para;</a></h3>
+<p>A library search path is an <code>RPATH</code> or a <code>RUNPATH</code> entry in the binary, or in a library that the
+binary needs. It can contain the token <code>$PLATFORM</code>, and the loader replaces that token with the
+name of the processor type. Scratchsmith knows that name for <code>x86_64</code> and <code>aarch64</code> only.</p>
+<p>On any other architecture, the token has no value. Through 1.9, scratchsmith removed the token
+and searched what was left, so <code>/opt/app/lib/$PLATFORM</code> became the parent directory
+<code>/opt/app/lib/</code>. A library with the same name in that directory then shipped in place of the
+correct one. Now <code>pack</code> and <code>graph</code> stop with exit <code>1</code> where 1.x warned, and the error names the
+file that holds the search path. A search path that the loader never reads still passes, for
+example an <code>RPATH</code> in a file that also has <code>RUNPATH</code>. When you link that file, write the
+directory name in the search path and do not use the token:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="gp">$ </span>cc<span class="w"> </span>-Wl,-rpath,/opt/app/lib/riscv64<span class="w"> </span>-o<span class="w"> </span>myapp<span class="w"> </span>main.c
+</code></pre></div>
 
 
 
