@@ -544,8 +544,12 @@ jobs:
       # push tags the built image and runs `docker push`. A throwaway local registry takes it,
       # so no login and no real registry are involved.
       - name: Start a local registry (for the push input)
-        # Pinned by digest, like every action here: `registry:2` is a tag that moves.
-        run: docker run -d --rm -p 127.0.0.1:5000:5000 --name ss-selftest-registry registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+        env:
+          # Pinned by digest, like every action here: `registry:2` is a tag that moves. The pin
+          # lives here and not in `run:` so that the Renovate regex manager for `REGISTRY` in
+          # tests/pack.rs reads it too and moves both pins together.
+          REGISTRY_IMAGE: "docker.io/library/registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+        run: docker run -d --rm -p 127.0.0.1:5000:5000 --name ss-selftest-registry "$REGISTRY_IMAGE"
       - name: Pack and push → local registry
         id: push
         uses: $/
