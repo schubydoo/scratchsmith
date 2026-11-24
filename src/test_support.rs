@@ -24,6 +24,8 @@
 ///   both suite jobs use. The `--packages` tests read it.
 /// - `localedef` ships in `libc-bin`, the same package as `getent`.
 /// - `mkfifo` ships in `coreutils`, which is `Essential: yes`.
+/// - Both suite jobs run as the runner's non-root user, so a directory with mode `000` is
+///   unreadable.
 ///
 /// A miss is therefore a broken runner rather than a host to tolerate.
 ///

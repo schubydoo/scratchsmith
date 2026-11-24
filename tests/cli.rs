@@ -1484,7 +1484,7 @@ fn an_output_directory_that_cannot_be_listed_is_refused() {
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o300)).unwrap();
     // Root reads any directory, so the mode proves nothing there.
     if dir.read_dir().is_ok() {
-        common::skip_optional("this user can list a mode 0300 directory (root)");
+        skip_required("this user can list a mode 0300 directory (root)");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         return;
     }
@@ -2558,7 +2558,7 @@ fn a_write_error_while_staging_the_default_records_fails_the_pack() {
     }
     // root writes through any mode, so the directory below would not stop it.
     if std::fs::metadata("/proc/self").unwrap().uid() == 0 {
-        common::skip_optional("root ignores directory permissions");
+        skip_required("root ignores directory permissions");
         return;
     }
     // The output dir must be new, so the record directory that takes no new file is made
