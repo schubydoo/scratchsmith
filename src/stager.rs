@@ -1137,16 +1137,24 @@ fn copy_into(src: &Path, root: &Path, abs_target: &Path) -> Result<()> {
     Ok(())
 }
 
-// Recreate the soname symlink beside the real file, pointing at its basename (a
-// relative link, so it stays valid once the tree becomes the image root).
+// Recreate the soname symlink the loader looks up, pointing at the staged real file by a
+// relative value, so it stays valid once the tree becomes the image root. A bare soname sits
+// beside the real file, so the value is its basename. A slash-soname can name another
+// directory (a host link resolved it there), and a basename would then dangle or name the
+// link itself, so the value walks from the link's directory to the real file.
 fn symlink_soname(root: &Path, real_abs: &Path, soname: &str) -> Result<()> {
     let dir = real_abs.parent().context("library has no parent dir")?;
-    let link = under(root, &soname_link_path(root, &dir.join(soname), soname)?);
-    let target = real_abs.file_name().context("library has no file name")?;
+    let name = real_abs.file_name().context("library has no file name")?;
+    let image_link = soname_link_path(root, &dir.join(soname), soname)?;
+    let link = under(root, &image_link);
     if link.symlink_metadata().is_ok() {
         return Ok(()); // idempotent
     }
-    std::os::unix::fs::symlink(target, &link).with_context(|| {
+    // Both ends as `image_dir` reads them, so the value is free of staged links.
+    let real_image = image_dir(root, dir, false)?.join(name);
+    let link_dir = image_link.parent().unwrap_or(Path::new("/"));
+    let target = relative_link_value(link_dir, &real_image);
+    std::os::unix::fs::symlink(&target, &link).with_context(|| {
         format!(
             "soname {}: linking {} -> {:?}",
             crate::resolver::escape_for_display(soname),
@@ -1621,6 +1629,23 @@ mod tests {
         }
     }
 
+    // The soname link at `image_link` carries a relative value that, read inside the image,
+    // names the staged copy of `real`, so the loader opens the library and not the link.
+    fn assert_links_to_real(dest: &Path, image_link: &Path, real: &Path) {
+        let value = fs::read_link(under(dest, image_link)).unwrap();
+        assert!(value.is_relative(), "{}: {value:?}", image_link.display());
+        let dir = image_link.parent().unwrap();
+        let named = lexical_image_path(dir, &value);
+        let real_image = image_dir(dest, real.parent().unwrap(), false)
+            .unwrap()
+            .join(real.file_name().unwrap());
+        assert_eq!(named, real_image, "{}", image_link.display());
+        assert_eq!(
+            fs::read(under(dest, image_link)).unwrap(),
+            fs::read(real).unwrap()
+        );
+    }
+
     #[test]
     fn soname_link_path_reads_the_soname_inside_the_image() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1677,8 +1702,7 @@ mod tests {
                 SymlinkMode::CopyAll,
             )
             .unwrap();
-            let link = dest.join("escaped/libfoo.so.1");
-            assert_eq!(fs::read_link(&link).unwrap(), Path::new("libfoo.so.1.2.3"));
+            assert_links_to_real(&dest, Path::new("/escaped/libfoo.so.1"), &real);
         }
         let above = tmp.path().join("escaped/libfoo.so.1");
         assert!(above.symlink_metadata().is_err(), "linked above the root");
@@ -1731,8 +1755,7 @@ mod tests {
         let res = with_lib("/lib/../x/libfoo.so.1", &real);
         stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
         // `/lib/..` is `/usr` through the link, in the image as on the host.
-        let link = dest.join("usr/x/libfoo.so.1");
-        assert_eq!(fs::read_link(&link).unwrap(), Path::new("libfoo.so.1.2.3"));
+        assert_links_to_real(&dest, Path::new("/usr/x/libfoo.so.1"), &real);
         assert!(!dest.join("x").exists());
     }
 
@@ -1753,25 +1776,68 @@ mod tests {
         fs::create_dir_all(under(&dest, &outside).join("x")).unwrap();
 
         for (soname, link) in [
-            ("/lib/../x/libfoo.so.1", dest.join("usr/x/libfoo.so.1")),
-            (
-                "/out/x/libfoo.so.1",
-                under(&dest, &outside).join("x/libfoo.so.1"),
-            ),
+            ("/lib/../x/libfoo.so.1", PathBuf::from("/usr/x/libfoo.so.1")),
+            ("/out/x/libfoo.so.1", outside.join("x/libfoo.so.1")),
         ] {
             let res = with_lib(soname, &real);
             stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
-            assert_eq!(
-                fs::read_link(&link).unwrap(),
-                Path::new("libfoo.so.1.2.3"),
-                "{soname}"
-            );
+            assert_links_to_real(&dest, &link, &real);
         }
         let through = outside.join("x/libfoo.so.1");
         assert!(
             through.symlink_metadata().is_err(),
             "linked through the link"
         );
+    }
+
+    #[test]
+    fn a_slash_soname_through_a_host_link_names_the_real_file() {
+        // A slash DT_NEEDED that a host link resolves into another directory. The basename
+        // value made `lib/libfoo.so -> libfoo.so` point at itself, and the versioned one
+        // dangle beside it.
+        for (needed, real_name) in [
+            ("libfoo.so", "libfoo.so"),
+            ("libfoo.so.1", "libfoo.so.1.2.3"),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let dest = tmp.path().join("dest");
+            let binary = make_file(&tmp.path().join("src/app"), b"binary");
+            // A bare-soname library keeps `src/lib` in the image.
+            let bar = make_file(&tmp.path().join("src/lib/libbar.so.1.0"), b"BAR");
+            let real = make_file(&tmp.path().join("src/real").join(real_name), b"FOO");
+            let lib_dir = bar.parent().unwrap();
+            let host_link = lib_dir.join(needed);
+            std::os::unix::fs::symlink(Path::new("../real").join(real_name), &host_link).unwrap();
+            let soname = host_link.to_str().unwrap();
+
+            let res = Resolution {
+                libs: vec![
+                    ResolvedLib {
+                        soname: "libbar.so.1".into(),
+                        path: bar.clone(),
+                    },
+                    ResolvedLib {
+                        soname: soname.into(),
+                        // As the resolver records it: the real file, links followed.
+                        path: fs::canonicalize(&host_link).unwrap(),
+                    },
+                ],
+                ..Resolution::default()
+            };
+            stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+
+            assert_links_to_real(&dest, &host_link, &real);
+            assert_eq!(
+                fs::read_link(under(&dest, &host_link)).unwrap(),
+                Path::new("../real").join(real_name),
+                "{needed}"
+            );
+            // The bare soname link is still the real file's basename, beside it.
+            assert_eq!(
+                fs::read_link(under(&dest, &lib_dir.join("libbar.so.1"))).unwrap(),
+                Path::new("libbar.so.1.0")
+            );
+        }
     }
 
     #[test]
