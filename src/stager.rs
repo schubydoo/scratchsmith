@@ -72,8 +72,7 @@ pub fn stage_runtime_extras(dest: &Path, extras: &RuntimeExtras) -> Result<Runti
     }
 
     if extras.init {
-        let (tini, warning) = pick_tini(TINI_CANDIDATES.iter().map(PathBuf::from))
-            .context("--init: tini not found; install tini")?;
+        let (tini, warning) = find_tini().context("--init: tini not found; install tini")?;
         result.warnings.extend(warning);
         copy_into(&tini, dest, Path::new("/tini"))?;
         result.tini_image_path = Some("/tini".to_string());
@@ -92,6 +91,12 @@ const TINI_CANDIDATES: &[&str] = &[
     "/sbin/tini",
     "/bin/tini",
 ];
+
+/// The tini `--init` would stage, and its warning when it is dynamic. `doctor` asks this too,
+/// so the two never disagree about which tini a pack gets.
+pub(crate) fn find_tini() -> Result<(PathBuf, Option<String>)> {
+    pick_tini(TINI_CANDIDATES.iter().map(PathBuf::from))
+}
 
 // Pick a tini to stage: the first static one, else the first one found, with a warning.
 // A static tini needs nothing from the image. A dynamic one starts only if the image
