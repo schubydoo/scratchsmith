@@ -2630,3 +2630,39 @@ fn a_file_dpkg_would_read_as_a_pattern_is_named_as_not_looked_up() {
         "{warnings}"
     );
 }
+
+#[test]
+fn the_documented_full_config_passes_every_sink_check() {
+    // The first toml block in docs/configuration.md is the "full config file" readers copy. Run
+    // both documented commands on it from an empty directory: with no binary there, the pack
+    // stops at reading it, which comes after the parse and every sink and usage check.
+    let doc = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/docs/configuration.md"
+    ))
+    .expect("reading docs/configuration.md");
+    let block: String = doc
+        .split("```toml\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n```").next())
+        .expect("docs/configuration.md has no toml block")
+        .to_owned();
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("scratchsmith.toml"), block).unwrap();
+    let pack = |extra: &[&str], binary: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .current_dir(tmp.path())
+            .args(["pack", "--config", "scratchsmith.toml"])
+            .args(extra)
+            .output()
+            .expect("failed to run scratchsmith binary");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "got: {stderr}");
+        assert!(
+            stderr.contains(&format!("reading {binary}")),
+            "got: {stderr}"
+        );
+    };
+    pack(&[], "./dist/app");
+    pack(&["--push", "ghcr.io/you/app:dev", "./other"], "./other");
+}
