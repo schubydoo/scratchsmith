@@ -565,6 +565,45 @@ jobs:
           echo "$tags" | jq -e '.tags | index("pushed")' >/dev/null || { echo "::error::the registry does not hold selftest/id:pushed (got: $tags) — is the push input still wired in action.yml?"; exit 1; }
           docker stop ss-selftest-registry >/dev/null
           echo "push input wired"
+      # Since 2.0.0 a label with no `=` is a usage error, where 1.x kept it as an empty value.
+      # The meta step above proves a KEY=VALUE label packs, so this failure is the `=` check.
+      - name: Pack with a label that has no = (must fail)
+        id: label-trip
+        continue-on-error: true
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          label: |
+            build
+      - name: Assert the label guard tripped
+        env:
+          OUTCOME: ${{ steps.label-trip.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$OUTCOME" = "failure" ] || { echo "::error::a label with no = packed anyway, but 2.0 refuses it — is the label input still wired in action.yml?"; exit 1; }
+          echo "label guard verified"
+      # Since 2.0.0 `output` refuses a directory that already holds files, where 1.x staged into
+      # it. The rootfs step above proves an empty output packs, so this failure is the check.
+      - name: Write a file into the output directory
+        run: |
+          mkdir -p ./staged-busy
+          echo keep > ./staged-busy/keep.txt
+      - name: Pack into a non-empty output directory (must fail)
+        id: output-trip
+        continue-on-error: true
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          output: ./staged-busy
+      - name: Assert the output guard tripped and left the directory alone
+        env:
+          OUTCOME: ${{ steps.output-trip.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$OUTCOME" = "failure" ] || { echo "::error::output into a non-empty directory packed anyway, but 2.0 refuses it — is the output input still wired in action.yml?"; exit 1; }
+          [ "$(cat ./staged-busy/keep.txt)" = "keep" ] || { echo "::error::the refused pack changed the existing file in the output directory"; exit 1; }
+          [ "$(ls -A ./staged-busy)" = "keep.txt" ] || { echo "::error::the refused pack wrote into the output directory: $(ls -A ./staged-busy)"; exit 1; }
+          echo "output guard verified"
       # version picks the release to download. This step is LAST on purpose: every step above
       # runs the default release, and an older binary must not be the one they exercise. An
       # older release than the default proves the input is honored and not just accepted.
