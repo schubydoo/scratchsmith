@@ -744,10 +744,10 @@ fn claim_output_dir(out_dir: &Path) -> Result<()> {
 
 /// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
 pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<PackReport> {
-    // No image is built here, so there is nothing to smoke-run. The CLI blocks --smoke --no-build,
-    // but `smoke` can also arrive from the config/profile — fail loud rather than silently drop it.
+    // No image is built here, so there is nothing to smoke-run. The CLI blocks --smoke --no-build
+    // and names where a config `smoke` is set; this is the backstop for any other caller.
     if opts.smoke {
-        bail!(crate::cli::UsageError("--smoke needs a built image, so it isn't supported with --no-build; drop --smoke, or set `smoke = false` in the profile".into()));
+        bail!(crate::cli::UsageError("--smoke needs a built image, so it isn't supported with --no-build; drop --smoke, or remove `smoke = true` from the config and the selected profile".into()));
     }
     check_output_dir(out_dir)?;
     let StagedRootfs {
