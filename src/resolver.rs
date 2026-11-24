@@ -986,10 +986,11 @@ struct CpuReach<'a> {
 }
 
 // A note when bare `soname` ships from `found` while ld.so, on an Intel CPU that glibc names
-// `haswell` or `xeon_phi`, would load another copy through an entry at or before the one that
-// found it. That copy is not staged. On such a CPU the image's ld.so still finds the shipped
-// copy through an entry that names its directory outright, a default directory, or its
-// ld.so.cache, if ldconfig caches it under the needed name.
+// `haswell` or `xeon_phi`, would load another copy through a `$PLATFORM` entry. That search is
+// the one ld.so runs on such a CPU: every entry it searches, each `$PLATFORM` read as that name,
+// then the default directories. The CPU copy is not staged, so on such a CPU the image's ld.so
+// still finds the shipped copy through an entry that names its directory outright, a default
+// directory, or its ld.so.cache, if ldconfig caches it under the needed name.
 fn cpu_copy_note(
     soname: &str,
     found: &Path,
@@ -999,21 +1000,31 @@ fn cpu_copy_note(
     if soname.contains('/') {
         return None;
     }
-    let at = reach
-        .search
-        .iter()
-        .position(|dir| dir.join(soname).exists())?;
     let real = canonical(found);
-    let copies: Vec<(&CpuEntry, &str, PathBuf)> = reach.cpu[..=at]
+    let searched = || {
+        reach
+            .search
+            .iter()
+            .zip(reach.cpu.iter().zip(reach.gaps))
+            .filter(|(_, (_, gap))| gap.is_none())
+            .map(|(dir, (cpu, _))| (dir, cpu.as_ref()))
+    };
+    let copies: Vec<(&CpuEntry, &str, PathBuf)> = X86_64_CPU_PLATFORMS
         .iter()
-        .flatten()
-        .flat_map(|entry| {
-            entry
-                .dirs
-                .iter()
-                .map(move |(name, alt)| (entry, *name, alt.join(soname)))
+        .enumerate()
+        .filter_map(|(i, &name)| {
+            let (entry, copy) = searched()
+                .map(|(dir, cpu)| match cpu {
+                    Some(entry) => (Some(entry), entry.dirs[i].1.join(soname)),
+                    None => (None, dir.join(soname)),
+                })
+                .chain(reach.default_dirs.iter().map(|d| (None, d.join(soname))))
+                .find(|(_, copy)| copy.exists())?;
+            // Only a hit through a `$PLATFORM` entry differs by CPU. Any other hit is the same
+            // file on every CPU, and a gap there has its own note.
+            let entry = entry?;
+            (canonical(&copy) != real).then_some((entry, name, copy))
         })
-        .filter(|(_, _, copy)| copy.exists() && canonical(copy) != real)
         .collect();
     if copies.is_empty() {
         return None;
@@ -1028,13 +1039,9 @@ fn cpu_copy_note(
             printable(copy.parent().unwrap_or(Path::new("/")))
         ));
     }
-    let shipped_dir = &reach.search[at];
-    let direct = reach
-        .search
-        .iter()
-        .zip(reach.cpu.iter().zip(reach.gaps))
-        .any(|(dir, (cpu, gap))| cpu.is_none() && gap.is_none() && dir == shipped_dir)
-        || reach.default_dirs.contains(shipped_dir);
+    let shipped_dir = found.parent().unwrap_or(Path::new("/"));
+    let direct = searched().any(|(dir, cpu)| cpu.is_none() && dir == shipped_dir)
+        || reach.default_dirs.iter().any(|d| d == shipped_dir);
     match cache_miss(soname, found, source).filter(|_| !direct) {
         Some(miss) => note.push_str(&format!(
             ". On such a CPU the image's ld.so cannot find `{s}` at all, because ldconfig does \
@@ -3271,6 +3278,48 @@ mod tests {
         assert_eq!(res.notes.len(), 1, "{:?}", res.notes);
         assert!(
             res.notes[0].ends_with(". The image loads the shipped copy on every CPU"),
+            "{}",
+            res.notes[0]
+        );
+    }
+
+    #[test]
+    fn a_cpu_platform_copy_that_ld_so_reaches_later_is_noted_too() {
+        // On `haswell`, ld.so reads every `$PLATFORM` entry so, so it can miss the entry that
+        // found the shipped copy and load a copy through a later one.
+        let (res, root) = resolve_files(
+            "libfoo.so.1",
+            &[],
+            &["$ORIGIN/$PLATFORM:/opt/$PLATFORM"],
+            &["a/x86_64/libfoo.so.1", "opt/haswell/libfoo.so.1"],
+        );
+        assert_eq!(res.libs[0].path, root.join("a/x86_64/libfoo.so.1"));
+        assert_eq!(res.notes.len(), 1, "{:?}", res.notes);
+        assert!(
+            res.notes[0].contains(&format!(
+                "in RUNPATH entry `/opt/$PLATFORM` of {} as `haswell` and loads the copy in {} \
+                 instead",
+                root.join("a/exe").display(),
+                root.join("opt/haswell").display()
+            )),
+            "{}",
+            res.notes[0]
+        );
+        // A library that ships from a default directory, with a CPU copy that only a `$PLATFORM`
+        // entry names. The image finds the shipped copy there on every CPU.
+        let (res, root) = resolve_files(
+            "libfoo.so.1",
+            &[],
+            &["$ORIGIN/$PLATFORM"],
+            &["a/haswell/libfoo.so.1", "usr/lib64/libfoo.so.1"],
+        );
+        assert_eq!(res.libs[0].path, root.join("usr/lib64/libfoo.so.1"));
+        assert_eq!(res.notes.len(), 1, "{:?}", res.notes);
+        assert!(
+            res.notes[0].starts_with(&format!(
+                "`libfoo.so.1` ships from {}. On an Intel CPU that glibc names `haswell`",
+                root.join("usr/lib64/libfoo.so.1").display()
+            )) && res.notes[0].ends_with(". The image loads the shipped copy on every CPU"),
             "{}",
             res.notes[0]
         );

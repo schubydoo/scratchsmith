@@ -23,7 +23,7 @@
    `$PLATFORM` is read as `x86_64`. glibc reads it as `haswell` or `xeon_phi` on some Intel CPUs,
    but those copies are optimized builds that not every CPU can run, so they never stage. A
    library missing as `x86_64` but present under such a name gets a hint, and a library that
-   ships beside such a copy gets a note on stderr. Scratchsmith never
+   ships while `ld.so` on such a CPU would load such a copy gets a note on stderr. Scratchsmith never
    scrapes the host's `ldd`, `ld.so.cache`, or `LD_LIBRARY_PATH`, so the result is deterministic.
 2. **Stage**: copy the interpreter to its verbatim path, mirror the libraries, recreate
    versioned-soname symlinks, regenerate `ld.so.cache`, and add the glibc NSS pieces.
