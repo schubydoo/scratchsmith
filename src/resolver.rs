@@ -74,7 +74,7 @@ impl ElfInfo {
             .is_some_and(|i| i.contains("ld-musl") || i.contains("libc.musl"))
     }
 
-    // The `$PLATFORM` token value. Only the arches v1 targets are named; anything
+    // The `$PLATFORM` token value. Only the arches Scratchsmith targets are named; anything
     // else falls back to an empty string rather than guessing wrong.
     fn platform(&self) -> &'static str {
         match self.machine {
@@ -156,7 +156,7 @@ pub struct Sysroot {
 
 impl Sysroot {
     /// Build a sysroot rooted at `root`. Default dirs cover the glibc lib
-    /// locations for the arches v1 targets; non-existent dirs are simply skipped.
+    /// locations for the arches Scratchsmith targets; non-existent dirs are simply skipped.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         let rel = [
