@@ -226,6 +226,10 @@ pub struct Resolution {
     /// Diagnosis only: nothing here is resolved or staged. Callers print them with
     /// `print_hints`.
     pub hints: Vec<String>,
+    /// A search-path entry that a library resolved through but ld.so does not search, one
+    /// line each. The image still loads the library through its ld.so.cache, so nothing here
+    /// changes what resolves or stages. `pack` prints them with `print_notes`.
+    pub notes: Vec<String>,
 }
 
 impl Resolution {
@@ -244,6 +248,13 @@ impl Resolution {
     pub fn print_hints(&self) {
         for h in &self.hints {
             eprintln!("note: {h}");
+        }
+    }
+
+    /// Print each note as one stderr line, the way `print_hints` does.
+    pub fn print_notes(&self) {
+        for n in &self.notes {
+            eprintln!("note: {n}");
         }
     }
 }
@@ -460,12 +471,24 @@ pub fn resolve_with(
     queue.push_back((
         root_path,
         root_info.clone(),
-        (Vec::<PathBuf>::new(), Vec::<PathBuf>::new()),
+        (
+            Vec::<PathBuf>::new(),
+            Vec::<PathBuf>::new(),
+            Vec::<Option<Gap>>::new(),
+        ),
         declared_needed,
     ));
+    // Each entry that ld.so does not search, with the sonames found only through it, in the
+    // order they were found, and why ldconfig would not cache one. One note per entry
+    // (decision-019: no behavior change).
+    let mut gaps: Vec<(Gap, Vec<GapLib>)> = Vec::new();
 
-    while let Some((obj_path, obj, (inherited_rpaths, inherited_literals), declared)) =
-        queue.pop_front()
+    while let Some((
+        obj_path,
+        obj,
+        (inherited_rpaths, inherited_literals, inherited_gaps),
+        declared,
+    )) = queue.pop_front()
     {
         let obj_dir = obj_path.parent().unwrap_or(Path::new("/"));
 
@@ -501,6 +524,9 @@ pub fn resolve_with(
         }
         let own_rpaths = build_dirs(used_rpaths, obj_dir, &sysroot.root, &root_info);
         let runpath_dirs = build_dirs(&obj.runpaths, obj_dir, &sysroot.root, &root_info);
+        // Index for index with the dirs above, so a hit in `search` names its entry.
+        let own_rpath_gaps = entry_gaps(used_rpaths, "RPATH", &obj_path, &root_info);
+        let runpath_gaps = entry_gaps(&obj.runpaths, "RUNPATH", &obj_path, &root_info);
         let own_literals = literal_dirs(used_rpaths, obj_dir, &sysroot.root, &root_info);
         let runpath_literals = literal_dirs(&obj.runpaths, obj_dir, &sysroot.root, &root_info);
 
@@ -514,6 +540,11 @@ pub fn resolve_with(
             search.extend(inherited_rpaths.iter().cloned());
         }
         search.extend(runpath_dirs);
+        let mut search_gaps = own_rpath_gaps.clone();
+        if searches_rpath {
+            search_gaps.extend(inherited_gaps.iter().cloned());
+        }
+        search_gaps.extend(runpath_gaps);
         let mut literals: Vec<PathBuf> = own_literals.clone();
         if searches_rpath {
             literals.extend(inherited_literals.iter().cloned());
@@ -530,6 +561,8 @@ pub fn resolve_with(
         child_rpaths.extend(inherited_rpaths.iter().cloned());
         let mut child_literals = own_literals;
         child_literals.extend(inherited_literals.iter().cloned());
+        let mut child_gaps = own_rpath_gaps;
+        child_gaps.extend(inherited_gaps.iter().cloned());
         for (i, soname) in obj.needed.iter().enumerate() {
             // A DT_NEEDED name in a whole-string dir loads only through the cache. An
             // --include is the operator's file, which the program may open by path or by its
@@ -542,6 +575,16 @@ pub fn resolve_with(
                 }
             };
             let mut not_cached = Vec::new();
+            if let Some((gap, hit)) = gap_hit(soname, &search, &search_gaps, &sysroot.default_dirs)
+            {
+                // The note says the image's cache loads it, so check that ldconfig caches it.
+                let lib = (soname.clone(), cache_miss(soname, &hit, source));
+                match gaps.iter_mut().find(|(g, _)| g == gap) {
+                    Some((_, libs)) if !libs.iter().any(|(s, _)| s == soname) => libs.push(lib),
+                    Some(_) => {}
+                    None => gaps.push((gap.clone(), vec![lib])),
+                }
+            }
             let found = find_lib(soname, &search, obj_dir, &sysroot.root)
                 .or_else(|| in_literals(&literals, &mut not_cached))
                 .or_else(|| find_lib(soname, &sysroot.default_dirs, obj_dir, &sysroot.root));
@@ -641,7 +684,11 @@ pub fn resolve_with(
                     queue.push_back((
                         real,
                         child,
-                        (child_rpaths.clone(), child_literals.clone()),
+                        (
+                            child_rpaths.clone(),
+                            child_literals.clone(),
+                            child_gaps.clone(),
+                        ),
                         declared,
                     ));
                 }
@@ -661,7 +708,152 @@ pub fn resolve_with(
         }
     }
 
+    resolution.notes = gaps
+        .iter()
+        .map(|(gap, sonames)| gap.note(sonames))
+        .collect();
     Ok(resolution)
+}
+
+// A search-path entry that this resolver searches but ld.so does not. Decision-019 keeps the
+// search as it is, because the image's ld.so.cache lists the directory and still loads the
+// library, so a pack that works today keeps working. The entry only earns a note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Gap {
+    owner: PathBuf,
+    tag: &'static str,
+    entry: String,
+    kind: GapKind,
+}
+
+// A soname found through a gap, and why ldconfig would not cache it, if it would not.
+type GapLib = (String, Option<String>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GapKind {
+    // A wholly empty RPATH or RUNPATH string, which glibc ignores. It is read here as $ORIGIN.
+    Empty,
+    // `$ORIGINX`, `$LIB_x` and the like. glibc's `is_dst` takes the name only when no
+    // letter, digit or `_` follows it, and keeps the rest literal. It is expanded here.
+    Token,
+    // ld.so reads a relative entry against the working directory. It is read here against
+    // the object's directory.
+    Relative,
+}
+
+impl Gap {
+    // `libs` pairs each soname with why ldconfig does not cache it, if it does not.
+    fn note(&self, libs: &[GapLib]) -> String {
+        let (tag, owner) = (self.tag, printable(&self.owner));
+        let cached: Vec<String> = libs
+            .iter()
+            .filter(|(_, miss)| miss.is_none())
+            .map(|(s, _)| format!("`{}`", s.escape_debug()))
+            .collect();
+        let loads = if cached.len() == 1 { "loads" } else { "load" };
+        let (entry, why) = match self.kind {
+            GapKind::Empty => (
+                format!("{owner} has an empty {tag} string"),
+                "it ignores an empty string",
+            ),
+            GapKind::Token => (
+                format!("{tag} entry `{}` of {owner}", self.entry.escape_debug()),
+                "it expands `$ORIGIN`, `$LIB` and `$PLATFORM` only when no letter, digit or `_` \
+                 follows the name",
+            ),
+            GapKind::Relative => (
+                format!("{tag} entry `{}` of {owner}", self.entry.escape_debug()),
+                "it reads a relative entry against the working directory, not the object's \
+                 directory",
+            ),
+        };
+        let mut note = format!("{entry}: ld.so does not search this entry, because {why}");
+        if !cached.is_empty() {
+            note.push_str(&format!(
+                ", so {} {loads} only through the image's ld.so.cache",
+                cached.join(", ")
+            ));
+        }
+        for (soname, miss) in libs {
+            if let Some(miss) = miss {
+                note.push_str(&format!(
+                    ". The image's ld.so cannot find `{}` either, because ldconfig does not \
+                     cache it under that name: {miss}",
+                    soname.escape_debug()
+                ));
+            }
+        }
+        note
+    }
+}
+
+// One `Option<Gap>` per entry of `search_entries(raw)`, in the same order as `build_dirs`.
+fn entry_gaps(
+    raw: &[String],
+    tag: &'static str,
+    owner: &Path,
+    root_info: &ElfInfo,
+) -> Vec<Option<Gap>> {
+    let origin_dir = owner.parent().unwrap_or(Path::new("/"));
+    search_entries(raw)
+        .map(|entry| {
+            let kind = if entry.is_empty() {
+                // `search_entries` drops an empty entry of a list, so this is a whole string.
+                GapKind::Empty
+            } else if holds_unknown_token(entry) {
+                GapKind::Token
+            } else if !Path::new(&expand_tokens(entry, origin_dir, root_info)).is_absolute() {
+                GapKind::Relative
+            } else {
+                return None;
+            };
+            Some(Gap {
+                owner: owner.to_path_buf(),
+                tag,
+                entry: entry.to_owned(),
+                kind,
+            })
+        })
+        .collect()
+}
+
+// True when `$ORIGIN`, `$LIB` or `$PLATFORM` is followed by a letter, digit or `_`, which
+// `expand_tokens` expands and glibc's `is_dst` (elf/dl-load.c, 2.41) keeps literal.
+fn holds_unknown_token(entry: &str) -> bool {
+    entry.match_indices('$').any(|(at, _)| {
+        ["ORIGIN", "LIB", "PLATFORM"].iter().any(|name| {
+            entry[at + 1..].strip_prefix(name).is_some_and(|after| {
+                after
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+        })
+    })
+}
+
+// The entry a bare `soname` resolves through, when ld.so would not search it there, and the
+// file it found. A slash soname skips the search list. A hit counts only when neither an entry
+// that ld.so does search nor a default directory names the same directory, because then ld.so
+// finds the same file.
+fn gap_hit<'a>(
+    soname: &str,
+    search: &[PathBuf],
+    gaps: &'a [Option<Gap>],
+    default_dirs: &[PathBuf],
+) -> Option<(&'a Gap, PathBuf)> {
+    if soname.contains('/') {
+        return None;
+    }
+    let at = search.iter().position(|dir| dir.join(soname).exists())?;
+    let gap = gaps[at].as_ref()?;
+    let dir = &search[at];
+    let searched = search
+        .iter()
+        .zip(gaps)
+        .any(|(d, g)| g.is_none() && d == dir)
+        || default_dirs.contains(dir);
+    (!searched).then(|| (gap, dir.join(soname)))
 }
 
 // Expand ld.so tokens in a search path against the object that owns it. `$ORIGIN`
@@ -733,22 +925,8 @@ fn find_cached(
         if !candidate.exists() {
             continue;
         }
-        let why = if !ldconfig_caches_name(soname) {
-            "it caches only names that start with `lib` or `ld-` and hold `.so`, or start with \
-             `ld.so.` or `ld64.so.`"
-                .to_string()
-        } else {
-            let read = candidate
-                .is_file()
-                .then(|| source.read(&canonical(&candidate)));
-            match read {
-                Some(Ok(Some(ElfInfo {
-                    soname: Some(own), ..
-                }))) if own != soname => {
-                    format!("it lists the file by its SONAME `{}`", own.escape_debug())
-                }
-                _ => return Some(candidate),
-            }
+        let Some(why) = cache_miss(soname, &candidate, source) else {
+            return Some(candidate);
         };
         not_cached.push(format!(
             "`{}` is in {}, a directory whose name holds ':'. ld.so splits RPATH and RUNPATH on \
@@ -760,6 +938,31 @@ fn find_cached(
         ));
     }
     None
+}
+
+// Why ldconfig would not cache `candidate` under the name `soname`, or `None` when it would.
+// A file that is not regular, or does not read as an ELF, counts as cached: the walk refuses
+// it with its own error.
+fn cache_miss(soname: &str, candidate: &Path, source: &dyn LinkInfoSource) -> Option<String> {
+    if !ldconfig_caches_name(soname) {
+        return Some(
+            "it caches only names that start with `lib` or `ld-` and hold `.so`, or start with \
+             `ld.so.` or `ld64.so.`"
+                .to_string(),
+        );
+    }
+    let read = candidate
+        .is_file()
+        .then(|| source.read(&canonical(candidate)));
+    match read {
+        Some(Ok(Some(ElfInfo {
+            soname: Some(own), ..
+        }))) if own != soname => Some(format!(
+            "it lists the file by its SONAME `{}`",
+            own.escape_debug()
+        )),
+        _ => None,
+    }
 }
 
 // glibc's `_dl_is_dso` (elf/dl-is_dso.h, 2.41): the file names ldconfig puts in the cache.
@@ -2576,6 +2779,205 @@ mod tests {
                 && res.hints[0].contains("a RUNPATH that lists"),
             "{}",
             res.hints[0]
+        );
+    }
+
+    // decision-019: an entry ld.so does not search resolves as before and earns one note.
+    // Returns the resolution, the exe's path and the library's.
+    fn resolve_through(
+        rpaths: &[&str],
+        runpaths: &[&str],
+        lib_dir: &str,
+    ) -> (Resolution, PathBuf, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = canonical(tmp.path());
+        let exe = root.join("a/exe");
+        let lib = root.join(lib_dir).join("libfoo.so.1");
+        touch(&exe);
+        touch(&lib);
+        let mut infos = HashMap::new();
+        infos.insert(exe.clone(), elf(&["libfoo.so.1"], rpaths, runpaths, None));
+        infos.insert(lib.clone(), elf(&[], &[], &[], None));
+        let res = resolve_with(&exe, &Sysroot::new(&root), &[], &MapSource { infos }).unwrap();
+        (res, exe, lib)
+    }
+
+    #[test]
+    fn an_entry_ld_so_does_not_search_resolves_as_before_and_is_noted_once() {
+        let skip = "ld.so does not search this entry, because";
+        let cache = "so `libfoo.so.1` loads only through the image's ld.so.cache";
+        let empty = "it ignores an empty string";
+        let relative =
+            "it reads a relative entry against the working directory, not the object's directory";
+        let token = "it expands `$ORIGIN`, `$LIB` and `$PLATFORM` only when no letter, digit or \
+                     `_` follows the name";
+        let cases: [(&[&str], &[&str], &str, &str); 7] = [
+            (
+                &[""],
+                &[],
+                "a",
+                "{exe} has an empty RPATH string: {skip} {empty}, {cache}",
+            ),
+            (
+                &[],
+                &[""],
+                "a",
+                "{exe} has an empty RUNPATH string: {skip} {empty}, {cache}",
+            ),
+            (
+                &["lib"],
+                &[],
+                "a/lib",
+                "RPATH entry `lib` of {exe}: {skip} {relative}, {cache}",
+            ),
+            (
+                &[],
+                &["lib"],
+                "a/lib",
+                "RUNPATH entry `lib` of {exe}: {skip} {relative}, {cache}",
+            ),
+            (
+                &[],
+                &["$ORIGINX"],
+                "aX",
+                "RUNPATH entry `$ORIGINX` of {exe}: {skip} {token}, {cache}",
+            ),
+            (
+                &[],
+                &["$ORIGIN_x"],
+                "a_x",
+                "RUNPATH entry `$ORIGIN_x` of {exe}: {skip} {token}, {cache}",
+            ),
+            (
+                &[],
+                &["/$LIBx"],
+                "lib64x",
+                "RUNPATH entry `/$LIBx` of {exe}: {skip} {token}, {cache}",
+            ),
+        ];
+        for (rpaths, runpaths, lib_dir, note) in cases {
+            let (res, exe, lib) = resolve_through(rpaths, runpaths, lib_dir);
+            // The result is what it always was: the library resolves where it sits.
+            assert!(
+                res.missing.is_empty(),
+                "{rpaths:?} {runpaths:?}: {:?}",
+                res.missing
+            );
+            assert_eq!(res.libs.len(), 1, "{rpaths:?} {runpaths:?}");
+            assert_eq!(res.libs[0].path, lib, "{rpaths:?} {runpaths:?}");
+            let want = note
+                .replace("{exe}", &printable(&exe))
+                .replace("{skip}", skip)
+                .replace("{empty}", empty)
+                .replace("{relative}", relative)
+                .replace("{token}", token)
+                .replace("{cache}", cache);
+            assert_eq!(res.notes, vec![want], "{rpaths:?} {runpaths:?}");
+        }
+    }
+
+    #[test]
+    fn an_entry_ld_so_searches_gets_no_note() {
+        // `${ORIGIN}x` expands in glibc too, and an absolute entry is searched as written.
+        for (runpaths, lib_dir) in [(&["${ORIGIN}x"][..], "ax"), (&["$ORIGIN/lib"], "a/lib")] {
+            let (res, ..) = resolve_through(&[], runpaths, lib_dir);
+            assert!(
+                res.missing.is_empty() && res.notes.is_empty(),
+                "{runpaths:?}: {res:?}"
+            );
+        }
+        // An empty string beside `$ORIGIN`: ld.so finds the same file through `$ORIGIN`.
+        let (res, ..) = resolve_through(&["", "$ORIGIN"], &[], "a");
+        assert!(res.missing.is_empty() && res.notes.is_empty(), "{res:?}");
+    }
+
+    #[test]
+    fn a_noted_library_ldconfig_does_not_cache_is_named_as_unloadable() {
+        // The note promises the image's ld.so.cache, so it must hold only where ldconfig
+        // caches the file under the needed name. The result is still the same.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = canonical(tmp.path());
+        let exe = root.join("a/exe");
+        let plugin = root.join("a/lib/foo.so");
+        let other = root.join("a/lib/libbar.so.1");
+        for p in [&exe, &plugin, &other] {
+            touch(p);
+        }
+        let mut infos = HashMap::new();
+        infos.insert(
+            exe.clone(),
+            elf(&["foo.so", "libbar.so.1"], &[], &["lib"], None),
+        );
+        infos.insert(plugin.clone(), elf(&[], &[], &[], None));
+        let mut bar = elf(&[], &[], &[], None);
+        bar.soname = Some("libbar.so.2".into());
+        infos.insert(other.clone(), bar);
+        let res = resolve_with(&exe, &Sysroot::new(&root), &[], &MapSource { infos }).unwrap();
+        assert_eq!(res.libs.len(), 2, "{res:?}");
+        assert_eq!(
+            res.notes,
+            vec![format!(
+                "RUNPATH entry `lib` of {}: ld.so does not search this entry, because it reads a \
+                 relative entry against the working directory, not the object's directory. The \
+                 image's ld.so cannot find `foo.so` either, because ldconfig does not cache it \
+                 under that name: it caches only names that start with `lib` or `ld-` and hold \
+                 `.so`, or start with `ld.so.` or `ld64.so.`. The image's ld.so cannot find \
+                 `libbar.so.1` either, because ldconfig does not cache it under that name: it \
+                 lists the file by its SONAME `libbar.so.2`",
+                printable(&exe)
+            )]
+        );
+    }
+
+    #[test]
+    fn an_entry_that_names_a_default_directory_gets_no_note() {
+        // ld.so searches the default directories after RUNPATH, on the host and in the image.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = canonical(tmp.path());
+        let exe = root.join("usr/lib64/exe");
+        let lib = root.join("usr/lib64/libfoo.so.1");
+        touch(&exe);
+        touch(&lib);
+        let mut infos = HashMap::new();
+        infos.insert(exe.clone(), elf(&["libfoo.so.1"], &[], &[""], None));
+        infos.insert(lib.clone(), elf(&[], &[], &[], None));
+        let res = resolve_with(&exe, &Sysroot::new(&root), &[], &MapSource { infos }).unwrap();
+        assert_eq!(res.libs.len(), 1);
+        assert!(res.notes.is_empty(), "{:?}", res.notes);
+    }
+
+    #[test]
+    fn two_libraries_through_one_entry_share_one_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("a/exe");
+        for p in [
+            &exe,
+            &root.join("a/lib/libfoo.so.1"),
+            &root.join("a/lib/libbar.so.1"),
+        ] {
+            touch(p);
+        }
+        let mut infos = HashMap::new();
+        infos.insert(
+            canonical(&exe),
+            elf(&["libfoo.so.1", "libbar.so.1"], &[], &["lib"], None),
+        );
+        for lib in ["libfoo.so.1", "libbar.so.1"] {
+            infos.insert(
+                canonical(&root.join("a/lib").join(lib)),
+                elf(&[], &[], &[], None),
+            );
+        }
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert_eq!(res.libs.len(), 2);
+        assert_eq!(res.notes.len(), 1, "{:?}", res.notes);
+        assert!(
+            res.notes[0].ends_with(
+                "so `libfoo.so.1`, `libbar.so.1` load only through the image's ld.so.cache"
+            ),
+            "{}",
+            res.notes[0]
         );
     }
 
