@@ -3,11 +3,13 @@
 //! `unpack` target rarely forms a valid archive, so it only exercises the outer tar/gzip/JSON
 //! parse. This harness assembles a real OCI-layout archive from arbitrary layers — regular
 //! files, directories, symlinks (whose targets may escape), whiteouts (`.wh.` and opaque),
-//! GNU sparse entries (in a layer, and rarely a sparse `index.json` in the archive), chosen
-//! media types, an optional digest tamper, and an optional image-index manifest — so
-//! the fuzzer reaches the layer application, whiteout deletion, path-containment, digest
-//! verification, and media dispatch that the raw target cannot. It asserts no panic, and
-//! that no error it returns can break a line of output.
+//! GNU sparse entries (in a layer, and rarely a sparse `index.json` in the archive), gzip
+//! layers split into two members, bytes after a layer's end marker, chosen media types, an
+//! optional digest tamper, and an optional image-index manifest — so the fuzzer reaches the
+//! layer application, whiteout deletion, path-containment, digest verification, and media
+//! dispatch that the raw target cannot. It asserts no panic, and that no error it returns can
+//! break a line of output. A run that succeeds must have extracted every entry it was given,
+//! and must have been given no sparse entry and no bytes after a layer's end.
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
@@ -36,6 +38,20 @@ struct Spec {
 struct LayerSpec {
     entries: Vec<EntrySpec>,
     media: Media,
+    // Where a gzip layer splits into a second member, which unpack must read too.
+    split: u16,
+    // Rare on purpose (like `tamper`): a byte after the tar's end marker, which unpack must
+    // refuse, because a reader that skips zero blocks would find it.
+    trail: u8,
+}
+
+// What one layer's tar holds, for the check after a run that succeeds.
+struct Built {
+    tar: Vec<u8>,
+    // Entries the extraction writes: every one but a `.wh.` marker.
+    extracted: usize,
+    // A sparse entry, which unpack must refuse before it writes anything.
+    sparse: bool,
 }
 
 #[derive(Arbitrary, Debug)]
@@ -132,11 +148,21 @@ fn put_file(ar: &mut tar::Builder<Vec<u8>>, name: &str, data: &[u8]) {
 
 // Build one layer's uncompressed tar from its entries. Best-effort: a rejected entry is
 // skipped, never fatal.
-fn layer_tar(spec: &LayerSpec) -> Vec<u8> {
+fn layer_tar(spec: &LayerSpec) -> Built {
     let mut ar = tar::Builder::new(Vec::new());
+    let (mut extracted, mut sparse) = (0, false);
     for e in spec.entries.iter().take(12) {
         let base = rel(&e.path);
-        let _ = match &e.kind {
+        // The name the entry is stored under, as unpack reads it.
+        let stored = match &e.kind {
+            Kind::Whiteout => {
+                let (dir, b) = dir_and_base(&base);
+                format!("{dir}.wh.{b}")
+            }
+            Kind::Opaque => format!("{}.wh..wh..opq", dir_and_base(&base).0),
+            _ => base.clone(),
+        };
+        let appended = match &e.kind {
             Kind::File(body) => {
                 let body = &body[..body.len().min(256)];
                 let mut h = header(body.len() as u64, tar::EntryType::Regular);
@@ -179,8 +205,24 @@ fn layer_tar(spec: &LayerSpec) -> Vec<u8> {
                 append_sparse(&mut ar, &base, data, (*offset).into(), real)
             }
         };
+        if appended.is_ok() {
+            sparse |= matches!(e.kind, Kind::Sparse { .. });
+            let marker = stored
+                .rsplit('/')
+                .next()
+                .is_some_and(|n| n.starts_with(".wh."));
+            extracted += usize::from(!marker);
+        }
     }
-    ar.into_inner().unwrap_or_default()
+    let mut tar = ar.into_inner().unwrap_or_default();
+    if spec.trail % 16 == 3 {
+        tar.push(spec.trail);
+    }
+    Built {
+        tar,
+        extracted,
+        sparse,
+    }
 }
 
 // A GNU sparse entry: `data` at `offset`, and a hole up to `real` bytes. The map ends with a
@@ -219,16 +261,35 @@ fn gzip(data: &[u8]) -> Vec<u8> {
     e.finish().unwrap_or_default()
 }
 
+// What a run that succeeds must report: every entry extracted, and nothing it must refuse.
+struct Expect {
+    extracted: usize,
+    refused: bool,
+}
+
 // Assemble the OCI-layout tarball (oci-layout + index.json + blobs) into `out`.
-fn build_archive(spec: &Spec) -> Vec<u8> {
+fn build_archive(spec: &Spec) -> (Vec<u8>, Expect) {
+    let mut expect = Expect {
+        extracted: 0,
+        refused: false,
+    };
     // Each layer: (blob bytes, media type string).
     let mut blobs: Vec<(String, Vec<u8>)> = Vec::new(); // (digest_name, bytes) to write
     let mut layer_descs: Vec<serde_json::Value> = Vec::new();
 
     for (i, layer) in spec.layers.iter().take(4).enumerate() {
-        let tar = layer_tar(layer);
+        let built = layer_tar(layer);
+        expect.extracted += built.extracted;
+        expect.refused |= built.sparse || layer.trail % 16 == 3;
+        let tar = built.tar;
         let (bytes, media) = match layer.media {
-            Media::Gzip => (gzip(&tar), "application/vnd.oci.image.layer.v1.tar+gzip"),
+            Media::Gzip => {
+                // Two members, as `cat a.gz b.gz` writes: Docker reads both, and so must unpack.
+                let (a, b) = tar.split_at(usize::from(layer.split) % (tar.len() + 1));
+                let mut bytes = gzip(a);
+                bytes.extend(gzip(b));
+                (bytes, "application/vnd.oci.image.layer.v1.tar+gzip")
+            }
             Media::Tar => (tar, "application/vnd.oci.image.layer.v1.tar"),
             Media::Unsupported => (tar, "application/vnd.oci.image.layer.v1.tar+zstd"),
         };
@@ -295,11 +356,11 @@ fn build_archive(spec: &Spec) -> Vec<u8> {
     for (name, data) in &blobs {
         put_file(&mut ar, &format!("blobs/sha256/{name}"), data);
     }
-    ar.into_inner().unwrap_or_default()
+    (ar.into_inner().unwrap_or_default(), expect)
 }
 
 fuzz_target!(|spec: Spec| {
-    let bytes = build_archive(&spec);
+    let (bytes, expect) = build_archive(&spec);
     let Ok(tmp) = tempfile::tempdir() else {
         return;
     };
@@ -314,11 +375,24 @@ fuzz_target!(|spec: Spec| {
     // Entry paths here pass `rel`, so what this mainly reaches is a symlink target that
     // tar quotes in its own errors.
     use scratchsmith::resolver::breaks_a_line;
-    if let Err(err) = scratchsmith::unpack::run(&archive, &tmp.path().join("out")) {
-        let shown = format!("{err:#}");
-        assert!(
-            !shown.chars().any(breaks_a_line),
-            "an unpack error carries a character that breaks a line: {shown:?}"
-        );
+    match scratchsmith::unpack::run(&archive, &tmp.path().join("out")) {
+        Err(err) => {
+            let shown = format!("{err:#}");
+            assert!(
+                !shown.chars().any(breaks_a_line),
+                "an unpack error carries a character that breaks a line: {shown:?}"
+            );
+        }
+        // Success applied every layer, so it read every entry of every one.
+        Ok(report) => {
+            assert!(
+                !expect.refused,
+                "unpack accepted a sparse entry or bytes after a layer's end"
+            );
+            assert_eq!(
+                report.files, expect.extracted,
+                "unpack skipped an entry of a layer"
+            );
+        }
     }
 });
