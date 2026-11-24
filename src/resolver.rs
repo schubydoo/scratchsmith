@@ -67,7 +67,7 @@ impl ElfInfo {
     }
 
     /// True when the interpreter is the musl loader. musl differs fundamentally from
-    /// glibc (no NSS, libc-is-the-loader), so v1 detects and rejects it.
+    /// glibc (no NSS, libc-is-the-loader), so Scratchsmith detects and rejects it.
     pub fn is_musl(&self) -> bool {
         self.interpreter
             .as_deref()
@@ -85,13 +85,13 @@ impl ElfInfo {
     }
 }
 
-/// Reject binaries Scratchsmith cannot correctly pack at v1. musl is fundamentally
+/// Reject binaries Scratchsmith cannot correctly pack. musl is fundamentally
 /// different (loader path, no NSS module system), so it is hard-failed loudly rather
 /// than packed into a subtly broken image.
 pub fn ensure_glibc(info: &ElfInfo) -> Result<()> {
     if info.is_musl() {
         bail!(
-            "musl binaries are out of scope; v1 targets glibc (interpreter: {})",
+            "musl binaries are out of scope; Scratchsmith packs glibc binaries only (interpreter: {})",
             escape_if_line_breaking(info.interpreter.as_deref().unwrap_or_default())
         );
     }
@@ -1397,7 +1397,7 @@ mod tests {
         let honest = info(Some("/lib/ld-musl-x86_64.so.1"), &[]);
         assert_eq!(
             format!("{:#}", ensure_glibc(&honest).unwrap_err()),
-            "musl binaries are out of scope; v1 targets glibc \
+            "musl binaries are out of scope; Scratchsmith packs glibc binaries only \
              (interpreter: /lib/ld-musl-x86_64.so.1)"
         );
 
