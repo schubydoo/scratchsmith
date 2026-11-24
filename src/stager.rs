@@ -921,8 +921,7 @@ fn stage_files(
     // resolves against the host root whenever the tree is not mounted as `/`, which is the
     // whole of the `--no-build --output DIR` case.
     if symlinks != SymlinkMode::CopyAll {
-        let named = std::path::absolute(binary)
-            .with_context(|| format!("resolving {}", binary.display()))?;
+        let named = named_binary_path(binary)?;
         if named != binary_real && !is_staged(dest, &named) {
             let dir = named.parent().unwrap_or(Path::new("/"));
             place_symlink(dest, &named, &relative_link_value(dir, &binary_real))?;
@@ -953,6 +952,26 @@ fn stage_files(
         entrypoint: binary_real,
         loader,
     })
+}
+
+// The image path for the name the user gave. `std::path::absolute` keeps a `..`, so
+// `../app` never equals the real path and its link lands on the staged binary, and the link
+// value counts the `..` as a directory. Only then is the parent canonicalized, the way the
+// kernel walks it. A path with no `..` stays as given, so `/bin/python3` is not rewritten to
+// `/usr/bin/python3` on a merged-/usr host.
+fn named_binary_path(binary: &Path) -> Result<PathBuf> {
+    use std::path::Component;
+    let named =
+        std::path::absolute(binary).with_context(|| format!("resolving {}", binary.display()))?;
+    if !named.components().any(|c| c == Component::ParentDir) {
+        return Ok(named);
+    }
+    // The binary was already canonicalized, so its parent exists and its name is a file.
+    let (Some(dir), Some(name)) = (named.parent(), named.file_name()) else {
+        return Ok(named);
+    };
+    let dir = std::fs::canonicalize(dir).with_context(|| format!("locating {}", dir.display()))?;
+    Ok(dir.join(name))
 }
 
 // Where the loader goes: PT_INTERP resolved inside the image (see `image_dir`). Joining the raw
@@ -2368,6 +2387,29 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("cannot read"), "{err}");
+    }
+
+    #[test]
+    fn the_named_binary_path_drops_dotdot_and_keeps_a_plain_name_as_given() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        make_file(&root.join("real/app"), b"binary");
+        fs::create_dir_all(root.join("build")).unwrap();
+        // A directory link, as /bin is on a merged-/usr host.
+        std::os::unix::fs::symlink("real", root.join("alias")).unwrap();
+
+        // No `..`: the name stays as given, link directory included.
+        let plain = root.join("alias/app");
+        assert_eq!(named_binary_path(&plain).unwrap(), plain);
+        // A `..` is walked the way the kernel walks it, through the real directories.
+        assert_eq!(
+            named_binary_path(&root.join("build/../alias/app")).unwrap(),
+            root.join("real/app")
+        );
+        assert_eq!(
+            named_binary_path(&root.join("alias/../build/../real/app")).unwrap(),
+            root.join("real/app")
+        );
     }
 
     #[test]

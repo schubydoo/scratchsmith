@@ -300,6 +300,72 @@ fn symlinks_preserve_puts_the_named_binary_path_back() {
 }
 
 #[test]
+fn a_dotdot_binary_path_packs_in_every_symlinks_mode() {
+    // `pack ../app` from a sibling directory: the `..` must not reach the image path. It
+    // failed with "File exists" in every mode but copy-all, because the link for the name
+    // landed on the staged binary itself.
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let Some(fixture) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let real = root.join("app");
+    std::fs::copy(fixture, &real).unwrap();
+    std::fs::create_dir_all(root.join("build")).unwrap();
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    let link = root.join("bin/link");
+    std::os::unix::fs::symlink("../app", &link).unwrap();
+
+    for mode in ["copy-all", "preserve", "copy-unsafe", "skip-unsafe"] {
+        for (arg, tag) in [("../app", "plain"), ("../bin/link", "link")] {
+            let out = root.join(format!("out-{mode}-{tag}"));
+            let done = Command::new(bin)
+                .current_dir(root.join("build"))
+                .args([
+                    "pack",
+                    "-n",
+                    "-o",
+                    out.to_str().unwrap(),
+                    "--symlinks",
+                    mode,
+                    arg,
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                done.status.success(),
+                "{mode} {arg}: {}",
+                String::from_utf8_lossy(&done.stderr)
+            );
+            let staged_real = out.join(real.strip_prefix("/").unwrap());
+            assert!(
+                staged_real.is_file(),
+                "{mode} {arg}: the real binary is staged"
+            );
+            if tag == "plain" {
+                continue;
+            }
+            // The name the user gave comes back as a link, outside copy-all, and its
+            // relative value resolves to the staged binary, not past it.
+            let named = out.join(link.strip_prefix("/").unwrap());
+            if mode == "copy-all" {
+                assert!(named.symlink_metadata().is_err(), "{mode}: no named link");
+                continue;
+            }
+            let value = std::fs::read_link(&named).unwrap();
+            assert_eq!(value, Path::new("../app"), "{mode}");
+            assert_eq!(
+                named.parent().unwrap().join(&value).canonicalize().unwrap(),
+                staged_real.canonicalize().unwrap(),
+                "{mode}: the link must resolve to the staged binary"
+            );
+        }
+    }
+}
+
+#[test]
 fn the_report_names_the_loader_the_image_carries() {
     // The loader's path is chosen by the binary's PT_INTERP, not by scratchsmith, so a pack
     // that does not name it leaves the one host-dependent path in the image unrecorded.
