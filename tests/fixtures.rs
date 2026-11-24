@@ -817,3 +817,106 @@ fn a_truncated_program_interpreter_gives_graph_and_pack_the_same_error() {
         "the damaged loader must not stage"
     );
 }
+
+#[test]
+fn a_search_path_entry_that_ld_so_skips_packs_as_before_with_one_note() {
+    // decision-019: an empty string, a relative entry, and `$ORIGINX`-style names keep
+    // resolving as they always have (the image's ld.so.cache finds the library), and pack
+    // says once that ld.so does not search the entry. `${ORIGIN}x` is no such entry.
+    if !cc_available() {
+        skip_required("no C compiler");
+        return;
+    }
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let rpath = "-Wl,--disable-new-dtags";
+    let runpath = "-Wl,--enable-new-dtags";
+    // (dtags, entry, the directory the library sits in, relative to the app's own, and the
+    // start of the note, or None when ld.so searches the entry.)
+    let cases = [
+        (rpath, "", "app", Some("has an empty RPATH string")),
+        (runpath, "", "app", Some("has an empty RUNPATH string")),
+        (rpath, "lib", "app/lib", Some("RPATH entry `lib` of")),
+        (runpath, "lib", "app/lib", Some("RUNPATH entry `lib` of")),
+        (
+            runpath,
+            "$ORIGINX",
+            "appX",
+            Some("RUNPATH entry `$ORIGINX` of"),
+        ),
+        (
+            runpath,
+            "$ORIGIN_x",
+            "app_x",
+            Some("RUNPATH entry `$ORIGIN_x` of"),
+        ),
+        (runpath, "${ORIGIN}x", "appx", None),
+    ];
+    for (dtags, entry, lib_dir, note) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(dir.join(lib_dir)).unwrap();
+        std::fs::create_dir_all(dir.join("app")).unwrap();
+        std::fs::write(dir.join("foo.c"), "int foo(void){return 42;}").unwrap();
+        std::fs::write(
+            dir.join("main.c"),
+            "extern int foo(void); int main(void){return foo()==42?0:1;}",
+        )
+        .unwrap();
+        let p = |name: &str| dir.join(name).to_str().unwrap().to_string();
+        let lib = dir.join(lib_dir).join("libfoo.so");
+        cc(&["-shared", "-fPIC", "-o", lib.to_str().unwrap(), &p("foo.c")]);
+        cc(&[
+            dtags,
+            &format!("-Wl,-rpath,{entry}"),
+            "-o",
+            &p("app/app"),
+            &p("main.c"),
+            &format!("-L{}", dir.join(lib_dir).display()),
+            "-lfoo",
+        ]);
+        // The real loader is the reference: from `/`, it finds the library only where it
+        // searches the entry.
+        let run = Command::new(p("app/app"))
+            .current_dir("/")
+            .env_remove("LD_LIBRARY_PATH")
+            .output()
+            .unwrap();
+        assert_eq!(
+            run.status.success(),
+            note.is_none(),
+            "{dtags} {entry:?}: loader"
+        );
+
+        let rootfs = dir.join("rootfs");
+        let pack = Command::new(bin)
+            .args(["pack", "-n", "-o", rootfs.to_str().unwrap(), &p("app/app")])
+            .output()
+            .expect("run");
+        let stderr = String::from_utf8_lossy(&pack.stderr);
+        assert_eq!(pack.status.code(), Some(0), "{dtags} {entry:?}: {stderr}");
+        // Staged where the resolver always found it.
+        let staged = rootfs.join(lib.strip_prefix("/").unwrap());
+        assert!(staged.is_file(), "{dtags} {entry:?}: {}", staged.display());
+        let notes: Vec<&str> = stderr
+            .lines()
+            .filter(|l| l.contains("ld.so does not search this entry"))
+            .collect();
+        match note {
+            None => assert!(notes.is_empty(), "{dtags} {entry:?}: {stderr}"),
+            Some(start) => {
+                assert_eq!(notes.len(), 1, "{dtags} {entry:?}: {stderr}");
+                let line = notes[0];
+                let app = p("app/app");
+                assert!(
+                    line.starts_with(&format!("note: {app} {start}"))
+                        || line.starts_with(&format!("note: {start} {app}")),
+                    "{dtags} {entry:?}: {line}"
+                );
+                assert!(
+                    line.ends_with("so `libfoo.so` loads only through the image's ld.so.cache"),
+                    "{dtags} {entry:?}: {line}"
+                );
+            }
+        }
+    }
+}

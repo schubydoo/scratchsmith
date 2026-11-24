@@ -193,6 +193,7 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
 
     // Resolve against the host root for now; a pinned sysroot is future work.
     let resolution = resolver::resolve_with_includes(binary, &Sysroot::new("/"), &opts.includes)?;
+    resolution.print_notes();
     if !resolution.missing.is_empty() {
         resolution.print_hints();
         bail!(
@@ -1137,6 +1138,7 @@ mod tests {
             missing: vec![],
             edges: vec![],
             hints: vec![],
+            notes: vec![],
         }
     }
 

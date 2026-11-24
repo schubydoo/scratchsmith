@@ -27,3 +27,10 @@
 "$ORIGIN:"
 "$ORIGIN/libs"
 "/opt/none:"
+# Entries ld.so does not search but the resolver does, which earn a note: a name glued to a
+# token, and a relative entry. A wholly empty string is the `Empty` entry above.
+"$ORIGINX"
+"$ORIGIN_x"
+"$LIBx"
+"${ORIGIN}x"
+"libs"
