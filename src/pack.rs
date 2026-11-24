@@ -575,7 +575,8 @@ fn finish_staging(
     mut bundled: Vec<(PathBuf, PathBuf)>,
 ) -> Result<Finished> {
     let staging = Instant::now();
-    let extras = stager::stage_runtime_extras(dest, &opts.extras)?;
+    let mut extras = stager::stage_runtime_extras(dest, &opts.extras)?;
+    warnings.append(&mut extras.warnings);
     warnings.extend(stager::stage_added_files(
         dest,
         &opts.add_files,

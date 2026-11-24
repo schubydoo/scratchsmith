@@ -31,6 +31,7 @@ fn find_tini_exists() -> bool {
         "/usr/bin/tini",
         "/sbin/tini",
         "/usr/bin/tini-static",
+        "/sbin/tini-static",
         "/bin/tini",
     ]
     .iter()
