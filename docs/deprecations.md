@@ -81,6 +81,36 @@ as the total limit.
 There is no way around this limit. `unpack` cannot read a layer over 2 GiB of either type, and
 gzipping the layer does not help, because a gzip layer stops at the same limit.
 
+### A gzip layer of more than one member
+
+A gzip layer can hold several gzip members, one after another, as `cat a.gz b.gz` writes.
+Docker reads every member. Through 2.0.0, `unpack` read only the first, so a second member
+could carry files that the image installs and the audit never showed.
+
+Now `unpack` reads every member. Bytes after the last member that do not start another member
+make `unpack` fail with exit `1`. Docker refuses those bytes too, so no working image has them.
+
+### A layer with data after its end, or cut short
+
+A layer's tar ends with a block of zeros. Through 2.0.0, `unpack` stopped there and ignored what
+followed. A reader that skips zero blocks would find entries hidden after it. `unpack` also
+deleted a lower layer's files for a layer's whiteouts before it found that the layer was cut
+short.
+
+Now `unpack` refuses a layer with any byte other than zero after that block, and exits `1`.
+Zeros there are only padding, and still pass. A layer cut short inside an entry fails before
+`unpack` changes anything in the output directory.
+
+### A sparse entry in a layer
+
+A sparse tar entry stores only part of a file, and the reader fills the holes with zeros. A
+few header bytes can then claim a file of any size, and fill the disk. Through 2.0.0, `unpack`
+wrote such an entry from a layer. It already refused one in the outer archive.
+
+Now `unpack` refuses a sparse entry in a layer, in GNU or PAX form, and exits `1`. It refuses
+the layer before it writes any file from it. Docker and BuildKit write layers with Go's tar
+library, which cannot write a sparse entry, so no working image has one.
+
 ## Tolerances ending in 2.0
 
 No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list

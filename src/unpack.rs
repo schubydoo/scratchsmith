@@ -243,9 +243,10 @@ fn apply_layer(
     let dest_canon =
         std::fs::canonicalize(dest).with_context(|| format!("resolving {}", dest.display()))?;
 
-    // Pass 1: whiteouts. `.wh.<name>` deletes `<name>`; `.wh..wh..opq` clears the directory.
-    for entry in tar::Archive::new(tar_bytes).entries()? {
-        let path = entry.map_err(escape_tar_err)?.path()?.into_owned();
+    // Pass 1: read the whole layer before changing anything, so a refused layer leaves `dest`
+    // as it was. Then honor its whiteouts: `.wh.<name>` deletes `<name>`; `.wh..wh..opq` clears
+    // the directory.
+    for path in scan_layer(tar_bytes)? {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
@@ -297,6 +298,64 @@ fn apply_layer(
         count += 1;
     }
     Ok(count)
+}
+
+// Read one layer's tar end to end, refusing what the extraction would get wrong, and return
+// its whiteout marker paths. A truncated entry fails as tar reads past it. tar stops at the
+// first zero block, but a reader that goes on (GNU tar `--ignore-zeros`) would find whatever
+// follows, so the rest must be zeros too. A sparse entry fails here, before any file is
+// written: tar expands its holes, so a few header bytes can claim any size on disk, and no
+// layer writer emits one (Go's archive/tar, which Docker and BuildKit use, cannot).
+fn scan_layer(tar_bytes: &[u8]) -> Result<Vec<PathBuf>> {
+    let mut cursor = std::io::Cursor::new(tar_bytes);
+    let mut whiteouts = Vec::new();
+    for entry in tar::Archive::new(&mut cursor).entries()? {
+        let mut e = entry.map_err(escape_tar_err).context("reading layer")?;
+        let path = e.path()?.into_owned();
+        if is_sparse(&mut e)? {
+            bail!(
+                "refusing sparse entry {} in a layer",
+                shown(path.display(), SHOWN_MAX)
+            );
+        }
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with(".wh."))
+        {
+            whiteouts.push(path);
+        }
+    }
+    let end = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
+    if tar_bytes
+        .get(end..)
+        .is_some_and(|rest| rest.iter().any(|&b| b != 0))
+    {
+        bail!("layer has data after the end of its tar archive; refusing");
+    }
+    Ok(whiteouts)
+}
+
+// A GNU sparse entry, or a PAX one (formats 0.x and 1.0 mark a regular entry with
+// `GNU.sparse.*` records). tar does not expand the PAX kind, so it would write the sparse map
+// under a different name than the runtime does.
+fn is_sparse<R: Read>(e: &mut tar::Entry<'_, R>) -> Result<bool> {
+    if e.header().entry_type().is_gnu_sparse() {
+        return Ok(true);
+    }
+    let Some(exts) = e.pax_extensions().map_err(escape_tar_err)? else {
+        return Ok(false);
+    };
+    for ext in exts {
+        if ext
+            .map_err(escape_tar_err)?
+            .key_bytes()
+            .starts_with(b"GNU.sparse.")
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 // Honor one whiteout marker. `stripped` is the marker name minus the `.wh.` prefix, so an
@@ -550,9 +609,12 @@ impl std::fmt::Write for Head {
 }
 
 // Decompress a gzip layer, refusing one that expands past the cap (decompression bomb).
+// Every member is read, as Go's `gzip.Reader` (and so Docker) reads them: a first-member-only
+// read let a second member carry files the runtime installs and the audit never saw. Bytes
+// after the last member that are not another gzip header fail, as they do in Go.
 fn gunzip(data: &[u8]) -> Result<Vec<u8>> {
     let mut out = Vec::new();
-    flate2::read::GzDecoder::new(data)
+    flate2::read::MultiGzDecoder::new(data)
         .take(MAX_LAYER_BYTES + 1)
         .read_to_end(&mut out)
         .context("decompressing layer")?;
@@ -1343,6 +1405,141 @@ mod tests {
             assert!(shown.len() < 6 * TAR_ERR_MAX + 256, "{} bytes", shown.len());
             assert!(shown.contains(" bytes)"), "{shown}");
             assert!(!shown.chars().any(char::is_control));
+        }
+    }
+
+    fn gzip_of(data: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        e.write_all(data).unwrap();
+        e.finish().unwrap()
+    }
+
+    // An archive with one layer of `media` holding `blob`.
+    fn one_layer_archive(dir: &Path, media: &str, blob: &[u8]) -> PathBuf {
+        let manifest = serde_json::json!({
+            "layers": [{
+                "mediaType": media,
+                "digest": format!("sha256:{}", hex(Sha256::digest(blob))),
+            }],
+        });
+        archive_of(dir, &manifest, &[blob])
+    }
+
+    const GZIP_LAYER: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
+
+    #[test]
+    fn a_gzip_layer_of_two_members_unpacks_both() {
+        // Go's gzip reader, and so Docker, reads every member. Reading only the first let the
+        // second carry files the audit never saw.
+        let tmp = tempfile::tempdir().unwrap();
+        let tar = tar_of(&[("a", b"first"), ("b", b"second")]);
+        // Cut mid-archive, inside the second entry's header block.
+        let (head, tail) = tar.split_at(1024 + 100);
+        let mut blob = gzip_of(head);
+        blob.extend(gzip_of(tail));
+        let archive = one_layer_archive(tmp.path(), GZIP_LAYER, &blob);
+        let dest = tmp.path().join("out");
+        let report = run(&archive, &dest).unwrap();
+        assert_eq!(report.files, 2);
+        assert_eq!(std::fs::read(dest.join("b")).unwrap(), b"second");
+    }
+
+    #[test]
+    fn a_gzip_layer_with_trailing_bytes_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut blob = gzip_of(&tar_of(&[("a", b"x")]));
+        blob.extend_from_slice(b"hidden");
+        let archive = one_layer_archive(tmp.path(), GZIP_LAYER, &blob);
+        let err = run(&archive, &tmp.path().join("out")).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("decompressing layer"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn a_truncated_layer_fails_before_changing_anything() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("keep"), b"k").unwrap();
+        let tar = tar_of(&[(".wh.keep", b""), ("big", &[7; 2000])]);
+        // Each cut ends inside `big`: in its header, its data, and its padding.
+        for cut in [512 + 300, 1024 + 1000, 1024 + 2000 + 10] {
+            let err = apply_layer(&tar[..cut], &dest, &mut Default::default()).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("reading layer"),
+                "{cut}: {err:#}"
+            );
+            assert!(dest.join("keep").exists(), "{cut}: the whiteout ran");
+            assert!(
+                !dest.join("big").exists(),
+                "{cut}: a short file was written"
+            );
+        }
+        // Cut right after the last entry's padding: no end marker, which Go's reader accepts.
+        let n = apply_layer(&tar[..1024 + 2048], &dest, &mut Default::default()).unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn a_layer_with_data_after_its_end_marker_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let tar = tar_of(&[("a", b"x")]);
+
+        // Zeros past the end are only padding to a record size.
+        let mut padded = tar.clone();
+        padded.resize(tar.len() + 10240, 0);
+        assert_eq!(
+            apply_layer(&padded, &dest, &mut Default::default()).unwrap(),
+            1
+        );
+
+        // An entry hidden after the end marker, as a reader that skips zeros would find it.
+        let mut hidden = tar.clone();
+        hidden.extend(tar_of(&[("hidden", b"y")]));
+        let mut garbage = tar;
+        garbage.push(1);
+        for layer in [hidden, garbage] {
+            let err = apply_layer(&layer, &dest, &mut Default::default()).unwrap_err();
+            assert!(err.to_string().contains("after the end"), "{err:#}");
+        }
+        assert!(!dest.join("hidden").exists());
+    }
+
+    #[test]
+    fn a_sparse_layer_entry_fails_before_any_file_is_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        // GNU sparse, after a plain file that must not be written either.
+        let mut gnu = tar::Builder::new(Vec::new());
+        let mut plain = tar_of(&[("first", b"x")]);
+        plain.truncate(plain.len() - 1024); // drop the end marker
+        gnu.get_mut().append(&mut plain);
+        append_sparse(&mut gnu, "big\x1b[2J", 64 << 30);
+
+        // PAX sparse: a regular entry marked by a `GNU.sparse.*` record.
+        let record = b"22 GNU.sparse.major=1\n";
+        let mut x = tar::Header::new_ustar();
+        x.set_entry_type(tar::EntryType::XHeader);
+        x.set_path("pax").unwrap();
+        x.set_size(record.len() as u64);
+        x.set_cksum();
+        let mut pax = tar::Builder::new(Vec::new());
+        pax.append(&x, &record[..]).unwrap();
+        let mut entry = tar_of(&[("big\x1b[2J", b"map")]);
+        pax.get_mut().append(&mut entry);
+
+        for layer in [gnu.into_inner().unwrap(), pax.into_inner().unwrap()] {
+            let err = apply_layer(&layer, &dest, &mut Default::default()).unwrap_err();
+            assert!(err.to_string().contains("refusing sparse entry"), "{err:#}");
+            assert_escaped(&err);
+            assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0, "{err:#}");
         }
     }
 

@@ -15,3 +15,5 @@
 "application/vnd.oci.image.layer.v1.tar+gzip"
 ".wh."
 ".wh..wh..opq"
+# A PAX record key that marks a sparse layer entry, which unpack refuses.
+"GNU.sparse."
