@@ -346,8 +346,51 @@ fn doctor_exits_zero_and_reports_tools() {
     // doctor always exits 0; missing tools are informational, not failures.
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // ldconfig is present wherever the tests build, so it should report ok.
-    assert!(stdout.contains("ldconfig"), "got: {stdout}");
+    // ldconfig is present wherever the tests build, so its row must be ok. A MISS row also
+    // names ldconfig, so the word alone proves nothing.
+    let row = stdout
+        .lines()
+        .find(|line| line.split_whitespace().nth(1) == Some("ldconfig"))
+        .unwrap_or_else(|| panic!("no ldconfig row: {stdout}"));
+    assert_eq!(row.split_whitespace().next(), Some("ok"), "{row}");
+}
+
+#[test]
+fn doctor_asks_each_tool_its_own_version_command() {
+    use std::os::unix::fs::PermissionsExt;
+    // Each fake answers only `version`, as cosign does, and fails on `--version`. The real
+    // output shapes: syft opens with an `Application:` line, cosign with an ASCII banner.
+    let tmp = tempfile::tempdir().unwrap();
+    for (name, body) in [
+        (
+            "syft",
+            "printf 'Application:   syft\\nVersion:       1.18.1\\n'",
+        ),
+        (
+            "cosign",
+            "echo ' ______'; echo 'cosign: A tool'; echo 'GitVersion:    v2.4.1'",
+        ),
+    ] {
+        let path = tmp.path().join(name);
+        let script = format!("#!/bin/sh\n[ \"$1\" = version ] || exit 1\n{body}\n");
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .arg("doctor")
+        .env("PATH", tmp.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "doctor always exits 0");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for (name, version) in [("syft", "1.18.1"), ("cosign", "v2.4.1")] {
+        let row = stdout
+            .lines()
+            .find(|line| line.split_whitespace().nth(1) == Some(name))
+            .unwrap_or_else(|| panic!("no {name} row: {stdout}"));
+        let words: Vec<_> = row.split_whitespace().collect();
+        assert_eq!((words[0], words[2]), ("ok", version), "{row}");
+    }
 }
 
 #[test]
