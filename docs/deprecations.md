@@ -99,7 +99,7 @@ short.
 
 Now `unpack` refuses a layer with any byte other than zero after that block, and exits `1`.
 Zeros there are only padding, and still pass. A layer cut short inside an entry fails before
-`unpack` changes anything in the output directory.
+`unpack` writes or deletes any file for that layer. The layers before it are already applied.
 
 ### A sparse entry in a layer
 
@@ -110,6 +110,16 @@ wrote such an entry from a layer. It already refused one in the outer archive.
 Now `unpack` refuses a sparse entry in a layer, in GNU or PAX form, and exits `1`. It refuses
 the layer before it writes any file from it. Docker and BuildKit write layers with Go's tar
 library, which cannot write a sparse entry, so no working image has one.
+
+### A malformed PAX record in a layer
+
+A PAX record is a line in a tar header that holds extra details for the next entry, such as a
+long name. Through 2.0.0, `unpack` skipped a record that it could not parse, and wrote the
+entry anyway.
+
+Now `unpack` refuses a layer with a malformed PAX record, and exits `1`. It refuses the layer
+before it writes any file from it, and the error names the entry. Docker's tar reader refuses
+such a record too, so no working image has one.
 
 ## Tolerances ending in 2.0
 

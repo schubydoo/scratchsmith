@@ -424,8 +424,8 @@ export), applies each layer in order, and honors whiteouts. Combine it with `dif
 compare two images: unpack both, then run `scratchsmith diff old new`.
 
 `unpack` reads every gzip member of a layer, as Docker does. It refuses a layer that is cut
-short, has data after its end, or holds a sparse entry, and exits `1` before it writes any
-file from that layer.
+short, has data after its end, or holds a sparse entry or a malformed PAX record, and exits `1`
+before it writes any file from that layer.
 
 `unpack` clears the setuid and setgid bits on every file and directory it writes. An untrusted
 image cannot then plant a setuid program owned by the user who unpacks it. `unpack` prints one

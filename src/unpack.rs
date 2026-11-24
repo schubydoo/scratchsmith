@@ -312,7 +312,13 @@ fn scan_layer(tar_bytes: &[u8]) -> Result<Vec<PathBuf>> {
     for entry in tar::Archive::new(&mut cursor).entries()? {
         let mut e = entry.map_err(escape_tar_err).context("reading layer")?;
         let path = e.path()?.into_owned();
-        if is_sparse(&mut e)? {
+        let sparse = is_sparse(&mut e).with_context(|| {
+            format!(
+                "refusing a malformed PAX record on entry {} in a layer",
+                shown(path.display(), SHOWN_MAX)
+            )
+        })?;
+        if sparse {
             bail!(
                 "refusing sparse entry {} in a layer",
                 shown(path.display(), SHOWN_MAX)
@@ -338,7 +344,8 @@ fn scan_layer(tar_bytes: &[u8]) -> Result<Vec<PathBuf>> {
 
 // A GNU sparse entry, or a PAX one (formats 0.x and 1.0 mark a regular entry with
 // `GNU.sparse.*` records). tar does not expand the PAX kind, so it would write the sparse map
-// under a different name than the runtime does.
+// under a different name than the runtime does. A record that does not parse fails: tar skips
+// it, but Go's reader (and so Docker) refuses the layer.
 fn is_sparse<R: Read>(e: &mut tar::Entry<'_, R>) -> Result<bool> {
     if e.header().entry_type().is_gnu_sparse() {
         return Ok(true);
@@ -1541,6 +1548,32 @@ mod tests {
             assert_escaped(&err);
             assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0, "{err:#}");
         }
+    }
+
+    #[test]
+    fn a_malformed_pax_record_fails_the_layer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        // The length says 99, but the record holds 7 bytes.
+        let record = b"99 a=b\n";
+        let mut x = tar::Header::new_ustar();
+        x.set_entry_type(tar::EntryType::XHeader);
+        x.set_path("pax").unwrap();
+        x.set_size(record.len() as u64);
+        x.set_cksum();
+        let mut ar = tar::Builder::new(Vec::new());
+        ar.append(&x, &record[..]).unwrap();
+        let mut entry = tar_of(&[("f\x1b[2J", b"x")]);
+        ar.get_mut().append(&mut entry);
+        let err =
+            apply_layer(&ar.into_inner().unwrap(), &dest, &mut Default::default()).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("malformed PAX record on entry"),
+            "{err:#}"
+        );
+        assert_escaped(&err);
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0);
     }
 
     #[test]
