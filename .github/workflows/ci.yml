@@ -36,16 +36,17 @@ jobs:
       - name: ShellCheck (install.sh)
         run: shellcheck install.sh
       # A bare `eprintln!("skipping: …"); return;` makes nextest record the test as PASSED, so a
-      # runner that lost a tool reports a green suite having run nothing. tests/common's
-      # skip_required and skip_optional are the only two ways to skip. This keeps it that way:
-      # the 56 existing sites were converted by hand, and the next one would have to be too.
+      # runner that lost a tool reports a green suite having run nothing. skip_required and
+      # skip_optional in src/test_support.rs are the only two ways to skip, for unit and
+      # integration tests alike. This keeps it that way: the existing sites were converted by
+      # hand, and the next one would have to be too.
       - name: No hand-rolled test skips
         run: |
           set -euo pipefail
-          hits=$(grep -rn 'eprintln!("skipping' tests/ --include='*.rs' \
-            --exclude-dir=common || true)
+          hits=$(grep -rn 'eprintln!("skipping' src/ tests/ --include='*.rs' \
+            --exclude=test_support.rs || true)
           if [ -n "$hits" ]; then
-            echo "::error::Use tests/common::skip_required or skip_optional, not a bare eprintln."
+            echo "::error::Use skip_required or skip_optional from src/test_support.rs, not a bare eprintln."
             echo "$hits"
             exit 1
           fi
