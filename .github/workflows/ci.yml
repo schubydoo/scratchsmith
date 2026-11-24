@@ -24,6 +24,7 @@ jobs:
   lint:
     name: fmt · clippy · docs · typos
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # slowest of 12 green runs ~40s; 10-minute floor
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,6 +70,7 @@ jobs:
     # scratchsmith pins MSRV 1.96 (unlike the sibling repos, which track stable).
     name: build (MSRV 1.96)
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # slowest of 12 green runs ~30s; 10-minute floor
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -93,6 +95,7 @@ jobs:
     # need ldconfig / the ELF loader / Docker, which don't exist on macOS/Windows.
     name: test
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # about 3x the slowest of 12 green runs (~4.5 min)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -144,6 +147,7 @@ jobs:
   coverage:
     name: coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 20 # about 3x the slowest of 12 green runs (~6 min)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -186,6 +190,7 @@ jobs:
   supply-chain:
     name: audit · deny
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # slowest of 12 green runs ~25s; 10-minute floor
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -210,6 +215,7 @@ jobs:
     # under its own shell. bash ships on the runner; install zsh/fish.
     name: shell completions
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # slowest of 12 green runs ~1 min; 10-minute floor
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -254,6 +260,7 @@ jobs:
     # + features as arm64); the release still builds both arches.
     name: build (static musl)
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # slowest of 12 green runs ~1 min; 10-minute floor
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -296,6 +303,7 @@ jobs:
     # check. Stable is enough: cargo-fuzz needs nightly to BUILD (sanitizer flags), not to check.
     name: fuzz harness check
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # slowest of 12 green runs ~35s; 10-minute floor
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -346,6 +354,7 @@ jobs:
     # the action installs and manages.
     name: semver-checks (informational)
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # slowest of 12 green runs ~75s; 10-minute floor
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -359,7 +368,7 @@ jobs:
     if: always()
     needs: [lint, msrv, test, coverage, supply-chain, completions, musl, fuzz-check]
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 2 # only waits on needs and checks their results
     steps:
       - name: Check required jobs passed
         env:

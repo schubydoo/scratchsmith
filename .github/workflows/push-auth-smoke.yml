@@ -36,6 +36,7 @@ jobs:
   push-ghcr:
     name: pack --push to real GHCR
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # its green runs take ~1-2 min; 10-minute floor, and it holds write tokens
     permissions:
       contents: read
       packages: write # push the image to GHCR
