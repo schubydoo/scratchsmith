@@ -763,7 +763,8 @@ impl std::fmt::Display for SizeReport {
 
 /// Measure the staged ELF payload, optionally stripping each file first. Strip uses
 /// `strip --strip-unneeded`, which is safe for both executables and shared objects
-/// (it keeps the dynamic symbols the loader needs).
+/// (it keeps the dynamic symbols the loader needs). A non-ELF `--include` is measured but
+/// never stripped.
 pub fn strip_and_measure(
     dest: &Path,
     tree: &StagedTree,
@@ -806,7 +807,9 @@ pub fn strip_and_measure(
     };
     for (path, label) in targets {
         let before = std::fs::metadata(&path)?.len();
-        if strip {
+        // A non-ELF `--include` (a plugin's data file) is in `libs` by design. strip rejects
+        // it ("file format not recognized"), so it ships byte-identical instead.
+        if strip && is_elf(&path)? {
             run_strip(&path)?;
         }
         // Strip first (a smaller input compresses better), then UPX the executable.
@@ -823,6 +826,19 @@ pub fn strip_and_measure(
         });
     }
     Ok(report)
+}
+
+// Does the staged file start with the ELF magic? A file shorter than the magic is data; any
+// other read error fails the pack rather than shipping the file unstripped in silence.
+fn is_elf(path: &Path) -> Result<bool> {
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    let read = std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut magic));
+    match read {
+        Ok(()) => Ok(magic == *b"\x7fELF"),
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
 }
 
 fn run_strip(path: &Path) -> Result<()> {
@@ -1855,6 +1871,44 @@ mod tests {
             err.contains("soname /../../gone/libfoo.so.1: linking"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn is_elf_reads_the_magic_and_fails_on_a_missing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let elf = make_file(&tmp.path().join("lib.so"), b"\x7fELF and the rest");
+        let data = make_file(&tmp.path().join("app.conf"), b"listen = 8080\n");
+        let short = make_file(&tmp.path().join("tiny"), b"\x7fE");
+        assert!(is_elf(&elf).unwrap());
+        assert!(!is_elf(&data).unwrap());
+        assert!(
+            !is_elf(&short).unwrap(),
+            "a file shorter than the magic is data"
+        );
+        let err = is_elf(&tmp.path().join("gone")).unwrap_err();
+        assert!(format!("{err:#}").contains("gone"), "{err:#}");
+    }
+
+    #[test]
+    fn strip_skips_a_data_include_and_measures_it_unchanged() {
+        // With no ELF in the tree, strip never runs, so this needs no binutils. Before the
+        // fix every target went to strip, which fails on a data file.
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&tmp.path().join("src/app"), b"binary");
+        let conf = make_file(&tmp.path().join("src/etc/app.conf"), b"listen = 8080\n");
+        let res = with_lib("app.conf", &conf);
+        let tree = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+
+        let report = strip_and_measure(&dest, &tree, &res, true, false).unwrap();
+        assert!(report.stripped);
+        assert_eq!(fs::read(under(&dest, &conf)).unwrap(), b"listen = 8080\n");
+        let entry = report
+            .entries
+            .iter()
+            .find(|e| e.path == conf.display().to_string())
+            .expect("the data file is still measured");
+        assert_eq!((entry.before, entry.after), (14, 14));
     }
 
     #[test]
