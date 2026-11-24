@@ -1127,7 +1127,8 @@ mod tests {
         std::fs::create_dir_all(&status_d).unwrap();
         std::fs::set_permissions(&status_d, std::fs::Permissions::from_mode(0o555)).unwrap();
         if std::fs::write(status_d.join("probe"), b"").is_ok() {
-            crate::test_support::skip_optional("root writes into a read-only directory");
+            std::fs::set_permissions(&status_d, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::test_support::skip_required("root writes into a read-only directory");
             return;
         }
         let err = stage_records(tmp.path(), &owners, &[]).unwrap_err();
