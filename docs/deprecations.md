@@ -41,6 +41,11 @@ FIFO waited forever for a writer, or read a writer's stream with no end. Now `pa
 refuse such a library before they open it, and exit `1`. No library is a FIFO, so no working
 image depends on one.
 
+A FIFO that you name with `--include` is still read, so `graph --include <(cat libplugin.so)`
+works. `pack` reads it too, but then it refuses to stage it, because it is not a regular file, and
+exits `1`. Both commands open the FIFO and wait for a writer, as `cat` does. With no writer they
+wait until you stop them, and that is accepted behavior.
+
 ### A file that is not an ELF, named by the binary or a library
 
 A `DT_NEEDED` entry in the binary or in a library names a file. The binary's program

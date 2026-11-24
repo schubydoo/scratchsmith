@@ -323,8 +323,8 @@ const DEVICE_READ_CAP: u64 = 256 << 20;
 // A device or a FIFO stops one byte past `device_cap` and fails. A regular file may read past
 // the length it reported, because a procfs file reports 0 and still has content, but not past
 // `device_cap` too: a tracefs pipe is a regular file of length 0 that never ends. A FIFO ends
-// when its writer closes, so an operator can still pipe in a real library
-// (`--include <(cat lib.so)`). Only the operator names one: `resolve_with` refuses a FIFO that
+// when its writer closes, so an operator can still pipe a real library into `graph`
+// (`--include <(cat lib.so)`); `pack`'s stager then refuses it. Only the operator names one: `resolve_with` refuses a FIFO that
 // a name out of an ELF resolves to, and PT_INTERP must be a regular file.
 fn read_bounded(path: &Path, device_cap: u64) -> Result<Vec<u8>> {
     use std::io::Read;
