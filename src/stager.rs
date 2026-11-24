@@ -39,6 +39,8 @@ pub struct RuntimeExtras {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuntimeResult {
     pub tini_image_path: Option<String>,
+    /// Best-effort notes for the pack report, such as a dynamically linked tini.
+    pub warnings: Vec<String>,
     /// The host files that were copied in, as `(host path, image path)`, for the package
     /// lookup. The CA bundle is not here: it is generated on the host, so no package owns
     /// its path.
@@ -70,7 +72,8 @@ pub fn stage_runtime_extras(dest: &Path, extras: &RuntimeExtras) -> Result<Runti
     }
 
     if extras.init {
-        let tini = find_tini().context("--init: tini not found; install tini")?;
+        let (tini, warning) = find_tini().context("--init: tini not found; install tini")?;
+        result.warnings.extend(warning);
         copy_into(&tini, dest, Path::new("/tini"))?;
         result.tini_image_path = Some("/tini".to_string());
         result.copied.push((tini, PathBuf::from("/tini")));
@@ -79,20 +82,52 @@ pub fn stage_runtime_extras(dest: &Path, extras: &RuntimeExtras) -> Result<Runti
     Ok(result)
 }
 
-// Locate a tini binary in the usual places.
-fn find_tini() -> Result<PathBuf> {
-    for candidate in [
-        "/usr/bin/tini",
-        "/sbin/tini",
-        "/usr/bin/tini-static",
-        "/bin/tini",
-    ] {
-        let path = PathBuf::from(candidate);
-        if path.exists() {
-            return Ok(path);
+// Where `--init` looks for tini. The static builds come first so that, between two
+// static candidates, the one packaged as static wins; the ELF check below decides the rest.
+const TINI_CANDIDATES: &[&str] = &[
+    "/usr/bin/tini-static",
+    "/sbin/tini-static",
+    "/usr/bin/tini",
+    "/sbin/tini",
+    "/bin/tini",
+];
+
+/// The tini `--init` would stage, and its warning when it is dynamic. `doctor` asks this too,
+/// so the two never disagree about which tini a pack gets.
+pub(crate) fn find_tini() -> Result<(PathBuf, Option<String>)> {
+    pick_tini(TINI_CANDIDATES.iter().map(PathBuf::from))
+}
+
+// Pick a tini to stage: the first static one, else the first one found, with a warning.
+// A static tini needs nothing from the image. A dynamic one starts only if the image
+// happens to hold its loader and libraries, and nothing stages them for it.
+fn pick_tini(candidates: impl IntoIterator<Item = PathBuf>) -> Result<(PathBuf, Option<String>)> {
+    let mut dynamic = None;
+    // A regular file only: reading a FIFO at a candidate path would block the pack.
+    for path in candidates
+        .into_iter()
+        .filter(|p| p.metadata().is_ok_and(|m| m.is_file()))
+    {
+        if is_static_elf(&path) {
+            return Ok((path, None));
         }
+        dynamic.get_or_insert(path);
     }
-    bail!("no tini binary found")
+    let Some(path) = dynamic else {
+        bail!("no tini binary found")
+    };
+    let warning = format!(
+        "--init: {} is not a static binary, so it starts only if the image holds its loader \
+         and libraries; install tini-static for an init that needs nothing from the image",
+        path.display()
+    );
+    Ok((path, Some(warning)))
+}
+
+// Static means no PT_INTERP and no DT_NEEDED. A file that does not parse is not static.
+fn is_static_elf(path: &Path) -> bool {
+    crate::resolver::read_elf_info(path)
+        .is_ok_and(|info| info.interpreter.is_none() && info.needed.is_empty())
 }
 
 /// What to do with a symlink the user named: the packed binary's own path, and each
@@ -1165,6 +1200,94 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, bytes).unwrap();
         fs::canonicalize(path).unwrap()
+    }
+
+    // A minimal x86-64 ELF executable: no program headers (static), or one PT_INTERP.
+    fn tiny_elf(interp: Option<&str>) -> Vec<u8> {
+        let phnum: u16 = interp.is_some().into();
+        let mut b = b"\x7fELF\x02\x01\x01".to_vec();
+        b.resize(16, 0);
+        b.extend(2u16.to_le_bytes()); // ET_EXEC
+        b.extend(62u16.to_le_bytes()); // EM_X86_64
+        b.extend(1u32.to_le_bytes());
+        b.extend(0u64.to_le_bytes()); // e_entry
+        b.extend(if phnum == 0 { 0u64 } else { 64u64 }.to_le_bytes()); // e_phoff
+        b.extend(0u64.to_le_bytes()); // e_shoff
+        b.extend(0u32.to_le_bytes());
+        for half in [64u16, 56, phnum, 64, 0, 0] {
+            b.extend(half.to_le_bytes());
+        }
+        if let Some(interp) = interp {
+            let len = interp.len() as u64 + 1;
+            b.extend(3u32.to_le_bytes()); // PT_INTERP
+            b.extend(4u32.to_le_bytes());
+            for word in [120u64, 120, 120, len, len, 1] {
+                b.extend(word.to_le_bytes());
+            }
+            b.extend(interp.as_bytes());
+            b.push(0);
+        }
+        b
+    }
+
+    #[test]
+    fn tiny_elf_fixtures_parse_as_static_and_dynamic() {
+        let info = crate::resolver::parse_elf_info(&tiny_elf(None)).unwrap();
+        assert!(info.interpreter.is_none() && info.needed.is_empty());
+        let info = crate::resolver::parse_elf_info(&tiny_elf(Some("/lib64/ld.so"))).unwrap();
+        assert_eq!(info.interpreter.as_deref(), Some("/lib64/ld.so"));
+    }
+
+    #[test]
+    fn pick_tini_prefers_a_static_tini_over_an_earlier_dynamic_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dynamic = make_file(&tmp.path().join("tini"), &tiny_elf(Some("/lib64/ld.so")));
+        let fixed = make_file(&tmp.path().join("tini-static"), &tiny_elf(None));
+        // Dynamic listed first: the ELF check, not the order, decides.
+        let (path, warning) = pick_tini([dynamic, fixed.clone()]).unwrap();
+        assert_eq!(path, fixed);
+        assert_eq!(warning, None);
+    }
+
+    #[test]
+    fn pick_tini_takes_a_lone_static_tini_without_a_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fixed = make_file(&tmp.path().join("tini-static"), &tiny_elf(None));
+        let missing = tmp.path().join("absent/tini");
+        assert_eq!(pick_tini([missing, fixed.clone()]).unwrap(), (fixed, None));
+    }
+
+    #[test]
+    fn pick_tini_falls_back_to_a_dynamic_tini_with_a_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dynamic = make_file(&tmp.path().join("tini"), &tiny_elf(Some("/lib64/ld.so")));
+        // Not an ELF at all: not static either, and the first dynamic candidate still wins.
+        let junk = make_file(&tmp.path().join("tini-junk"), b"#!/bin/sh\n");
+        let (path, warning) = pick_tini([dynamic.clone(), junk]).unwrap();
+        assert_eq!(path, dynamic);
+        let warning = warning.expect("a dynamic tini warns");
+        assert!(warning.contains("not a static binary"), "{warning}");
+        assert!(warning.contains("tini-static"), "{warning}");
+        assert!(
+            warning.contains(&dynamic.display().to_string()),
+            "{warning}"
+        );
+    }
+
+    #[test]
+    fn pick_tini_skips_a_directory_and_fails_when_nothing_is_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("tini");
+        fs::create_dir(&dir).unwrap();
+        let err = pick_tini([dir, tmp.path().join("absent")]).unwrap_err();
+        assert!(err.to_string().contains("no tini binary found"), "{err}");
+    }
+
+    #[test]
+    fn stage_runtime_extras_without_init_has_no_warnings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = stage_runtime_extras(tmp.path(), &RuntimeExtras::default()).unwrap();
+        assert!(result.warnings.is_empty() && result.tini_image_path.is_none());
     }
 
     #[test]

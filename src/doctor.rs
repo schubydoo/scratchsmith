@@ -137,6 +137,9 @@ pub fn run() -> Result<()> {
 }
 
 fn probe_tool(tool: &Tool) -> ToolStatus {
+    if tool.name == "tini" {
+        return tini_status(tool, crate::stager::find_tini().ok());
+    }
     let version = locate(tool.name)
         .and_then(|path| run_version(&path, tool.version_args))
         .map(|out| first_line(&out));
@@ -153,6 +156,31 @@ fn probe_tool(tool: &Tool) -> ToolStatus {
             rpm_records_limit(help.as_ref().map(|text| String::from_utf8_lossy(text)))
         })
         .flatten();
+    ToolStatus {
+        name: tool.name,
+        version,
+        purpose: tool.purpose,
+        hint: tool.hint,
+        limit,
+    }
+}
+
+// tini is probed where `--init` looks, not on PATH, so `doctor` names the binary a pack would
+// stage. `picked` is `find_tini`'s answer: the path, and a warning when it is dynamic.
+fn tini_status(tool: &Tool, picked: Option<(PathBuf, Option<String>)>) -> ToolStatus {
+    let (version, limit) = match picked {
+        None => (None, None),
+        Some((path, warning)) => {
+            let version = run_version(&path, tool.version_args)
+                .map(|out| first_line(&out))
+                .unwrap_or_else(|| "version unknown".to_string());
+            let limit = warning.is_some().then_some(
+                "dynamically linked, so --init stages it with a warning; install tini-static \
+                 for an init that needs nothing from the image",
+            );
+            (Some(format!("{version} ({})", path.display())), limit)
+        }
+    };
     ToolStatus {
         name: tool.name,
         version,
@@ -243,6 +271,36 @@ mod tests {
         assert!(rpm_records_limit(Some(old)).is_some_and(|l| l.contains("--exportdb")));
         // No rpmdb to ask at all: the records cannot be built either.
         assert!(rpm_records_limit(None::<&str>).is_some());
+    }
+
+    fn tini_tool() -> &'static Tool {
+        TOOLS.iter().find(|t| t.name == "tini").unwrap()
+    }
+
+    #[test]
+    fn tini_reports_the_binary_init_would_stage() {
+        // Not executable, so no version answers: the path still shows, and nothing is limited.
+        let picked = (PathBuf::from("/nonexistent/tini-static"), None);
+        let status = tini_status(tini_tool(), Some(picked));
+        assert_eq!(
+            status.version.as_deref(),
+            Some("version unknown (/nonexistent/tini-static)")
+        );
+        assert!(status.limit.is_none());
+    }
+
+    #[test]
+    fn a_dynamic_tini_is_limited_and_no_tini_is_missing() {
+        let picked = (
+            PathBuf::from("/nonexistent/tini"),
+            Some("dynamic".to_string()),
+        );
+        let status = tini_status(tini_tool(), Some(picked));
+        assert!(status.version.is_some());
+        assert!(status.limit.is_some_and(|l| l.contains("tini-static")));
+
+        let status = tini_status(tini_tool(), None);
+        assert!(status.version.is_none() && status.limit.is_none());
     }
 
     #[test]
