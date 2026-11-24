@@ -513,7 +513,7 @@ fn diff_flags_drift_with_exit_code() {
         a.to_str().unwrap(),
         b.to_str().unwrap(),
     ]);
-    assert!(!out.status.success(), "--exit-code must fail on drift");
+    assert_eq!(out.status.code(), Some(1), "--exit-code must fail on drift");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("~ f"), "{stdout}");
 
@@ -606,7 +606,11 @@ echo '{"matches":[{"vulnerability":{"severity":"High"}}]}'"#,
 
     let out = pack("high", &["--scan-fail-on", "high"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "a High finding must fail the pack");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a High finding must fail the pack: {stderr}"
+    );
     assert!(
         stderr.contains("vulnerability scan failed: 1 finding(s) at or above High")
             && stderr.contains("high=1"),
@@ -1334,7 +1338,7 @@ fn a_nested_profile_fails_the_pack() {
         rootfs.to_str().unwrap(),
     ]);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "pack should fail: {stderr}");
+    assert_eq!(out.status.code(), Some(1), "pack should fail: {stderr}");
     assert!(
         stderr.contains("[profile.release.profile.signed]")
             && stderr.contains("top-level [profile.signed]"),
