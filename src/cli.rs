@@ -378,6 +378,14 @@ fn dispatch(cli: Cli) -> Result<()> {
             };
             let label_from = list_from(&label, |c| &c.label);
             let env_from = list_from(&env, |c| &c.env);
+            // Where `smoke` and `sign` are set, for the refusals below: in the base, in the
+            // selected profile, or in both.
+            let bool_set = |pick: fn(&crate::config::Config) -> bool| {
+                let in_profile = profile.as_ref().and_then(|n| file.profile.get(n));
+                (pick(&file), in_profile.is_some_and(pick))
+            };
+            let smoke_set = bool_set(|c| c.smoke);
+            let sign_set = bool_set(|c| c.sign);
             let file = match &profile {
                 Some(name) => file.select_profile(name).map_err(usage)?,
                 None => file,
@@ -505,10 +513,27 @@ fn dispatch(cli: Cli) -> Result<()> {
                 )));
             }
 
+            // clap refuses --smoke --no-build, so a smoke here came from the config. pack refuses
+            // it too; this says where it is set, because a profile cannot turn it off.
+            if no_build && opts.smoke {
+                bail!(UsageError(format!(
+                    "--smoke needs a built image, so it isn't supported with --no-build. {}, or \
+                     drop --no-build",
+                    bool_set_in("smoke", config.as_deref(), profile.as_deref(), smoke_set)
+                )));
+            }
+
             // An explicit CLI delivery sink always wins; `push` from the config/profile is only
             // the default when no CLI sink flag was given — otherwise a `[profile.ci]` `push`
             // would silently override `--oci-archive`/`--no-build` and turn a local pack into a
             // registry publish.
+            // For the --sign refusal below: a CLI sink beats a config `push`, so setting one
+            // there would not help.
+            let cli_sink = if oci_archive.is_some() {
+                Some("--oci-archive")
+            } else {
+                no_build.then_some("--no-build")
+            };
             let sink = if let Some(reference) = push {
                 crate::pack::Sink::Push(reference)
             } else if let Some(archive) = oci_archive {
@@ -530,12 +555,21 @@ fn dispatch(cli: Cli) -> Result<()> {
                     .map_err(usage)?;
             }
             // Signing needs a registry image (cosign signs by digest); a profile that set `sign`
-            // without a push target would otherwise be silently dropped.
+            // without a push target would otherwise be silently dropped. clap ties --sign to
+            // --push, so a sign here came from the config, and the advice says where.
             if opts.sign && !matches!(sink, crate::pack::Sink::Push(_)) {
-                bail!(UsageError(
-                    "--sign needs a push target — pass --push or set `push` in the config/profile"
-                        .into()
-                ));
+                let set_in = bool_set_in("sign", config.as_deref(), profile.as_deref(), sign_set);
+                bail!(UsageError(match cli_sink {
+                    Some(flag) => format!(
+                        "--sign needs a push target, and {flag} on the command line takes the \
+                         place of any `push` in the config. Drop {flag} and pass --push, or turn \
+                         signing off: {set_in}"
+                    ),
+                    None => format!(
+                        "--sign needs a push target. Pass --push or set `push` in the config, \
+                         or turn signing off: {set_in}"
+                    ),
+                }));
             }
             let pack_once = || -> Result<()> {
                 let report = crate::pack::pack(&binary, &opts, sink.clone())?;
@@ -636,6 +670,32 @@ fn dispatch(cli: Cli) -> Result<()> {
 // The `index` report: sign the pushed index if asked, else carry a digest mismatch as a
 // warning. Nothing reads the digest without `--sign`, but a registry that names a manifest other
 // than the one just pushed must not pass in silence, as `pack` reports it too.
+// Where a config boolean that came out true is set, and how to turn it off. Profiles OR
+// booleans (`select_profile`), so a profile cannot unset the base: every place it is set is
+// named. `set` is (in the base, in the selected profile).
+fn bool_set_in(
+    key: &str,
+    config: Option<&std::path::Path>,
+    profile: Option<&str>,
+    set: (bool, bool),
+) -> String {
+    let Some(path) = config.map(|p| p.display().to_string()) else {
+        return format!("drop `{key}`");
+    };
+    match (set, profile) {
+        ((true, true), Some(name)) => {
+            format!("`{key} = true` is set in both {path} and its [profile.{name}]: remove it from both")
+        }
+        ((false, true), Some(name)) => {
+            format!("`{key} = true` is set in {path} [profile.{name}]: remove it there")
+        }
+        (_, Some(_)) => format!(
+            "`{key} = true` is set in {path}, and a profile cannot turn it off: remove it there"
+        ),
+        (_, None) => format!("`{key} = true` is set in {path}: remove it there"),
+    }
+}
+
 fn index_report(
     target: String,
     outcome: crate::registry::IndexOutcome,
@@ -700,6 +760,33 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_config_boolean_is_traced_to_every_place_that_sets_it() {
+        let cfg = Some(std::path::Path::new("s.toml"));
+        let at = |set, profile| bool_set_in("smoke", cfg, profile, set);
+        assert_eq!(
+            at((true, false), None),
+            "`smoke = true` is set in s.toml: remove it there"
+        );
+        // A profile ORs booleans, so it cannot be the fix for a base `smoke`.
+        assert_eq!(
+            at((true, false), Some("ci")),
+            "`smoke = true` is set in s.toml, and a profile cannot turn it off: remove it there"
+        );
+        assert_eq!(
+            at((false, true), Some("ci")),
+            "`smoke = true` is set in s.toml [profile.ci]: remove it there"
+        );
+        assert_eq!(
+            at((true, true), Some("ci")),
+            "`smoke = true` is set in both s.toml and its [profile.ci]: remove it from both"
+        );
+        assert_eq!(
+            bool_set_in("sign", None, None, (false, false)),
+            "drop `sign`"
+        );
+    }
     use clap::error::ErrorKind;
     use clap::CommandFactory;
 

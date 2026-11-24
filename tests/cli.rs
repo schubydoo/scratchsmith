@@ -1007,6 +1007,76 @@ fn config_smoke_with_no_build_fails_loud() {
     );
 }
 
+#[test]
+fn a_base_config_smoke_with_no_build_says_a_profile_cannot_turn_it_off() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("scratchsmith.toml");
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    // Profiles OR booleans, so `smoke = false` in [profile.p] would not undo the base.
+    std::fs::write(
+        &cfg,
+        format!("binary = \"{bin}\"\nsmoke = true\n\n[profile.p]\nstrip = true\n"),
+    )
+    .unwrap();
+    let rootfs = tmp.path().join("rootfs");
+    let out = run(&[
+        "pack",
+        "--config",
+        cfg.to_str().unwrap(),
+        "--profile",
+        "p",
+        "--no-build",
+        "-o",
+        rootfs.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(2), "a usage error");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let expected = format!(
+        "--smoke needs a built image, so it isn't supported with --no-build. `smoke = true` is \
+         set in {}, and a profile cannot turn it off: remove it there, or drop --no-build",
+        cfg.display()
+    );
+    assert!(stderr.contains(&expected), "got: {stderr}");
+    assert!(!stderr.contains("smoke = false"), "got: {stderr}");
+}
+
+#[test]
+fn a_config_sign_refusal_says_where_sign_is_set_and_what_helps() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("scratchsmith.toml");
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    std::fs::write(
+        &cfg,
+        format!("binary = \"{bin}\"\n\n[profile.p]\nsign = true\n"),
+    )
+    .unwrap();
+    let cfg = cfg.to_str().unwrap();
+    let refusal = |extra: &[&str]| {
+        let mut args = vec!["pack", "--config", cfg, "--profile", "p"];
+        args.extend_from_slice(extra);
+        let out = run(&args);
+        assert_eq!(out.status.code(), Some(2), "a usage error");
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    let set_in = format!("`sign = true` is set in {cfg} [profile.p]: remove it there");
+
+    // --oci-archive on the command line beats a config `push`, so that advice would not help.
+    let archive = tmp.path().join("x.oci.tar");
+    let stderr = refusal(&["--oci-archive", archive.to_str().unwrap()]);
+    assert!(
+        stderr.contains("Drop --oci-archive and pass --push") && stderr.contains(&set_in),
+        "got: {stderr}"
+    );
+    assert!(!stderr.contains("set `push`"), "got: {stderr}");
+
+    // With no sink on the command line, a config `push` does help.
+    let stderr = refusal(&[]);
+    assert!(
+        stderr.contains("Pass --push or set `push` in the config") && stderr.contains(&set_in),
+        "got: {stderr}"
+    );
+}
+
 /// Run `pack` with a bare label or env flag and assert the usage error (clap, exit 2).
 fn assert_bare_flag_refused(flag: &str, value: &str, kind: &str) {
     let Some(bin) = small_fixture() else {
