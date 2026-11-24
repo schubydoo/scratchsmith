@@ -56,7 +56,7 @@ label = ["role=api"]
 healthcheck = ["/app", "--health"]
 strip = true
 upx = true
-smoke = true
+# smoke = true                 # needs the default load sink, so it cannot go with `push`
 sbom = true
 sbom-file = "sbom.json"
 sbom-format = "cyclonedx-json"
