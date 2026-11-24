@@ -103,7 +103,8 @@ const TOOLS: &[Tool] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolStatus {
     pub name: &'static str,
-    /// First line of the tool's version output when found; `None` when absent.
+    /// The tool's version (its `Version:` line, else the first line) when found; `None` when
+    /// absent.
     pub version: Option<String>,
     pub purpose: &'static str,
     pub hint: &'static str,
@@ -140,9 +141,7 @@ fn probe_tool(tool: &Tool) -> ToolStatus {
     if tool.name == "tini" {
         return tini_status(tool, crate::stager::find_tini().ok());
     }
-    let version = locate(tool.name)
-        .and_then(|path| run_version(&path, tool.version_args))
-        .map(|out| first_line(&out));
+    let version = locate(tool.name, tool.version_args).map(|out| version_text(&out));
     // `rpmdb` ships with `rpm`, so its help text is asked only where rpm answered.
     let limit = (tool.name == "rpm" && version.is_some())
         .then(|| {
@@ -172,7 +171,7 @@ fn tini_status(tool: &Tool, picked: Option<(PathBuf, Option<String>)>) -> ToolSt
         None => (None, None),
         Some((path, warning)) => {
             let version = run_version(&path, tool.version_args)
-                .map(|out| first_line(&out))
+                .map(|out| version_text(&out))
                 .unwrap_or_else(|| "version unknown".to_string());
             let limit = warning.is_some().then_some(
                 "dynamically linked, so --init stages it with a warning; install tini-static \
@@ -203,22 +202,17 @@ fn rpm_records_limit(rpmdb_help: Option<impl AsRef<str>>) -> Option<&'static str
     )
 }
 
-// Try the bare name (PATH) then the system sbins where ldconfig usually lives.
-fn locate(name: &str) -> Option<PathBuf> {
-    for candidate in [
+// Try the bare name (PATH) then the system sbins where ldconfig usually lives, and return the
+// first answer to the tool's own version command. cosign takes no `--version`, only `version`.
+fn locate(name: &str, version_args: &[&str]) -> Option<String> {
+    [
         name.to_string(),
         format!("/usr/sbin/{name}"),
         format!("/sbin/{name}"),
-    ] {
-        let path = PathBuf::from(&candidate);
-        if candidate.contains('/') && !path.exists() {
-            continue;
-        }
-        if run_version(&path, &["--version"]).is_some() || path.exists() {
-            return Some(path);
-        }
-    }
-    None
+    ]
+    .into_iter()
+    .filter(|candidate| !candidate.contains('/') || std::path::Path::new(candidate).exists())
+    .find_map(|candidate| run_version(std::path::Path::new(&candidate), version_args))
 }
 
 fn run_version(path: &std::path::Path, args: &[&str]) -> Option<String> {
@@ -235,8 +229,18 @@ fn run_version(path: &std::path::Path, args: &[&str]) -> Option<String> {
     Some(text)
 }
 
-fn first_line(s: &str) -> String {
-    s.lines().next().unwrap_or("").trim().to_string()
+// The version to show. syft and grype open with `Application: syft` and cosign with an ASCII
+// banner, so a `Version:` or `GitVersion:` line wins over the first line.
+fn version_text(s: &str) -> String {
+    let keyed = s.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        let value = value.trim();
+        (matches!(key.trim(), "Version" | "GitVersion") && !value.is_empty()).then_some(value)
+    });
+    keyed
+        .unwrap_or_else(|| s.lines().next().unwrap_or(""))
+        .trim()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -305,6 +309,21 @@ mod tests {
 
     #[test]
     fn a_missing_tool_reports_no_version() {
-        assert!(locate("scratchsmith-definitely-not-a-real-tool").is_none());
+        assert!(locate("scratchsmith-definitely-not-a-real-tool", &["--version"]).is_none());
+    }
+
+    #[test]
+    fn the_version_comes_from_a_version_line_else_the_first_line() {
+        let syft = "Application:   syft\nVersion:       1.18.1\nBuildDate:     2024-11-01\n";
+        assert_eq!(version_text(syft), "1.18.1");
+        let cosign = "  ______   ______\ncosign: A tool for Container Signing\n\
+                      GitVersion:    v2.4.1\nGitCommit:     abc\n";
+        assert_eq!(version_text(cosign), "v2.4.1");
+        assert_eq!(
+            version_text("GNU strip (GNU Binutils) 2.42\nCopyright (C) 2024\n"),
+            "GNU strip (GNU Binutils) 2.42"
+        );
+        // A key with nothing after it is not a version.
+        assert_eq!(version_text("tool 1.0\nVersion:\n"), "tool 1.0");
     }
 }
