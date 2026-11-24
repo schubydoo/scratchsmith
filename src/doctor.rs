@@ -103,8 +103,8 @@ const TOOLS: &[Tool] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolStatus {
     pub name: &'static str,
-    /// The tool's version (its `Version:` line, else the first line) when found; `None` when
-    /// absent.
+    /// The tool's version (its `Version:` or `GitVersion:` line, else the first line) when
+    /// found; `None` when absent.
     pub version: Option<String>,
     pub purpose: &'static str,
     pub hint: &'static str,
