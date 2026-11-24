@@ -11,7 +11,7 @@ use std::sync::Mutex;
 mod common;
 use common::{
     docker_available, fake_tools, grype_available, skip_optional, skip_required, small_fixture,
-    syft_available, upx_available, FAKE_SYFT,
+    strip_available, syft_available, upx_available, FAKE_SYFT,
 };
 
 // Docker tests pack the same binary into the same derived tag, so they must not run
@@ -985,6 +985,51 @@ fn smoke_with_oci_archive_is_rejected() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("smoke"), "got: {err}");
+}
+
+#[test]
+fn strip_leaves_a_non_elf_include_alone_and_still_strips_the_binary() {
+    if !strip_available() {
+        skip_required("no strip");
+        return;
+    }
+    // The debug test binary carries symbols, so a strip that ran must shrink it.
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let tmp = tempfile::tempdir().unwrap();
+    let conf = tmp.path().canonicalize().unwrap().join("app.conf");
+    let body = b"listen = 8080\n";
+    std::fs::write(&conf, body).unwrap();
+    let rootfs = tmp.path().join("rf");
+
+    let out = Command::new(bin)
+        .args([
+            "pack",
+            "-n",
+            "-o",
+            rootfs.to_str().unwrap(),
+            "--strip",
+            "--include",
+            conf.to_str().unwrap(),
+            bin,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "--strip with a data --include must pack: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let staged_conf = rootfs.join(conf.strip_prefix("/").unwrap());
+    assert_eq!(std::fs::read(&staged_conf).unwrap(), body);
+    let real_bin = Path::new(bin).canonicalize().unwrap();
+    let staged_bin = rootfs.join(real_bin.strip_prefix("/").unwrap());
+    let before = std::fs::metadata(&real_bin).unwrap().len();
+    let after = std::fs::metadata(&staged_bin).unwrap().len();
+    assert!(
+        after < before,
+        "the binary was not stripped: {before} -> {after}"
+    );
 }
 
 #[test]

@@ -14,7 +14,7 @@ file**.
 | `user` | `--user` | Image user `UID[:GID]`. Defaults to a non-root UID. `0`/root prints a warning. |
 | `label` | `--label` | OCI image label `KEY=VALUE` (list, and `--label` is repeatable). An entry with no `=` fails the pack with exit code 2. Write `KEY=` for an empty value. |
 | `healthcheck` | `--healthcheck` | Container `HEALTHCHECK` in exec form (list, and repeatable). It runs inside the scratch image, so it must name an executable present there, typically the packed binary. |
-| `strip` | `--strip` | Strip symbols from the binary and libraries. |
+| `strip` | `--strip` | Strip symbols from the binary and libraries. A non-ELF `--include` file ships unchanged. |
 | `upx` | `--upx` | Compress the packed binary with UPX (it self-decompresses at runtime). |
 | `smoke` | `--smoke` | Run the built image once. If the binary cannot start, the pack fails. |
 | `sbom` | `--sbom` | Write an SBOM of the packed rootfs (requires `syft`). |
