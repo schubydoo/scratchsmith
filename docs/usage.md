@@ -468,7 +468,8 @@ index by digest.
   configuration) and `digest` (the child manifest's `sha256:` digest).
 - `signed`: the by-digest reference that `--sign` signed, or `null` without `--sign`.
 - `warnings`: a list of warnings about the push, such as a registry that answered with another
-  digest. It is empty when there are none.
+  digest. It is empty when there are none. With `--sign`, a digest mismatch fails the command
+  instead, so `warnings` stays empty.
 
 ## Image metadata and entrypoint
 

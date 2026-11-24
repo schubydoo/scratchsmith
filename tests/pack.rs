@@ -1486,7 +1486,13 @@ fn index_assembles_a_pushed_image_into_an_index() {
         String::from_utf8_lossy(&unsigned.stderr)
     );
     let report: serde_json::Value = serde_json::from_slice(&unsigned.stdout).unwrap();
-    assert!(report["signed"].is_null(), "{report}");
+    assert_eq!(
+        report.get("signed"),
+        Some(&serde_json::Value::Null),
+        "{report}"
+    );
+    // Only an unsigned run can carry a digest mismatch as a warning; registry:2 returns none.
+    assert_eq!(report["warnings"], serde_json::json!([]), "{report}");
 
     // `--sign` signs the index by digest; the JSON report names what it signed.
     let tmp = tempfile::tempdir().unwrap();
@@ -1515,7 +1521,6 @@ fn index_assembles_a_pushed_image_into_an_index() {
         "{report}"
     );
     assert_eq!(report["pushed"], cli_target, "{report}");
-    assert_eq!(report["warnings"], serde_json::json!([]), "{report}");
     let manifest = &report["manifests"][0];
     assert_eq!(keys(manifest), ["digest", "platform", "source"], "{report}");
     assert_eq!(manifest["source"], child, "{report}");
