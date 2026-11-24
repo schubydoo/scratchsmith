@@ -8,18 +8,21 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::Read;
-use std::path::Path;
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 
 // One file's identity for comparison: its size and a content fingerprint (sha256 for a
-// regular file, the link target for a symlink). Directories carry no content of their own.
+// regular file, the link target's raw bytes for a symlink). Directories carry no content of
+// their own.
 struct Entry {
     size: u64,
-    fingerprint: String,
+    fingerprint: Vec<u8>,
 }
 
 // Walk `root` and fingerprint every regular file and symlink, keyed by path relative to
-// `root`. Symlinks are compared by target, never followed.
-fn scan(root: &Path) -> Result<BTreeMap<String, Entry>> {
+// `root`. Symlinks are compared by target, never followed. Keys and targets stay raw bytes:
+// a lossy conversion would merge two names that differ only in non-UTF-8 bytes.
+fn scan(root: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
     let mut map = BTreeMap::new();
     for entry in walkdir::WalkDir::new(root).follow_links(false) {
         // walkdir's error, and every path below, can carry a file name out of an image
@@ -36,9 +39,8 @@ fn scan(root: &Path) -> Result<BTreeMap<String, Entry>> {
             .path()
             .strip_prefix(root)
             .with_context(|| format!("{} is not under {}", shown(entry.path()), shown(root)))?
-            .to_string_lossy()
-            .into_owned();
-        if rel.is_empty() {
+            .to_path_buf();
+        if rel.as_os_str().is_empty() {
             continue; // the root itself
         }
         let meta = entry.metadata().map_err(|e| {
@@ -50,7 +52,7 @@ fn scan(root: &Path) -> Result<BTreeMap<String, Entry>> {
                 rel,
                 Entry {
                     size: 0,
-                    fingerprint: format!("symlink:{}", target.display()),
+                    fingerprint: [b"symlink:", target.as_os_str().as_bytes()].concat(),
                 },
             );
         } else if meta.is_file() {
@@ -60,7 +62,7 @@ fn scan(root: &Path) -> Result<BTreeMap<String, Entry>> {
                 rel,
                 Entry {
                     size: meta.len(),
-                    fingerprint,
+                    fingerprint: fingerprint.into_bytes(),
                 },
             );
         }
@@ -85,6 +87,24 @@ fn sha256_file(path: &Path) -> std::io::Result<String> {
     Ok(hex(hasher.finalize()))
 }
 
+// A path for the report, which holds text. A UTF-8 name is kept as it is. A non-UTF-8 name is
+// escaped whole, its invalid bytes as `\xNN`, so two names that differ only in those bytes
+// still read differently.
+fn report_path(path: &Path) -> String {
+    let bytes = path.as_os_str().as_bytes();
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_owned();
+    }
+    let mut out = String::new();
+    for chunk in bytes.utf8_chunks() {
+        out.push_str(&crate::resolver::escape_for_display(chunk.valid()));
+        for b in chunk.invalid() {
+            out.push_str(&format!("\\x{b:02x}"));
+        }
+    }
+    out
+}
+
 /// Compare two staged rootfs directories, reporting the files added in `b`, removed from
 /// `a`, and changed between them, plus each side's total file size.
 pub fn build(a: &Path, b: &Path) -> Result<DiffReport> {
@@ -96,10 +116,10 @@ pub fn build(a: &Path, b: &Path) -> Result<DiffReport> {
     for (path, entry) in &new {
         match old.get(path) {
             None => added.push(DiffFile {
-                path: path.clone(),
+                path: report_path(path),
                 size: entry.size,
             }),
-            Some(prev) if prev.fingerprint != entry.fingerprint => changed.push(path.clone()),
+            Some(prev) if prev.fingerprint != entry.fingerprint => changed.push(report_path(path)),
             Some(_) => {}
         }
     }
@@ -107,7 +127,7 @@ pub fn build(a: &Path, b: &Path) -> Result<DiffReport> {
         .iter()
         .filter(|(path, _)| !new.contains_key(*path))
         .map(|(path, entry)| DiffFile {
-            path: path.clone(),
+            path: report_path(path),
             size: entry.size,
         })
         .collect();
@@ -195,6 +215,58 @@ mod tests {
     }
 
     #[test]
+    fn names_that_differ_only_in_non_utf8_bytes_stay_separate() {
+        use std::ffi::OsStr;
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        let (ff, fe) = (OsStr::from_bytes(b"x\xff"), OsStr::from_bytes(b"x\xfe"));
+        for root in [&a, &b] {
+            fs::create_dir_all(root).unwrap();
+            fs::write(root.join(ff), b"same").unwrap();
+        }
+        fs::write(b.join(fe), b"payload").unwrap();
+
+        let report = build(&a, &b).unwrap();
+        assert_eq!(
+            report
+                .added
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![r"x\xfe"]
+        );
+        assert!(report.removed.is_empty() && report.changed.is_empty());
+        assert!(report.has_changes());
+        assert_eq!(report.size_after, ("same".len() + "payload".len()) as u64);
+    }
+
+    #[test]
+    fn a_symlink_target_that_differs_only_in_non_utf8_bytes_is_changed() {
+        use std::ffi::OsStr;
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        for (root, target) in [(&a, b"t\xff"), (&b, b"t\xfe")] {
+            fs::create_dir_all(root).unwrap();
+            std::os::unix::fs::symlink(OsStr::from_bytes(target), root.join("link")).unwrap();
+        }
+        assert_eq!(build(&a, &b).unwrap().changed, vec!["link".to_string()]);
+    }
+
+    #[test]
+    fn a_report_path_keeps_utf8_and_escapes_a_non_utf8_name_whole() {
+        use std::ffi::OsStr;
+        let shown = |b: &[u8]| report_path(Path::new(OsStr::from_bytes(b)));
+        assert_eq!(
+            shown("lib/caf\u{e9}\\x.so".as_bytes()),
+            "lib/caf\u{e9}\\x.so"
+        );
+        assert_eq!(shown(b"x\xfe"), r"x\xfe");
+        assert_ne!(shown(b"x\xfe"), shown(b"x\xff"));
+        // Once a name is escaped, its own backslash and controls are escaped with it.
+        assert_eq!(shown(b"a\\\n\xc3"), r"a\\\n\xc3");
+    }
+
+    #[test]
     fn a_walk_error_escapes_the_file_name() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
@@ -235,8 +307,8 @@ mod tests {
         full[..4].copy_from_slice(b"head");
         full[SIZE as usize - 4..].copy_from_slice(b"tail");
 
-        let entry = &scan(tmp.path()).unwrap()["big"];
+        let entry = &scan(tmp.path()).unwrap()[Path::new("big")];
         assert_eq!(entry.size, SIZE);
-        assert_eq!(entry.fingerprint, hex(Sha256::digest(&full)));
+        assert_eq!(entry.fingerprint, hex(Sha256::digest(&full)).into_bytes());
     }
 }

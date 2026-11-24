@@ -487,6 +487,40 @@ fn diff_flags_drift_with_exit_code() {
 }
 
 #[test]
+fn diff_counts_an_added_non_utf8_name_as_drift() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("a");
+    let b = tmp.path().join("b");
+    for root in [&a, &b] {
+        std::fs::create_dir_all(root).unwrap();
+        std::fs::write(root.join(OsStr::from_bytes(b"x\xff")), "same").unwrap();
+    }
+    // Lossy keys made this the same name as x\xff, so diff saw no change.
+    std::fs::write(b.join(OsStr::from_bytes(b"x\xfe")), "payload").unwrap();
+    let out = run(&[
+        "diff",
+        "--exit-code",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(1), "--exit-code must fail on drift");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains(r"+ x\xfe (7 B)"), "{stdout}");
+
+    let out = run(&[
+        "diff",
+        "--format",
+        "json",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["added"][0]["path"], r"x\xfe", "{report}");
+}
+
+#[test]
 fn completions_print_a_script_on_stdout() {
     let out = run(&["--completions", "bash"]);
     assert!(out.status.success());

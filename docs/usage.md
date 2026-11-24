@@ -410,6 +410,7 @@ scratchsmith diff --exit-code old new  # exit non-zero on any difference (a CI g
 
 `diff` marks an added file with `+`, a removed file with `-`, and a changed file with `~`.
 It then prints the total size delta. `--format json` emits the same data for a machine.
+A file name that is not valid UTF-8 is printed escaped, its invalid bytes as `\xNN`.
 
 ## Unpack an image
 
