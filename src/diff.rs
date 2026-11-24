@@ -7,9 +7,10 @@ use crate::report::{DiffFile, DiffReport};
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 // One file's identity for comparison: its size and a content fingerprint (sha256 for a
 // regular file, the link target's raw bytes for a symlink). Directories carry no content of
@@ -21,8 +22,9 @@ struct Entry {
 
 // Walk `root` and fingerprint every regular file and symlink, keyed by path relative to
 // `root`. Symlinks are compared by target, never followed. Keys and targets stay raw bytes:
-// a lossy conversion would merge two names that differ only in non-UTF-8 bytes.
-fn scan(root: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
+// a lossy conversion would merge two names that differ only in non-UTF-8 bytes. An `OsString`
+// key sorts by bytes, as the old `String` key did; a `PathBuf` would sort by component.
+fn scan(root: &Path) -> Result<BTreeMap<OsString, Entry>> {
     let mut map = BTreeMap::new();
     for entry in walkdir::WalkDir::new(root).follow_links(false) {
         // walkdir's error, and every path below, can carry a file name out of an image
@@ -39,8 +41,9 @@ fn scan(root: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
             .path()
             .strip_prefix(root)
             .with_context(|| format!("{} is not under {}", shown(entry.path()), shown(root)))?
-            .to_path_buf();
-        if rel.as_os_str().is_empty() {
+            .as_os_str()
+            .to_owned();
+        if rel.is_empty() {
             continue; // the root itself
         }
         let meta = entry.metadata().map_err(|e| {
@@ -90,8 +93,8 @@ fn sha256_file(path: &Path) -> std::io::Result<String> {
 // A path for the report, which holds text. A UTF-8 name is kept as it is. A non-UTF-8 name is
 // escaped whole, its invalid bytes as `\xNN`, so two names that differ only in those bytes
 // still read differently.
-fn report_path(path: &Path) -> String {
-    let bytes = path.as_os_str().as_bytes();
+fn report_path(path: &OsStr) -> String {
+    let bytes = path.as_bytes();
     if let Ok(text) = std::str::from_utf8(bytes) {
         return text.to_owned();
     }
@@ -216,7 +219,6 @@ mod tests {
 
     #[test]
     fn names_that_differ_only_in_non_utf8_bytes_stay_separate() {
-        use std::ffi::OsStr;
         let tmp = tempfile::tempdir().unwrap();
         let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
         let (ff, fe) = (OsStr::from_bytes(b"x\xff"), OsStr::from_bytes(b"x\xfe"));
@@ -241,8 +243,26 @@ mod tests {
     }
 
     #[test]
+    fn the_report_lists_paths_in_byte_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        fs::create_dir_all(&a).unwrap();
+        // `.` sorts before `/` by byte, though `lib` sorts before `lib.d` by component.
+        write(&b, "usr/lib/a.so", b"a");
+        write(&b, "usr/lib.d/b", b"b");
+        let report = build(&a, &b).unwrap();
+        assert_eq!(
+            report
+                .added
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["usr/lib.d/b", "usr/lib/a.so"]
+        );
+    }
+
+    #[test]
     fn a_symlink_target_that_differs_only_in_non_utf8_bytes_is_changed() {
-        use std::ffi::OsStr;
         let tmp = tempfile::tempdir().unwrap();
         let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
         for (root, target) in [(&a, b"t\xff"), (&b, b"t\xfe")] {
@@ -254,8 +274,7 @@ mod tests {
 
     #[test]
     fn a_report_path_keeps_utf8_and_escapes_a_non_utf8_name_whole() {
-        use std::ffi::OsStr;
-        let shown = |b: &[u8]| report_path(Path::new(OsStr::from_bytes(b)));
+        let shown = |b: &[u8]| report_path(OsStr::from_bytes(b));
         assert_eq!(
             shown("lib/caf\u{e9}\\x.so".as_bytes()),
             "lib/caf\u{e9}\\x.so"
@@ -307,7 +326,7 @@ mod tests {
         full[..4].copy_from_slice(b"head");
         full[SIZE as usize - 4..].copy_from_slice(b"tail");
 
-        let entry = &scan(tmp.path()).unwrap()[Path::new("big")];
+        let entry = &scan(tmp.path()).unwrap()[OsStr::new("big")];
         assert_eq!(entry.size, SIZE);
         assert_eq!(entry.fingerprint, hex(Sha256::digest(&full)).into_bytes());
     }
