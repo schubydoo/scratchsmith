@@ -1033,7 +1033,7 @@ fn a_base_config_smoke_with_no_build_says_a_profile_cannot_turn_it_off() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     let expected = format!(
         "--smoke needs a built image, so it isn't supported with --no-build. `smoke = true` is \
-         set in {}, and a profile cannot turn it off: remove it there, or drop --no-build",
+         set in {}, and a profile cannot turn it off: remove it there, or drop --no-build and -o",
         cfg.display()
     );
     assert!(stderr.contains(&expected), "got: {stderr}");
@@ -1064,10 +1064,17 @@ fn a_config_sign_refusal_says_where_sign_is_set_and_what_helps() {
     let archive = tmp.path().join("x.oci.tar");
     let stderr = refusal(&["--oci-archive", archive.to_str().unwrap()]);
     assert!(
-        stderr.contains("Drop --oci-archive and pass --push") && stderr.contains(&set_in),
+        stderr.contains("Drop --oci-archive, and pass --push") && stderr.contains(&set_in),
         "got: {stderr}"
     );
     assert!(!stderr.contains("set `push`"), "got: {stderr}");
+    // -o needs --no-build, so the advice drops both.
+    let rootfs = tmp.path().join("rootfs");
+    let stderr = refusal(&["--no-build", "-o", rootfs.to_str().unwrap()]);
+    assert!(
+        stderr.contains("Drop --no-build and -o, and pass --push"),
+        "got: {stderr}"
+    );
 
     // With no sink on the command line, a config `push` does help.
     let stderr = refusal(&[]);

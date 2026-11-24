@@ -518,7 +518,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             if no_build && opts.smoke {
                 bail!(UsageError(format!(
                     "--smoke needs a built image, so it isn't supported with --no-build. {}, or \
-                     drop --no-build",
+                     drop --no-build and -o",
                     bool_set_in("smoke", config.as_deref(), profile.as_deref(), smoke_set)
                 )));
             }
@@ -528,11 +528,11 @@ fn dispatch(cli: Cli) -> Result<()> {
             // would silently override `--oci-archive`/`--no-build` and turn a local pack into a
             // registry publish.
             // For the --sign refusal below: a CLI sink beats a config `push`, so setting one
-            // there would not help.
+            // there would not help. The second part is what to drop: -o needs --no-build.
             let cli_sink = if oci_archive.is_some() {
-                Some("--oci-archive")
+                Some(("--oci-archive", "--oci-archive"))
             } else {
-                no_build.then_some("--no-build")
+                no_build.then_some(("--no-build", "--no-build and -o"))
             };
             let sink = if let Some(reference) = push {
                 crate::pack::Sink::Push(reference)
@@ -560,10 +560,10 @@ fn dispatch(cli: Cli) -> Result<()> {
             if opts.sign && !matches!(sink, crate::pack::Sink::Push(_)) {
                 let set_in = bool_set_in("sign", config.as_deref(), profile.as_deref(), sign_set);
                 bail!(UsageError(match cli_sink {
-                    Some(flag) => format!(
+                    Some((flag, drop)) => format!(
                         "--sign needs a push target, and {flag} on the command line takes the \
-                         place of any `push` in the config. Drop {flag} and pass --push, or turn \
-                         signing off: {set_in}"
+                         place of any `push` in the config. Drop {drop}, and pass --push, or \
+                         turn signing off: {set_in}"
                     ),
                     None => format!(
                         "--sign needs a push target. Pass --push or set `push` in the config, \
@@ -667,9 +667,6 @@ fn dispatch(cli: Cli) -> Result<()> {
     }
 }
 
-// The `index` report: sign the pushed index if asked, else carry a digest mismatch as a
-// warning. Nothing reads the digest without `--sign`, but a registry that names a manifest other
-// than the one just pushed must not pass in silence, as `pack` reports it too.
 // Where a config boolean that came out true is set, and how to turn it off. Profiles OR
 // booleans (`select_profile`), so a profile cannot unset the base: every place it is set is
 // named. `set` is (in the base, in the selected profile).
@@ -696,6 +693,9 @@ fn bool_set_in(
     }
 }
 
+// The `index` report: sign the pushed index if asked, else carry a digest mismatch as a
+// warning. Nothing reads the digest without `--sign`, but a registry that names a manifest other
+// than the one just pushed must not pass in silence, as `pack` reports it too.
 fn index_report(
     target: String,
     outcome: crate::registry::IndexOutcome,
