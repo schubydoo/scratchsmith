@@ -34,3 +34,10 @@
 "$LIBx"
 "${ORIGIN}x"
 "libs"
+# `$PLATFORM` on x86_64: the copy that stages, and copies under the CPU names glibc picks on some
+# Intel CPUs, which earn a hint or a note.
+"/app/$PLATFORM"
+"$ORIGIN/$PLATFORM"
+"x86_64"
+"haswell"
+"xeon_phi"

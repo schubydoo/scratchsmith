@@ -19,7 +19,11 @@
    `$ORIGIN_x` (expanded, where `ld.so` keeps it literal). A library found only through such an
    entry loads from the image's `ld.so.cache`, if `ldconfig` caches it under the needed name by
    the rule above. `pack` prints one note on stderr for the entry, and the note names any
-   library that the cache does not list, which the image then cannot load. Scratchsmith never
+   library that the cache does not list, which the image then cannot load. On x86_64,
+   `$PLATFORM` is read as `x86_64`. glibc reads it as `haswell` or `xeon_phi` on some Intel CPUs,
+   but those copies are optimized builds that not every CPU can run, so they never stage. A
+   library missing as `x86_64` but present under such a name gets a hint, and a library that
+   ships while `ld.so` on such a CPU would load such a copy gets a note on stderr. Scratchsmith never
    scrapes the host's `ldd`, `ld.so.cache`, or `LD_LIBRARY_PATH`, so the result is deterministic.
 2. **Stage**: copy the interpreter to its verbatim path, mirror the libraries, recreate
    versioned-soname symlinks, regenerate `ld.so.cache`, and add the glibc NSS pieces.

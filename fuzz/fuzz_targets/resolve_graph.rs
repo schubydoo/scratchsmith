@@ -119,6 +119,9 @@ enum LibDir {
     LibGnu,
     AppLibs,
     AppColon,
+    // `/app/$PLATFORM` read as `x86_64`, and as a CPU name glibc picks on some Intel CPUs.
+    AppX86_64,
+    AppHaswell,
 }
 
 impl LibDir {
@@ -130,6 +133,8 @@ impl LibDir {
             LibDir::LibGnu => "/lib/x86_64-linux-gnu",
             LibDir::AppLibs => "/app/libs",
             LibDir::AppColon => "/app/x:y",
+            LibDir::AppX86_64 => "/app/x86_64",
+            LibDir::AppHaswell => "/app/haswell",
         }
     }
 }

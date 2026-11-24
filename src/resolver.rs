@@ -475,6 +475,7 @@ pub fn resolve_with(
             Vec::<PathBuf>::new(),
             Vec::<PathBuf>::new(),
             Vec::<Option<Gap>>::new(),
+            Vec::<Option<CpuEntry>>::new(),
         ),
         declared_needed,
     ));
@@ -482,11 +483,13 @@ pub fn resolve_with(
     // order they were found, and why ldconfig would not cache one. One note per entry
     // (decision-019: no behavior change).
     let mut gaps: Vec<(Gap, Vec<GapLib>)> = Vec::new();
+    // A library that ships while ld.so loads another copy on some Intel CPUs (decision-018).
+    let mut cpu_notes: Vec<String> = Vec::new();
 
     while let Some((
         obj_path,
         obj,
-        (inherited_rpaths, inherited_literals, inherited_gaps),
+        (inherited_rpaths, inherited_literals, inherited_gaps, inherited_cpu),
         declared,
     )) = queue.pop_front()
     {
@@ -527,6 +530,8 @@ pub fn resolve_with(
         // Index for index with the dirs above, so a hit in `search` names its entry.
         let own_rpath_gaps = entry_gaps(used_rpaths, "RPATH", &obj_path, &root_info);
         let runpath_gaps = entry_gaps(&obj.runpaths, "RUNPATH", &obj_path, &root_info);
+        let own_rpath_cpu = cpu_entries(used_rpaths, "RPATH", &obj_path, sysroot, &root_info);
+        let runpath_cpu = cpu_entries(&obj.runpaths, "RUNPATH", &obj_path, sysroot, &root_info);
         let own_literals = literal_dirs(used_rpaths, obj_dir, &sysroot.root, &root_info);
         let runpath_literals = literal_dirs(&obj.runpaths, obj_dir, &sysroot.root, &root_info);
 
@@ -545,6 +550,11 @@ pub fn resolve_with(
             search_gaps.extend(inherited_gaps.iter().cloned());
         }
         search_gaps.extend(runpath_gaps);
+        let mut search_cpu = own_rpath_cpu.clone();
+        if searches_rpath {
+            search_cpu.extend(inherited_cpu.iter().cloned());
+        }
+        search_cpu.extend(runpath_cpu);
         let mut literals: Vec<PathBuf> = own_literals.clone();
         if searches_rpath {
             literals.extend(inherited_literals.iter().cloned());
@@ -563,6 +573,8 @@ pub fn resolve_with(
         child_literals.extend(inherited_literals.iter().cloned());
         let mut child_gaps = own_rpath_gaps;
         child_gaps.extend(inherited_gaps.iter().cloned());
+        let mut child_cpu = own_rpath_cpu;
+        child_cpu.extend(inherited_cpu.iter().cloned());
         for (i, soname) in obj.needed.iter().enumerate() {
             // A DT_NEEDED name in a whole-string dir loads only through the cache. An
             // --include is the operator's file, which the program may open by path or by its
@@ -590,6 +602,9 @@ pub fn resolve_with(
                 .or_else(|| find_lib(soname, &sysroot.default_dirs, obj_dir, &sysroot.root));
             let Some(found) = found else {
                 for hint in not_cached {
+                    push_unique(&mut resolution.hints, hint);
+                }
+                for hint in cpu_copy_hints(soname, &search, &search_cpu) {
                     push_unique(&mut resolution.hints, hint);
                 }
                 // RUNPATH hides an ancestor's RPATH from this object. If the library sits
@@ -623,6 +638,15 @@ pub fn resolve_with(
                 continue;
             };
             let real = canonical(&found);
+            let reach = CpuReach {
+                search: &search,
+                cpu: &search_cpu,
+                gaps: &search_gaps,
+                default_dirs: &sysroot.default_dirs,
+            };
+            if let Some(note) = cpu_copy_note(soname, &found, &reach, source) {
+                push_unique(&mut cpu_notes, note);
+            }
             // Record the edge before the visited check, so a diamond or a repeat keeps its
             // edge even though the target is staged only once.
             resolution.edges.push(DepEdge {
@@ -688,6 +712,7 @@ pub fn resolve_with(
                             child_rpaths.clone(),
                             child_literals.clone(),
                             child_gaps.clone(),
+                            child_cpu.clone(),
                         ),
                         declared,
                     ));
@@ -712,6 +737,7 @@ pub fn resolve_with(
         .iter()
         .map(|(gap, sonames)| gap.note(sonames))
         .collect();
+    resolution.notes.extend(cpu_notes);
     Ok(resolution)
 }
 
@@ -856,18 +882,193 @@ fn gap_hit<'a>(
     (!searched).then(|| (gap, dir.join(soname)))
 }
 
+// glibc's own values of `$PLATFORM` on x86_64. On an Intel CPU with the features each one
+// needs, `init_cpu_features` (sysdeps/x86/cpu-features.c, 2.26 to 2.41) sets `dl_platform` to
+// one of them in place of the kernel's `x86_64`. Decision-018 keeps `x86_64` here, because the
+// other copies are optimized builds that not every CPU can run, and staging them grows the
+// image. They only earn a hint or a note.
+const X86_64_CPU_PLATFORMS: [&str; 2] = ["haswell", "xeon_phi"];
+
+// A search-path entry that names `$PLATFORM` on x86_64, with the directory it names under
+// each value in `X86_64_CPU_PLATFORMS`.
+#[derive(Debug, Clone)]
+struct CpuEntry {
+    owner: PathBuf,
+    tag: &'static str,
+    entry: String,
+    dirs: Vec<(&'static str, PathBuf)>,
+}
+
+impl CpuEntry {
+    fn describe(&self) -> String {
+        format!(
+            "{} entry `{}` of {}",
+            self.tag,
+            self.entry.escape_debug(),
+            printable(&self.owner)
+        )
+    }
+}
+
+// One `Option<CpuEntry>` per entry of `search_entries(raw)`, in the same order as `build_dirs`.
+// An entry that ld.so does not search at all is a `Gap` and gets its own note instead.
+fn cpu_entries(
+    raw: &[String],
+    tag: &'static str,
+    owner: &Path,
+    sysroot: &Sysroot,
+    root_info: &ElfInfo,
+) -> Vec<Option<CpuEntry>> {
+    let origin_dir = owner.parent().unwrap_or(Path::new("/"));
+    search_entries(raw)
+        .map(|entry| {
+            let names_platform = entry.contains("$PLATFORM") || entry.contains("${PLATFORM}");
+            let searched = !entry.is_empty()
+                && !holds_unknown_token(entry)
+                && Path::new(&expand_tokens(entry, origin_dir, root_info)).is_absolute();
+            (root_info.machine == goblin::elf::header::EM_X86_64 && names_platform && searched)
+                .then(|| CpuEntry {
+                    owner: owner.to_path_buf(),
+                    tag,
+                    entry: entry.to_owned(),
+                    dirs: X86_64_CPU_PLATFORMS
+                        .iter()
+                        .map(|&p| {
+                            (
+                                p,
+                                entry_dir_as(entry, origin_dir, &sysroot.root, root_info, p),
+                            )
+                        })
+                        .collect(),
+                })
+        })
+        .collect()
+}
+
+// One hint for each CPU-specific copy of a missing bare `soname`. `search` and `cpu` are index
+// for index, as `search` and `search_gaps` are in the walk.
+fn cpu_copy_hints(soname: &str, search: &[PathBuf], cpu: &[Option<CpuEntry>]) -> Vec<String> {
+    if soname.contains('/') {
+        return Vec::new();
+    }
+    let s = soname.escape_debug();
+    search
+        .iter()
+        .zip(cpu)
+        .filter_map(|(dir, entry)| Some((dir, entry.as_ref()?)))
+        .flat_map(|(dir, entry)| {
+            let s = &s;
+            entry
+                .dirs
+                .iter()
+                .filter(|(_, alt)| alt.join(soname).exists())
+                .map(move |(name, alt)| {
+                    format!(
+                        "`{s}` is in {}, which {} names only on an Intel CPU that glibc names \
+                         `{name}`. Scratchsmith reads `$PLATFORM` as `x86_64`, as glibc does on \
+                         every other x86_64 CPU, so it does not use that copy. Put an `x86_64` \
+                         build of `{s}` in {}.",
+                        printable(alt),
+                        entry.describe(),
+                        printable(dir)
+                    )
+                })
+        })
+        .collect()
+}
+
+// The search list of one object, index for index, for `cpu_copy_note`.
+struct CpuReach<'a> {
+    search: &'a [PathBuf],
+    cpu: &'a [Option<CpuEntry>],
+    gaps: &'a [Option<Gap>],
+    default_dirs: &'a [PathBuf],
+}
+
+// A note when bare `soname` ships from `found` while ld.so, on an Intel CPU that glibc names
+// `haswell` or `xeon_phi`, would load another copy through a `$PLATFORM` entry. That search is
+// the one ld.so runs on such a CPU: every entry it searches, each `$PLATFORM` read as that name,
+// then the default directories. The CPU copy is not staged, so on such a CPU the image's ld.so
+// still finds the shipped copy through an entry that names its directory outright, a default
+// directory, or its ld.so.cache, if ldconfig caches it under the needed name.
+fn cpu_copy_note(
+    soname: &str,
+    found: &Path,
+    reach: &CpuReach,
+    source: &dyn LinkInfoSource,
+) -> Option<String> {
+    if soname.contains('/') {
+        return None;
+    }
+    let real = canonical(found);
+    let searched = || {
+        reach
+            .search
+            .iter()
+            .zip(reach.cpu.iter().zip(reach.gaps))
+            .filter(|(_, (_, gap))| gap.is_none())
+            .map(|(dir, (cpu, _))| (dir, cpu.as_ref()))
+    };
+    let copies: Vec<(&CpuEntry, &str, PathBuf)> = X86_64_CPU_PLATFORMS
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &name)| {
+            let (entry, copy) = searched()
+                .map(|(dir, cpu)| match cpu {
+                    Some(entry) => (Some(entry), entry.dirs[i].1.join(soname)),
+                    None => (None, dir.join(soname)),
+                })
+                .chain(reach.default_dirs.iter().map(|d| (None, d.join(soname))))
+                .find(|(_, copy)| copy.exists())?;
+            // Only a hit through a `$PLATFORM` entry differs by CPU. Any other hit is the same
+            // file on every CPU, and a gap there has its own note.
+            let entry = entry?;
+            (canonical(&copy) != real).then_some((entry, name, copy))
+        })
+        .collect();
+    if copies.is_empty() {
+        return None;
+    }
+    let s = soname.escape_debug();
+    let mut note = format!("`{s}` ships from {}", printable(found));
+    for (entry, name, copy) in &copies {
+        note.push_str(&format!(
+            ". On an Intel CPU that glibc names `{name}`, ld.so reads `$PLATFORM` in {} as \
+             `{name}` and loads the copy in {} instead, which the image leaves out",
+            entry.describe(),
+            printable(copy.parent().unwrap_or(Path::new("/")))
+        ));
+    }
+    let shipped_dir = found.parent().unwrap_or(Path::new("/"));
+    let direct = searched().any(|(dir, cpu)| cpu.is_none() && dir == shipped_dir)
+        || reach.default_dirs.iter().any(|d| d == shipped_dir);
+    match cache_miss(soname, found, source).filter(|_| !direct) {
+        Some(miss) => note.push_str(&format!(
+            ". On such a CPU the image's ld.so cannot find `{s}` at all, because ldconfig does \
+             not cache the shipped copy under that name: {miss}"
+        )),
+        None => note.push_str(". The image loads the shipped copy on every CPU"),
+    }
+    Some(note)
+}
+
 // Expand ld.so tokens in a search path against the object that owns it. `$ORIGIN`
 // is the owning object's directory — not the top binary's — which is the whole
 // point of the token; expanding it wrong is a classic staging bug.
 fn expand_tokens(raw: &str, origin_dir: &Path, root: &ElfInfo) -> String {
+    expand_tokens_as(raw, origin_dir, root, root.platform())
+}
+
+// `expand_tokens`, with `platform` as the value of `$PLATFORM`.
+fn expand_tokens_as(raw: &str, origin_dir: &Path, root: &ElfInfo, platform: &str) -> String {
     let origin = origin_dir.to_string_lossy();
     let lib = if root.is_64 { "lib64" } else { "lib" };
     raw.replace("${ORIGIN}", &origin)
         .replace("$ORIGIN", &origin)
         .replace("${LIB}", lib)
         .replace("$LIB", lib)
-        .replace("${PLATFORM}", root.platform())
-        .replace("$PLATFORM", root.platform())
+        .replace("${PLATFORM}", platform)
+        .replace("$PLATFORM", platform)
 }
 
 // The entries of RPATH or RUNPATH strings, in order. ld joins several -rpath flags into one
@@ -974,7 +1175,18 @@ fn ldconfig_caches_name(name: &str) -> bool {
 
 // One search-path entry as a concrete directory.
 fn entry_dir(entry: &str, origin_dir: &Path, root: &Path, root_info: &ElfInfo) -> PathBuf {
-    let expanded = expand_tokens(entry, origin_dir, root_info);
+    entry_dir_as(entry, origin_dir, root, root_info, root_info.platform())
+}
+
+// `entry_dir`, with `platform` as the value of `$PLATFORM`.
+fn entry_dir_as(
+    entry: &str,
+    origin_dir: &Path,
+    root: &Path,
+    root_info: &ElfInfo,
+    platform: &str,
+) -> PathBuf {
+    let expanded = expand_tokens_as(entry, origin_dir, root_info, platform);
     let p = Path::new(&expanded);
     if p.is_absolute() {
         reroot(root, p)
@@ -2944,6 +3156,235 @@ mod tests {
         let res = resolve_with(&exe, &Sysroot::new(&root), &[], &MapSource { infos }).unwrap();
         assert_eq!(res.libs.len(), 1);
         assert!(res.notes.is_empty(), "{:?}", res.notes);
+    }
+
+    // Resolve `a/exe`, which needs `needed`, with `files` (relative to the root) present.
+    fn resolve_files(
+        needed: &str,
+        rpaths: &[&str],
+        runpaths: &[&str],
+        files: &[&str],
+    ) -> (Resolution, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = canonical(tmp.path());
+        let exe = root.join("a/exe");
+        touch(&exe);
+        let mut infos = HashMap::new();
+        infos.insert(exe.clone(), elf(&[needed], rpaths, runpaths, None));
+        for file in files {
+            let path = root.join(file);
+            touch(&path);
+            infos.insert(path, elf(&[], &[], &[], None));
+        }
+        let res = resolve_with(&exe, &Sysroot::new(&root), &[], &MapSource { infos }).unwrap();
+        (res, root)
+    }
+
+    #[test]
+    fn a_missing_library_under_a_cpu_platform_name_gets_a_hint() {
+        // decision-018: `$PLATFORM` stays `x86_64`, so the library is still missing, and the
+        // hint names the copy that glibc would load on some Intel CPUs.
+        let cases: [(&[&str], &[&str], &str, &str); 3] = [
+            (
+                &[],
+                &["$ORIGIN/$PLATFORM"],
+                "haswell",
+                "RUNPATH entry `$ORIGIN/$PLATFORM`",
+            ),
+            (
+                &["$ORIGIN/${PLATFORM}"],
+                &[],
+                "xeon_phi",
+                "RPATH entry `$ORIGIN/${PLATFORM}`",
+            ),
+            (
+                &[],
+                &["/opt/none:$ORIGIN/$PLATFORM/lib"],
+                "haswell",
+                "RUNPATH entry `$ORIGIN/$PLATFORM/lib`",
+            ),
+        ];
+        for (rpaths, runpaths, name, entry) in cases {
+            let sub = if entry.ends_with("lib`") { "/lib" } else { "" };
+            let (res, root) = resolve_files(
+                "libfoo.so.1",
+                rpaths,
+                runpaths,
+                &[&format!("a/{name}{sub}/libfoo.so.1")],
+            );
+            assert_eq!(res.missing, ["libfoo.so.1"], "{entry}");
+            assert!(
+                res.libs.is_empty() && res.notes.is_empty(),
+                "{entry}: {res:?}"
+            );
+            let a = root.join("a");
+            let want = format!(
+                "`libfoo.so.1` is in {}, which {entry} of {} names only on an Intel CPU that \
+                 glibc names `{name}`. Scratchsmith reads `$PLATFORM` as `x86_64`, as glibc does \
+                 on every other x86_64 CPU, so it does not use that copy. Put an `x86_64` build \
+                 of `libfoo.so.1` in {}.",
+                a.join(format!("{name}{sub}")).display(),
+                a.join("exe").display(),
+                a.join(format!("x86_64{sub}")).display(),
+            );
+            assert_eq!(res.hints, [want], "{entry}");
+        }
+    }
+
+    #[test]
+    fn a_shipped_library_notes_an_unused_cpu_platform_copy_next_to_it() {
+        let (res, root) = resolve_files(
+            "libfoo.so.1",
+            &[],
+            &["$ORIGIN/$PLATFORM"],
+            &["a/x86_64/libfoo.so.1", "a/haswell/libfoo.so.1"],
+        );
+        let a = root.join("a");
+        // Staged as before: the x86_64 copy only.
+        assert_eq!(res.libs.len(), 1);
+        assert_eq!(res.libs[0].path, a.join("x86_64/libfoo.so.1"));
+        assert!(res.missing.is_empty() && res.hints.is_empty(), "{res:?}");
+        let want = format!(
+            "`libfoo.so.1` ships from {}. On an Intel CPU that glibc names `haswell`, ld.so reads \
+             `$PLATFORM` in RUNPATH entry `$ORIGIN/$PLATFORM` of {} as `haswell` and loads the \
+             copy in {} instead, which the image leaves out. The image loads the shipped copy on \
+             every CPU",
+            a.join("x86_64/libfoo.so.1").display(),
+            a.join("exe").display(),
+            a.join("haswell").display(),
+        );
+        assert_eq!(res.notes, [want]);
+    }
+
+    #[test]
+    fn an_unused_cpu_copy_of_a_name_ldconfig_does_not_cache_says_the_image_cannot_load_it() {
+        let files = ["a/x86_64/foo.so", "a/xeon_phi/foo.so"];
+        let (res, _) = resolve_files("foo.so", &[], &["$ORIGIN/$PLATFORM"], &files);
+        assert_eq!(res.libs.len(), 1);
+        assert_eq!(res.notes.len(), 1, "{:?}", res.notes);
+        assert!(
+            res.notes[0].contains("`xeon_phi`")
+                && res.notes[0].ends_with(
+                    ". On such a CPU the image's ld.so cannot find `foo.so` at all, because \
+                     ldconfig does not cache the shipped copy under that name: it caches only \
+                     names that start with `lib` or `ld-` and hold `.so`, or start with `ld.so.` \
+                     or `ld64.so.`"
+                ),
+            "{}",
+            res.notes[0]
+        );
+        // An entry that names the shipped directory outright still finds it on such a CPU.
+        let (res, _) = resolve_files("foo.so", &[], &["$ORIGIN/$PLATFORM:$ORIGIN/x86_64"], &files);
+        assert_eq!(res.notes.len(), 1, "{:?}", res.notes);
+        assert!(
+            res.notes[0].ends_with(". The image loads the shipped copy on every CPU"),
+            "{}",
+            res.notes[0]
+        );
+    }
+
+    #[test]
+    fn a_cpu_platform_copy_that_ld_so_reaches_later_is_noted_too() {
+        // On `haswell`, ld.so reads every `$PLATFORM` entry so, so it can miss the entry that
+        // found the shipped copy and load a copy through a later one.
+        let (res, root) = resolve_files(
+            "libfoo.so.1",
+            &[],
+            &["$ORIGIN/$PLATFORM:/opt/$PLATFORM"],
+            &["a/x86_64/libfoo.so.1", "opt/haswell/libfoo.so.1"],
+        );
+        assert_eq!(res.libs[0].path, root.join("a/x86_64/libfoo.so.1"));
+        assert_eq!(res.notes.len(), 1, "{:?}", res.notes);
+        assert!(
+            res.notes[0].contains(&format!(
+                "in RUNPATH entry `/opt/$PLATFORM` of {} as `haswell` and loads the copy in {} \
+                 instead",
+                root.join("a/exe").display(),
+                root.join("opt/haswell").display()
+            )),
+            "{}",
+            res.notes[0]
+        );
+        // A library that ships from a default directory, with a CPU copy that only a `$PLATFORM`
+        // entry names. The image finds the shipped copy there on every CPU.
+        let (res, root) = resolve_files(
+            "libfoo.so.1",
+            &[],
+            &["$ORIGIN/$PLATFORM"],
+            &["a/haswell/libfoo.so.1", "usr/lib64/libfoo.so.1"],
+        );
+        assert_eq!(res.libs[0].path, root.join("usr/lib64/libfoo.so.1"));
+        assert_eq!(res.notes.len(), 1, "{:?}", res.notes);
+        assert!(
+            res.notes[0].starts_with(&format!(
+                "`libfoo.so.1` ships from {}. On an Intel CPU that glibc names `haswell`",
+                root.join("usr/lib64/libfoo.so.1").display()
+            )) && res.notes[0].ends_with(". The image loads the shipped copy on every CPU"),
+            "{}",
+            res.notes[0]
+        );
+    }
+
+    #[test]
+    fn a_cpu_platform_name_with_no_other_copy_gets_no_hint_or_note() {
+        // No CPU-specific copy.
+        let (res, _) = resolve_files(
+            "libfoo.so.1",
+            &[],
+            &["$ORIGIN/$PLATFORM"],
+            &["a/x86_64/libfoo.so.1"],
+        );
+        assert!(res.notes.is_empty() && res.hints.is_empty(), "{res:?}");
+        // The CPU-specific name is a link to the shipped copy, so it is the same file.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = canonical(tmp.path());
+        let exe = root.join("a/exe");
+        let lib = root.join("a/x86_64/libfoo.so.1");
+        touch(&exe);
+        touch(&lib);
+        std::os::unix::fs::symlink("x86_64", root.join("a/haswell")).unwrap();
+        let mut infos = HashMap::new();
+        infos.insert(
+            exe.clone(),
+            elf(&["libfoo.so.1"], &[], &["$ORIGIN/$PLATFORM"], None),
+        );
+        infos.insert(lib, elf(&[], &[], &[], None));
+        let res = resolve_with(&exe, &Sysroot::new(&root), &[], &MapSource { infos }).unwrap();
+        assert_eq!(res.libs.len(), 1);
+        assert!(res.notes.is_empty(), "{:?}", res.notes);
+        // A name glued to the token is an entry ld.so does not search, noted on its own.
+        let (res, _) = resolve_files(
+            "libfoo.so.1",
+            &[],
+            &["$ORIGIN/$PLATFORMx"],
+            &["a/x86_64x/libfoo.so.1", "a/haswellx/libfoo.so.1"],
+        );
+        assert_eq!(res.notes.len(), 1, "{:?}", res.notes);
+        assert!(
+            res.notes[0].contains("ld.so does not search this entry"),
+            "{}",
+            res.notes[0]
+        );
+    }
+
+    #[test]
+    fn a_cpu_platform_copy_on_another_arch_gets_no_hint_or_note() {
+        // Only x86_64 glibc swaps `$PLATFORM` for a CPU name.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = canonical(tmp.path());
+        let exe = root.join("a/exe");
+        let lib = root.join("a/aarch64/libfoo.so.1");
+        touch(&exe);
+        touch(&lib);
+        touch(&root.join("a/haswell/libfoo.so.1"));
+        let mut arm = elf(&["libfoo.so.1"], &[], &["$ORIGIN/$PLATFORM"], None);
+        arm.machine = goblin::elf::header::EM_AARCH64;
+        let mut infos = HashMap::new();
+        infos.insert(exe.clone(), arm);
+        infos.insert(lib, elf(&[], &[], &[], None));
+        let res = resolve_with(&exe, &Sysroot::new(&root), &[], &MapSource { infos }).unwrap();
+        assert_eq!(res.libs.len(), 1);
+        assert!(res.notes.is_empty() && res.hints.is_empty(), "{res:?}");
     }
 
     #[test]

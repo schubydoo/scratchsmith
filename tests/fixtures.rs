@@ -920,3 +920,86 @@ fn a_search_path_entry_that_ld_so_skips_packs_as_before_with_one_note() {
         }
     }
 }
+
+#[test]
+fn a_cpu_platform_copy_gets_a_note_or_a_hint_and_packs_as_before() {
+    // decision-018: `$PLATFORM` is read as `x86_64`, so the same library stages, or the same
+    // pack fails, as before. A copy under a name glibc picks on some Intel CPUs earns one line.
+    if !cfg!(target_arch = "x86_64") {
+        skip_optional("glibc swaps `$PLATFORM` for a CPU name only on x86_64");
+        return;
+    }
+    if !cc_available() {
+        skip_required("no C compiler");
+        return;
+    }
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    // (the directories that hold a copy of the library, the pack's exit code, the line.)
+    let cases: [(&[&str], i32, &str); 2] = [
+        (&["x86_64", "haswell"], 0, "note: `libfoo.so` ships from "),
+        (&["haswell"], 1, "note: `libfoo.so` is in "),
+    ];
+    for (copies, code, start) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().canonicalize().unwrap();
+        std::fs::write(dir.join("foo.c"), "int foo(void){return 42;}").unwrap();
+        std::fs::write(
+            dir.join("main.c"),
+            "extern int foo(void); int main(void){return foo()==42?0:1;}",
+        )
+        .unwrap();
+        let p = |name: &str| dir.join(name).to_str().unwrap().to_string();
+        for copy in copies {
+            std::fs::create_dir_all(dir.join("app").join(copy)).unwrap();
+            let lib = p(&format!("app/{copy}/libfoo.so"));
+            cc(&["-shared", "-fPIC", "-o", &lib, &p("foo.c")]);
+        }
+        cc(&[
+            "-Wl,--enable-new-dtags",
+            "-Wl,-rpath,$ORIGIN/$PLATFORM",
+            "-o",
+            &p("app/app"),
+            &p("main.c"),
+            &format!("-L{}", p(&format!("app/{}", copies[0]))),
+            "-lfoo",
+        ]);
+
+        let rootfs = dir.join("rootfs");
+        let pack = Command::new(bin)
+            .args(["pack", "-n", "-o", rootfs.to_str().unwrap(), &p("app/app")])
+            .output()
+            .expect("run");
+        let stderr = String::from_utf8_lossy(&pack.stderr);
+        assert_eq!(pack.status.code(), Some(code), "{copies:?}: {stderr}");
+        let lines: Vec<&str> = stderr.lines().filter(|l| l.starts_with(start)).collect();
+        assert_eq!(lines.len(), 1, "{copies:?}: {stderr}");
+        let haswell = p("app/haswell");
+        if code == 0 {
+            // Staged where it always was, and only that copy.
+            let staged = |copy: &str| {
+                rootfs.join(
+                    dir.strip_prefix("/")
+                        .unwrap()
+                        .join(format!("app/{copy}/libfoo.so")),
+                )
+            };
+            assert!(staged("x86_64").is_file(), "{stderr}");
+            assert!(!staged("haswell").exists(), "{stderr}");
+            assert!(
+                lines[0].contains(&format!("loads the copy in {haswell} instead")),
+                "{}",
+                lines[0]
+            );
+        } else {
+            assert!(
+                lines[0].starts_with(&format!("{start}{haswell}, which RUNPATH entry")),
+                "{}",
+                lines[0]
+            );
+            assert!(
+                stderr.contains("cannot pack: unresolved dependencies: \"libfoo.so\""),
+                "{stderr}"
+            );
+        }
+    }
+}
