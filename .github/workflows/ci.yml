@@ -44,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           hits=$(grep -rn 'eprintln!("skipping' src/ tests/ --include='*.rs' \
-            --exclude=test_support.rs || true)
+            | grep -v '^src/test_support\.rs:' || true)
           if [ -n "$hits" ]; then
             echo "::error::Use skip_required or skip_optional from src/test_support.rs, not a bare eprintln."
             echo "$hits"
