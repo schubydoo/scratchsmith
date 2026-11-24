@@ -4,9 +4,12 @@
 Usage: rustsec_autofix.py <out_dir>
 
 For each workspace lockfile (Cargo.lock, fuzz/Cargo.lock) it runs `cargo audit`, then
-`cargo update -p <crate>@<vulnerable version>` for every hit, then audits again. Renovate
-cannot do this: its OSV alerts cover direct deps only, and a crate pinned only in a
-lockfile waits for the weekly lockFileMaintenance.
+`cargo update -p <crate>@<vulnerable version> --recursive` for every hit, then audits
+again. Renovate cannot do this: its OSV alerts cover direct deps only, and a crate pinned
+only in a lockfile waits for the weekly lockFileMaintenance.
+
+`--recursive` is required: without it, a fixed version that needs a newer locked dependency
+is silently not selected, and cargo still exits 0 (url 2.5.9 and form_urlencoded 1.2.3).
 
 `cargo update -p` stays inside the semver ranges that Cargo.toml allows, so it never
 edits a manifest. Every advisory in the second audit is reported as remaining, never
@@ -97,6 +100,7 @@ def main() -> None:
                     str(ws / "Cargo.toml"),
                     "-p",
                     spec,
+                    "--recursive",
                 ],
                 capture_output=True,
                 text=True,
@@ -104,7 +108,7 @@ def main() -> None:
             )
             if upd.returncode != 0:
                 print(
-                    f"::warning::cargo update -p {spec} in {ws} failed:\n{upd.stderr}"
+                    f"::warning::cargo update -p {spec} --recursive in {ws} failed:\n{upd.stderr}"
                 )
         # Everything the second audit finds is remaining, including an advisory that the
         # update brought in. Subtracting it from the first audit would drop that one.
@@ -119,9 +123,10 @@ def main() -> None:
 
     lines = [
         (
-            "Automated by `rustsec-autofix.yml`. It ran `cargo update -p <crate>@<version>` for "
-            "each RustSec advisory in the lockfiles. Only lockfiles changed: no `Cargo.toml` "
-            "edits, and every update stays within the semver ranges that the manifests allow."
+            "Automated by `rustsec-autofix.yml`. It ran `cargo update -p <crate>@<version> "
+            "--recursive` for each RustSec advisory in the lockfiles, so the crate's own "
+            "dependencies can move too. Only lockfiles changed: no `Cargo.toml` edits, and "
+            "every update stays within the semver ranges that the manifests allow."
         ),
         "",
         "| Lockfile | Advisory | Crate | From | To |",
