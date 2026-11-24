@@ -1475,6 +1475,19 @@ fn index_assembles_a_pushed_image_into_an_index() {
     );
     assert!(String::from_utf8_lossy(&cli.stdout).contains("pushed index"));
 
+    // Without `--sign`, the JSON report still carries `signed`, as null.
+    let unsigned = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["index", "--format", "json", cli_target, child])
+        .output()
+        .unwrap();
+    assert!(
+        unsigned.status.success(),
+        "cli index --format json failed: {}",
+        String::from_utf8_lossy(&unsigned.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&unsigned.stdout).unwrap();
+    assert!(report["signed"].is_null(), "{report}");
+
     // `--sign` signs the index by digest; the JSON report names what it signed.
     let tmp = tempfile::tempdir().unwrap();
     let log = tmp.path().join("asked");
@@ -1490,6 +1503,30 @@ fn index_assembles_a_pushed_image_into_an_index() {
         String::from_utf8_lossy(&signed.stderr)
     );
     let report: serde_json::Value = serde_json::from_slice(&signed.stdout).unwrap();
+    // docs/usage.md lists these fields, so pin the set against this real push.
+    let keys = |v: &serde_json::Value| {
+        let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    };
+    assert_eq!(
+        keys(&report),
+        ["manifests", "pushed", "signed", "warnings"],
+        "{report}"
+    );
+    assert_eq!(report["pushed"], cli_target, "{report}");
+    assert_eq!(report["warnings"], serde_json::json!([]), "{report}");
+    let manifest = &report["manifests"][0];
+    assert_eq!(keys(manifest), ["digest", "platform", "source"], "{report}");
+    assert_eq!(manifest["source"], child, "{report}");
+    assert!(
+        manifest["platform"].as_str().unwrap().starts_with("linux/"),
+        "{report}"
+    );
+    assert!(
+        manifest["digest"].as_str().unwrap().starts_with("sha256:"),
+        "{report}"
+    );
     let by_digest = format!(
         "localhost:5098/scratchsmith/idx@{}",
         registry_digest(5098, "scratchsmith/idx", "cli")

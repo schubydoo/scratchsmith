@@ -460,6 +460,16 @@ cross-arch resolution happens. The sources must already be pushed, and must live
 this is typically the same repo with a different tag, as above. Add `--sign` to cosign-sign the
 index by digest.
 
+`index --format json` prints one object with four fields:
+
+- `pushed`: the target reference, as you gave it.
+- `manifests`: one entry per source, in the order you gave them. Each entry has `source` (the
+  reference as you gave it), `platform` (such as `linux/amd64`, read from the source's image
+  configuration) and `digest` (the child manifest's `sha256:` digest).
+- `signed`: the by-digest reference that `--sign` signed, or `null` without `--sign`.
+- `warnings`: a list of warnings about the push, such as a registry that answered with another
+  digest. It is empty when there are none.
+
 ## Image metadata and entrypoint
 
 Set what the image runs: entrypoint, arguments, environment, working directory, and user:
