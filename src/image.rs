@@ -632,13 +632,15 @@ mod tests {
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
         // Test the PRECONDITION rather than infer it from a uid: root ignores the mode bits,
         // and so do some container and filesystem setups. If the directory is still readable
-        // this test cannot fail, and a test that cannot fail must say so rather than pass.
+        // this test cannot fail, so it skips. CI runs the suite as a non-root user, where the
+        // skip fails instead of passing.
         if std::fs::read_dir(&locked).is_ok() {
             std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
-            panic!(
+            crate::test_support::skip_required(&format!(
                 "cannot make {} unreadable (running as root?), so this test proves nothing",
                 locked.display()
-            );
+            ));
+            return;
         }
         // Matched rather than `expect_err`, which would need `Layer: Debug` — and deriving it
         // on a struct holding the gzip bytes would dump a whole layer into a failure message.
