@@ -1616,6 +1616,17 @@ cross-arch resolution happens. The sources must already be pushed, and must live
 <strong>target's repository</strong>. An index references its children by digest within one repository, so
 this is typically the same repo with a different tag, as above. Add <code>--sign</code> to cosign-sign the
 index by digest.</p>
+<p><code>index --format json</code> prints one object with four fields:</p>
+<ul>
+<li><code>pushed</code>: the target reference, as you gave it.</li>
+<li><code>manifests</code>: one entry per source, in the order you gave them. Each entry has <code>source</code> (the
+  reference as you gave it), <code>platform</code> (such as <code>linux/amd64</code>, read from the source's image
+  configuration) and <code>digest</code> (the child manifest's <code>sha256:</code> digest).</li>
+<li><code>signed</code>: the by-digest reference that <code>--sign</code> signed, or <code>null</code> without <code>--sign</code>.</li>
+<li><code>warnings</code>: a list of warnings about the push, such as a registry that answered with another
+  digest. It is empty when there are none. With <code>--sign</code>, a digest mismatch fails the command
+  instead, so <code>warnings</code> stays empty.</li>
+</ul>
 <h2 id="image-metadata-and-entrypoint">Image metadata and entrypoint<a class="headerlink" href="#image-metadata-and-entrypoint" title="Permanent link">&para;</a></h2>
 <p>Set what the image runs: entrypoint, arguments, environment, working directory, and user:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app<span class="w"> </span><span class="se">\</span>
