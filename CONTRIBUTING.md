@@ -38,18 +38,20 @@ and `cargo test` still passes:
 **In CI, some of those stop being optional.** A skipped test is recorded as a pass. A runner
 that loses a tool then reports a green suite having run nothing.
 
-Eight tools are strict in CI: `cc`, `strip`, `upx`, Docker, `getent`, `/usr/bin/id`, `syft` and
-`unshare -r`. A missing one **fails** the test instead of skipping it. The workflow installs or
-guarantees all eight, so a miss there is a broken runner. If the `CI` environment variable holds
+Ten tools and a dpkg database are strict in CI: `cc`, `strip`, `upx`, Docker, `getent`,
+`localedef`, `mkfifo`, `/usr/bin/id`, `syft`, `unshare -r`, and `dpkg-query` with
+`/var/lib/dpkg/status`. A missing one **fails** the test instead of skipping it. The workflow
+installs or guarantees all of them, so a miss there is a broken runner. If the `CI` environment variable holds
 anything other than an opt-out word, the strict gate turns on. The opt-out words are `0`, `false`, `no`, `off` and the empty
 string, in any case.
 
-`musl-gcc`, `tini`, the `registry:2` pull, the host locale sources, a dpkg database and the host
-CA bundle stay optional everywhere.
+`musl-gcc`, `tini`, the `registry:2` pull, the host locale sources, the host's `os-release` and
+the host CA bundle stay optional everywhere.
 
 If your own machine has `CI` set for an unrelated reason, set `SCRATCHSMITH_NO_CI_GATE=1` to
 get the local behavior back. That variable reads by the same opt-out words, so an empty value
-does not turn the gate off. The gate lives in `tests/common/mod.rs`.
+does not turn the gate off. The gate lives in `src/test_support.rs`, which the unit tests and
+`tests/common` share.
 
 The `--sbom` test is a special case. It runs with `syft` and without it. With `syft` present,
 the test asserts success. With `syft` absent, it asserts a clean "missing syft must fail"

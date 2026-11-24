@@ -2060,7 +2060,7 @@ fn the_packages_default_records_the_report_and_feeds_sbom_and_scan() {
         return;
     }
     if !dpkg_host() {
-        common::skip_optional("no dpkg database on this host");
+        skip_required("no dpkg database on this host");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -2137,7 +2137,7 @@ fn the_report_names_the_packages_that_own_the_bundled_files() {
         return;
     };
     if !dpkg_host() {
-        common::skip_optional("no dpkg database on this host");
+        skip_required("no dpkg database on this host");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -2232,7 +2232,7 @@ fn the_sbom_names_the_owning_packages_and_the_image_does_not_keep_the_records() 
         return;
     };
     if !dpkg_host() {
-        common::skip_optional("no dpkg database on this host");
+        skip_required("no dpkg database on this host");
         return;
     }
     if !common::syft_available() {
@@ -2308,8 +2308,12 @@ fn the_report_names_the_owners_of_the_extra_files_too() {
         "/etc/localtime",
         "/etc/ssl/certs/ca-certificates.crt",
     ];
-    if !dpkg_host() || !hosted.iter().all(|p| std::path::Path::new(p).exists()) {
-        common::skip_optional("needs a dpkg host with a timezone and a CA bundle");
+    if !dpkg_host() {
+        skip_required("needs a dpkg host");
+        return;
+    }
+    if !hosted.iter().all(|p| std::path::Path::new(p).exists()) {
+        common::skip_optional("needs a timezone and a CA bundle");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -2408,7 +2412,7 @@ fn a_failed_package_lookup_warns_unless_the_records_need_it() {
     };
     // The probe needs a dpkg status file. dpkg-query answers the probe and fails every lookup.
     if !dpkg_host() {
-        common::skip_optional("needs a dpkg host");
+        skip_required("needs a dpkg host");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -2459,7 +2463,7 @@ fn a_failed_package_lookup_warns_on_the_text_report_too() {
         return;
     }
     if !dpkg_host() {
-        common::skip_optional("needs a dpkg host");
+        skip_required("needs a dpkg host");
         return;
     }
     // The text report drops the default `report`, so only the default `sbom` asks here. A
@@ -2490,7 +2494,7 @@ fn an_added_file_on_a_record_path_wins_over_the_default_records() {
         return;
     };
     if !dpkg_host() {
-        common::skip_optional("needs a dpkg host");
+        skip_required("needs a dpkg host");
         return;
     }
     // The packed binary links glibc, so libc6's record wants this path.
@@ -2549,7 +2553,7 @@ fn a_write_error_while_staging_the_default_records_fails_the_pack() {
         return;
     };
     if !dpkg_host() {
-        common::skip_optional("needs a dpkg host");
+        skip_required("needs a dpkg host");
         return;
     }
     // root writes through any mode, so the directory below would not stop it.
@@ -2608,7 +2612,7 @@ fn a_file_dpkg_would_read_as_a_pattern_is_named_as_not_looked_up() {
         return;
     };
     if !dpkg_host() {
-        common::skip_optional("needs a dpkg host");
+        skip_required("needs a dpkg host");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();

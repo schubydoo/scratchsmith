@@ -20,5 +20,7 @@ pub mod resolver;
 pub mod rpm;
 pub mod stager;
 pub mod supplychain;
+#[cfg(test)]
+mod test_support;
 pub mod unpack;
 pub mod watch;

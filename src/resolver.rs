@@ -1902,7 +1902,7 @@ mod tests {
         fs::create_dir_all(fifo.parent().unwrap()).unwrap();
         let made = std::process::Command::new("mkfifo").arg(&fifo).status();
         if !made.is_ok_and(|s| s.success()) {
-            eprintln!("skipping: mkfifo unavailable");
+            crate::test_support::skip_required("mkfifo unavailable");
             return;
         }
         let infos = HashMap::from([(

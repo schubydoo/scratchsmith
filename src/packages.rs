@@ -941,7 +941,7 @@ mod tests {
             .iter()
             .any(|p| Path::new(p).exists())
         {
-            eprintln!("skipping: this host has no os-release to copy");
+            crate::test_support::skip_optional("this host has no os-release to copy");
             return;
         }
         let staged = stage_records(rootfs, &owners, &[]).unwrap();
@@ -1127,7 +1127,7 @@ mod tests {
         std::fs::create_dir_all(&status_d).unwrap();
         std::fs::set_permissions(&status_d, std::fs::Permissions::from_mode(0o555)).unwrap();
         if std::fs::write(status_d.join("probe"), b"").is_ok() {
-            eprintln!("skipping: root writes into a read-only directory");
+            crate::test_support::skip_optional("root writes into a read-only directory");
             return;
         }
         let err = stage_records(tmp.path(), &owners, &[]).unwrap_err();

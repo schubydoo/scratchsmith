@@ -2788,7 +2788,7 @@ mod tests {
         // A locale with no source definition: localedef exits non-zero and says why, and that
         // reason belongs in the pack error rather than a bare exit code.
         if !Path::new("/usr/bin/localedef").exists() {
-            eprintln!("skipping: no localedef on this host");
+            crate::test_support::skip_required("no localedef on this host");
             return;
         }
         let tmp = tempfile::tempdir().unwrap();
@@ -2807,7 +2807,7 @@ mod tests {
         if !Path::new("/usr/bin/localedef").exists()
             || !Path::new("/usr/share/i18n/locales/en_US").exists()
         {
-            eprintln!("skipping: no localedef or no glibc locale sources");
+            crate::test_support::skip_optional("no localedef or no glibc locale sources");
             return;
         }
         let tmp = tempfile::tempdir().unwrap();
@@ -2836,7 +2836,7 @@ mod tests {
             || !Path::new("/usr/share/i18n/locales/en_US").exists()
             || Path::new("/usr/lib/locale/en_US.UTF-8").is_dir()
         {
-            eprintln!("skipping: host cannot compile, or already has the directory");
+            crate::test_support::skip_optional("host cannot compile, or already has the directory");
             return;
         }
         let tmp = tempfile::tempdir().unwrap();
