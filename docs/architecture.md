@@ -17,9 +17,10 @@
    `$ORIGIN`), a relative entry (read against the object's directory, where `ld.so` reads it
    against the working directory), and a name glued to a token, such as `$ORIGINX` or
    `$ORIGIN_x` (expanded, where `ld.so` keeps it literal). A library found only through such an
-   entry loads from the image's `ld.so.cache`, and `pack` prints one note on stderr for the
-   entry. Scratchsmith never scrapes
-   the host's `ldd`, `ld.so.cache`, or `LD_LIBRARY_PATH`, so the result is deterministic.
+   entry loads from the image's `ld.so.cache`, if `ldconfig` caches it under the needed name by
+   the rule above. `pack` prints one note on stderr for the entry, and the note names any
+   library that the cache does not list, which the image then cannot load. Scratchsmith never
+   scrapes the host's `ldd`, `ld.so.cache`, or `LD_LIBRARY_PATH`, so the result is deterministic.
 2. **Stage**: copy the interpreter to its verbatim path, mirror the libraries, recreate
    versioned-soname symlinks, regenerate `ld.so.cache`, and add the glibc NSS pieces.
 3. **Assemble**: build a non-root image with reproducible layers (sorted entries, zeroed
