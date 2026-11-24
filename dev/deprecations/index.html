@@ -1120,6 +1120,10 @@ such input with no deprecation cycle, and this section lists each case.</p>
 FIFO waited forever for a writer, or read a writer's stream with no end. Now <code>pack</code> and <code>graph</code>
 refuse such a library before they open it, and exit <code>1</code>. No library is a FIFO, so no working
 image depends on one.</p>
+<p>A FIFO that you name with <code>--include</code> is still read, so <code>graph --include &lt;(cat libplugin.so)</code>
+works. <code>pack</code> reads it too, but then it refuses to stage it, because it is not a regular file, and
+exits <code>1</code>. Both commands open the FIFO and wait for a writer, as <code>cat</code> does. With no writer they
+wait until you stop them, and that is accepted behavior.</p>
 <h3 id="a-file-that-is-not-an-elf-named-by-the-binary-or-a-library">A file that is not an ELF, named by the binary or a library<a class="headerlink" href="#a-file-that-is-not-an-elf-named-by-the-binary-or-a-library" title="Permanent link">&para;</a></h3>
 <p>A <code>DT_NEEDED</code> entry in the binary or in a library names a file. The binary's program
 interpreter (<code>PT_INTERP</code>) names a file too. Through 1.7.2, scratchsmith staged that file, and
