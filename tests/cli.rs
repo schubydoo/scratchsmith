@@ -2635,7 +2635,8 @@ fn a_file_dpkg_would_read_as_a_pattern_is_named_as_not_looked_up() {
 fn the_documented_full_config_passes_every_sink_check() {
     // The first toml block in docs/configuration.md is the "full config file" readers copy. Run
     // both documented commands on it from an empty directory: with no binary there, the pack
-    // stops at reading it, which comes after the parse and every sink and usage check.
+    // stops at reading it, which comes after the parse, every sink check and the CLI usage
+    // checks. Checks made while staging, such as a locale name, are out of scope here.
     let doc = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/docs/configuration.md"
