@@ -1303,7 +1303,8 @@ fn a_missing_cosign_fails_sign_before_anything_is_pushed() {
 
 #[test]
 fn a_signing_that_fails_after_the_push_says_the_image_is_not_signed() {
-    // TASK-232. cosign answers `version`, then fails to sign the pushed image.
+    // TASK-232. cosign answers `version`, then fails to sign the pushed image. With --sbom, a
+    // sign that works and an attest that fails says the image is signed but not attested.
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");
         return;
@@ -1311,30 +1312,45 @@ fn a_signing_that_fails_after_the_push_says_the_image_is_not_signed() {
     let (rt, server) = mock_registry();
     let host = server.address().to_string();
     let tmp = tempfile::tempdir().unwrap();
-    let tools = fake_tools(
-        tmp.path(),
-        &[(
-            "cosign",
-            r#"[ "$1" = version ] && exit 0; echo "no OIDC token" >&2; exit 1"#,
-        )],
-    );
-    let reference = format!("{host}/app:1");
-    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
-        .args(["pack", "--packages", "none", "--push"])
-        .arg(&reference)
-        .arg("--sign")
-        .arg(bin)
-        .env("PATH", tools)
-        .env("HOME", tmp.path())
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(
-        stderr.contains(&format!("{reference} was pushed, but it is not signed"))
-            && stderr.contains("cosign failed: no OIDC token"),
-        "{stderr}"
-    );
+    let sbom = tmp.path().join("sbom.json");
+    for (fails, extra, says) in [
+        ("sign", &[][..], "app:1 was pushed, but it is not signed"),
+        (
+            "attest",
+            &["--sbom", "--sbom-file", sbom.to_str().unwrap()][..],
+            "app:1 was pushed and signed, but its SBOM attestation failed",
+        ),
+    ] {
+        let dir = tmp.path().join(fails);
+        let tools = fake_tools(
+            &dir,
+            &[
+                (
+                    "cosign",
+                    &format!(r#"[ "$1" = {fails} ] || exit 0; echo "no OIDC token" >&2; exit 1"#),
+                ),
+                ("syft", FAKE_SYFT),
+            ],
+        );
+        let reference = format!("{host}/app:1");
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["pack", "--packages", "none", "--push"])
+            .arg(&reference)
+            .arg("--sign")
+            .args(extra)
+            .arg(bin)
+            .env("PATH", tools)
+            .env("HOME", tmp.path())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{fails}: {stderr}");
+        assert!(
+            stderr.contains(&format!("{host}/{says}"))
+                && stderr.contains("cosign failed: no OIDC token"),
+            "{fails}: {stderr}"
+        );
+    }
     assert!(
         received(&rt, &server) > 0,
         "the push never reached the registry"
