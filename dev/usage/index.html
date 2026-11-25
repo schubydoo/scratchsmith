@@ -1204,6 +1204,11 @@ container is removed.</p>
 10 minutes. A run past its limit is stopped, and the pack fails with an error that names the tool
 and the limit. grype's limit leaves room for its first run, which downloads its vulnerability
 database.</p>
+<p><code>--push</code> and <code>index</code> give up on a registry or token host that does not accept the connection
+within 30 seconds, and the error names the endpoint. The identity-token exchange also fails
+after 60 seconds of silence from the token host. Talking to the registry itself has no read
+limit, so a slow upload of a large layer is not cut off, and a registry that accepts the
+connection and then sends nothing still keeps the command waiting.</p>
 <p>The report names the loader the image carries, because the binary's <code>PT_INTERP</code> chooses that
 path and not scratchsmith. <code>--format json</code> carries it as <code>interpreter</code>, so a job can assert it
 without unpacking the image. An ELF that carries no <code>PT_INTERP</code> reports null, which is the
