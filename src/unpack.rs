@@ -1079,6 +1079,23 @@ mod tests {
     }
 
     #[test]
+    fn a_directory_entry_replaces_a_symlink_to_a_directory() {
+        // The merged-/usr case: `bin -> usr/bin` meets a real `bin/` entry.
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(dest.join("usr/bin")).unwrap();
+        std::fs::write(dest.join("usr/bin/x"), b"x").unwrap();
+        std::os::unix::fs::symlink("usr/bin", dest.join("bin")).unwrap();
+        let layer = tar_with_modes(&[("bin/", tar::EntryType::Directory, 0o755)]);
+        apply_layer(&layer, &dest, &mut Default::default()).unwrap();
+        assert!(std::fs::symlink_metadata(dest.join("bin"))
+            .unwrap()
+            .is_dir());
+        assert!(!dest.join("bin/x").exists());
+        assert!(dest.join("usr/bin/x").exists());
+    }
+
+    #[test]
     fn a_later_layer_turns_a_directory_into_a_file() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("out");
