@@ -32,6 +32,9 @@ struct Spec {
     // must refuse before reading, because tar fills its hole with zeros of any claimed size.
     // A sparse blob name would not reach that refusal: a non-regular blob entry is skipped.
     sparse_index: u8,
+    // A platform for the applied manifest and a second descriptor after it, so unpack warns
+    // about the one it skips. The warning quotes this text, so it must stay on one line.
+    platform: Option<String>,
 }
 
 #[derive(Arbitrary, Debug)]
@@ -324,9 +327,18 @@ fn build_archive(spec: &Spec) -> (Vec<u8>, Expect) {
     let manifest_digest = hex(Sha256::digest(&manifest_bytes));
     blobs.push((manifest_digest.clone(), manifest_bytes));
 
-    let index = serde_json::json!({
-        "manifests": [{ "digest": format!("sha256:{manifest_digest}") }],
-    });
+    let index = match &spec.platform {
+        None => serde_json::json!({
+            "manifests": [{ "digest": format!("sha256:{manifest_digest}") }],
+        }),
+        Some(p) => serde_json::json!({ "manifests": [
+            {
+                "digest": format!("sha256:{manifest_digest}"),
+                "platform": { "os": p, "architecture": p, "variant": p },
+            },
+            { "digest": format!("sha256:{manifest_digest}") },
+        ]}),
+    };
 
     // Optionally corrupt one blob's stored name so its content no longer matches — this must
     // trip the digest-verification failure, not a panic.
@@ -393,6 +405,17 @@ fuzz_target!(|spec: Spec| {
                 report.files, expect.extracted,
                 "unpack skipped an entry of a layer"
             );
+            assert_eq!(
+                report.warnings.is_empty(),
+                spec.platform.is_none(),
+                "unpack warns exactly when the index lists a second manifest"
+            );
+            for w in &report.warnings {
+                assert!(
+                    !w.chars().any(breaks_a_line),
+                    "an unpack warning carries a character that breaks a line: {w:?}"
+                );
+            }
         }
     }
 });
