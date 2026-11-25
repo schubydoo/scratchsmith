@@ -1191,6 +1191,11 @@ but is not signed. <code>index --sign</code> works the same way.</p>
 <a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--strip<span class="w"> </span>--max-size<span class="w"> </span>8MB<span class="w"> </span>./app<span class="w">        </span><span class="c1"># fail the build if the staged image exceeds 8 MB</span>
 <a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>scratchsmith<span class="w"> </span>lint<span class="w"> </span>--fail-on<span class="w"> </span>no-pie<span class="w"> </span>--fail-on<span class="w"> </span>no-relro<span class="w"> </span>./app<span class="w">   </span><span class="c1"># hardening gate for CI</span>
 </code></pre></div>
+<p><code>--smoke</code> runs the image once and fails the pack only when the binary could not start: a
+missing library or loader, or an entrypoint the runtime could not exec. An app that starts and
+exits with an error passes, unless the code is 126 or 127, which shells use for a command
+that could not run. A binary still running after 15 seconds counts as started, and its
+container is removed.</p>
 <p>The report names the loader the image carries, because the binary's <code>PT_INTERP</code> chooses that
 path and not scratchsmith. <code>--format json</code> carries it as <code>interpreter</code>, so a job can assert it
 without unpacking the image. An ELF that carries no <code>PT_INTERP</code> reports null, which is the
