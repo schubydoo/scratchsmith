@@ -172,6 +172,15 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
         if digest.is_none() && path != "index.json" {
             continue; // unused, so never read
         }
+        // Two index.json entries (or `index.json` and `./index.json`) can name two images. Keeping
+        // the last one silently could unpack an image other tools never show. Refuse before
+        // reading the second.
+        if digest.is_none() && index_bytes.is_some() {
+            bail!(
+                "refusing a second index.json ({}) in the OCI archive: it is not clear which image to unpack",
+                crate::resolver::escape_for_display(&stored)
+            );
+        }
         // tar fills a GNU sparse entry's holes with zeros on read, so a few header bytes can
         // claim any size. No OCI layout writer emits one.
         if e.header().entry_type().is_gnu_sparse() {
@@ -2098,6 +2107,36 @@ mod tests {
         std::fs::write(&path, ar.into_inner().unwrap()).unwrap();
         let err = read_archive(&path).unwrap_err();
         assert!(err.to_string().contains("GNU sparse entry"), "{err}");
+    }
+
+    #[test]
+    fn read_archive_refuses_a_second_index_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("two.tar");
+        std::fs::write(
+            &path,
+            tar_of(&[("index.json", b"{}"), ("index.json", b"{\"a\":1}")]),
+        )
+        .unwrap();
+        let err = read_archive(&path).unwrap_err();
+        assert!(err.to_string().contains("second index.json"), "{err}");
+    }
+
+    #[test]
+    fn read_archive_refuses_index_json_and_its_dot_slash_twin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("twin.tar");
+        std::fs::write(
+            &path,
+            tar_of_raw_names(&[("index.json", b"{}"), ("./index.json", b"{}")]),
+        )
+        .unwrap();
+        let err = read_archive(&path).unwrap_err();
+        // The error quotes the name as stored, so the reader can find the entry.
+        assert!(
+            err.to_string().contains("second index.json (./index.json)"),
+            "{err}"
+        );
     }
 
     #[test]
