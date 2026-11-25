@@ -91,6 +91,12 @@ syft, grype and cosign each have a time limit: syft 15 minutes, grype 30 minutes
 and the limit. grype's limit leaves room for its first run, which downloads its vulnerability
 database.
 
+`--push` and `index` give up on a registry or token host that does not accept the connection
+within 30 seconds, and the error names the endpoint. The identity-token exchange also fails
+after 60 seconds of silence from the token host. Talking to the registry itself has no read
+limit, so a slow upload of a large layer is not cut off, and a registry that accepts the
+connection and then sends nothing still keeps the command waiting.
+
 The report names the loader the image carries, because the binary's `PT_INTERP` chooses that
 path and not scratchsmith. `--format json` carries it as `interpreter`, so a job can assert it
 without unpacking the image. An ELF that carries no `PT_INTERP` reports null, which is the
