@@ -303,6 +303,13 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path, applied: &mut Applied) -> Result<u
         {
             continue;
         }
+        replace_existing(
+            &dest_canon,
+            dest,
+            &path,
+            e.header().entry_type().is_dir(),
+            applied,
+        )?;
         // `unpack_in` returns Ok(false) when it refuses a path that escapes `dest`. Fail
         // loudly: a silently-dropped entry ships a rootfs that does not match the image.
         // The mask clears the bits on disk; remember where, so the report can say so.
@@ -425,6 +432,50 @@ fn apply_whiteout(
     } else {
         remove_at(&dir, OsStr::new(stripped), &shown_dir)?;
         forget_under(applied, &image.join(stripped), false);
+    }
+    Ok(())
+}
+
+// The OCI rule for an entry over an existing path: a directory over a directory keeps the
+// directory, and anything else replaces what is there. tar replaces only a regular file (a
+// hard link, a symlink over a directory, a type change all fail), so remove the rest here,
+// through the opened parent as a whiteout does, so no path is resolved twice.
+fn replace_existing(
+    dest_canon: &Path,
+    dest: &Path,
+    path: &Path,
+    entry_is_dir: bool,
+    applied: &mut Applied,
+) -> Result<()> {
+    use rustix::fs::{AtFlags, FileType};
+    let Some(name) = path.file_name() else {
+        return Ok(());
+    };
+    let parent = path.parent().unwrap_or(Path::new(""));
+    // `None` is a `..` or an absolute entry path, which `unpack_in` handles as before.
+    let Some(shown_dir) = safe_join(dest, parent) else {
+        return Ok(());
+    };
+    let Some((dir, image)) = open_dir_in_root(dest_canon, parent)? else {
+        return Ok(()); // nothing exists at that path yet
+    };
+    let stat = match rustix::fs::statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(stat) => stat,
+        Err(rustix::io::Errno::NOENT) => return Ok(()),
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!("stat {}", shown(shown_dir.join(name).display(), SHOWN_MAX))
+            })
+        }
+    };
+    let was_dir = FileType::from_raw_mode(stat.st_mode) == FileType::Directory;
+    if was_dir && entry_is_dir {
+        return Ok(());
+    }
+    remove_at(&dir, name, &shown_dir)?;
+    // The caller sets the path's own setid record next, so dropping it here costs nothing.
+    if was_dir {
+        forget_under(applied, &image.join(name), false);
     }
     Ok(())
 }
@@ -974,6 +1025,129 @@ mod tests {
         assert!(!dest.join("etc/.wh.gone").exists(), "marker not written");
     }
 
+    // Build a small uncompressed tar of (path, entry type, link target) entries.
+    fn tar_of_links(entries: &[(&str, tar::EntryType, &str)]) -> Vec<u8> {
+        let mut ar = tar::Builder::new(Vec::new());
+        for (name, kind, target) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(*kind);
+            header.set_size(0);
+            header.set_mode(0o777);
+            ar.append_link(&mut header, name, target).unwrap();
+        }
+        ar.into_inner().unwrap()
+    }
+
+    // A layer of the regular file `a` and the hard link `b` to it.
+    fn file_and_hard_link() -> Vec<u8> {
+        let mut ar = tar::Builder::new(Vec::new());
+        let mut file = tar::Header::new_gnu();
+        file.set_size(1);
+        file.set_mode(0o644);
+        ar.append_data(&mut file, "a", &b"x"[..]).unwrap();
+        let mut link = tar::Header::new_gnu();
+        link.set_entry_type(tar::EntryType::Link);
+        link.set_size(0);
+        link.set_mode(0o644);
+        ar.append_link(&mut link, "b", "a").unwrap();
+        ar.into_inner().unwrap()
+    }
+
+    #[test]
+    fn a_later_layer_rewrites_a_hard_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        apply_layer(&file_and_hard_link(), &dest, &mut Default::default()).unwrap();
+        apply_layer(&file_and_hard_link(), &dest, &mut Default::default()).unwrap();
+        assert!(dest.join("a").is_file() && dest.join("b").is_file());
+    }
+
+    #[test]
+    fn a_later_layer_turns_a_directory_into_a_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let first = tar_of(&[("usr/bin/x", b"x"), ("bin/old", b"o")]);
+        apply_layer(&first, &dest, &mut Default::default()).unwrap();
+        let second = tar_of_links(&[("bin", tar::EntryType::Symlink, "usr/bin")]);
+        apply_layer(&second, &dest, &mut Default::default()).unwrap();
+        let meta = std::fs::symlink_metadata(dest.join("bin")).unwrap();
+        assert!(meta.file_type().is_symlink());
+        assert!(!dest.join("bin/old").exists());
+        assert!(dest.join("bin/x").exists());
+    }
+
+    #[test]
+    fn a_later_layer_turns_a_directory_into_a_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        apply_layer(&tar_of(&[("d/f", b"f")]), &dest, &mut Default::default()).unwrap();
+        apply_layer(
+            &tar_of(&[("d", b"now a file")]),
+            &dest,
+            &mut Default::default(),
+        )
+        .unwrap();
+        assert!(std::fs::symlink_metadata(dest.join("d")).unwrap().is_file());
+    }
+
+    #[test]
+    fn a_later_layer_turns_a_file_into_a_directory() {
+        use tar::EntryType::{Directory, Regular};
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        apply_layer(&tar_of(&[("p", b"p")]), &dest, &mut Default::default()).unwrap();
+        let second = tar_with_modes(&[("p/", Directory, 0o755), ("p/q", Regular, 0o644)]);
+        apply_layer(&second, &dest, &mut Default::default()).unwrap();
+        assert!(dest.join("p/q").is_file());
+    }
+
+    #[test]
+    fn a_directory_over_a_directory_keeps_its_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        apply_layer(&tar_of(&[("d/keep", b"k")]), &dest, &mut Default::default()).unwrap();
+        let second = tar_with_modes(&[("d/", tar::EntryType::Directory, 0o750)]);
+        apply_layer(&second, &dest, &mut Default::default()).unwrap();
+        assert!(dest.join("d/keep").exists());
+        assert_eq!(mode_of(&dest.join("d")), 0o750);
+    }
+
+    #[test]
+    fn a_replaced_symlink_is_removed_and_not_followed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let victim = tmp.path().join("victim");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("keep"), b"k").unwrap();
+        std::os::unix::fs::symlink("../victim", dest.join("out")).unwrap();
+        apply_layer(&tar_of(&[("out", b"file")]), &dest, &mut Default::default()).unwrap();
+        assert!(std::fs::symlink_metadata(dest.join("out"))
+            .unwrap()
+            .is_file());
+        assert!(victim.join("keep").exists());
+    }
+
+    #[test]
+    fn a_replaced_setuid_directory_drops_the_records_below_it() {
+        use tar::EntryType::{Directory, Regular};
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let mut applied = Applied::default();
+        let first = tar_with_modes(&[("d/su", Regular, 0o4755), ("d/ro/", Directory, 0o500)]);
+        apply_layer(&first, &dest, &mut applied).unwrap();
+        assert!(!applied.dir_modes.is_empty());
+        apply_layer(&tar_of(&[("d", b"file")]), &dest, &mut applied).unwrap();
+        assert!(applied.setid.is_empty(), "{:?}", applied.setid);
+        assert!(applied.dir_modes.is_empty(), "{:?}", applied.dir_modes);
+    }
+
     #[test]
     fn bare_wh_marker_does_not_delete_its_directory() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1478,6 +1652,22 @@ mod tests {
         let report = run(&archive, &dest).unwrap();
         assert_eq!((report.layers, report.files), (1, 1));
         assert_eq!(std::fs::read(dest.join("a")).unwrap(), b"x");
+    }
+
+    #[test]
+    fn run_twice_into_one_directory_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layer = file_and_hard_link();
+        let manifest = serde_json::json!({
+            "layers": [{
+                "mediaType": "application/vnd.oci.image.layer.v1.tar",
+                "digest": format!("sha256:{}", hex(Sha256::digest(&layer))),
+            }],
+        });
+        let archive = archive_of(tmp.path(), &manifest, &[&layer]);
+        let dest = tmp.path().join("out");
+        run(&archive, &dest).unwrap();
+        assert_eq!(run(&archive, &dest).unwrap().files, 2);
     }
 
     // An archive of uncompressed layers, each with its media type.
