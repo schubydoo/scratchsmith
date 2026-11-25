@@ -424,7 +424,9 @@ scratchsmith unpack app.oci.tar ./rootfs   # apply the layers into ./rootfs
 
 `unpack` reads an OCI-layout archive (what `pack --oci-archive` writes, or a skopeo/buildah
 export), applies each layer in order, and honors whiteouts. Combine it with `diff` to
-compare two images: unpack both, then run `scratchsmith diff old new`.
+compare two images: unpack both, then run `scratchsmith diff old new`. When a later layer holds
+an entry for a path that exists, `unpack` replaces that path, as a container runtime does. A
+directory over a directory keeps its contents.
 
 `unpack` reads every gzip member of a layer, as Docker does. It refuses a layer that is cut
 short, has data after its end, or holds a sparse entry or a malformed PAX record, and exits `1`
