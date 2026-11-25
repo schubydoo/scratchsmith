@@ -466,8 +466,8 @@ prints a warning on standard error that names its digest, and its platform when 
 one.
 
 `unpack` reads every gzip member of a layer, as Docker does. It refuses a layer that is cut
-short, has data after its end, or holds a sparse entry or a malformed PAX record, and exits `1`
-before it writes any file from that layer. A layer may hold at most 2 GiB once decompressed, and
+short, has data after its end, or holds a sparse entry, an entry with a `..` part or a malformed
+PAX record, and exits `1` before that layer writes or deletes any file. A layer may hold at most 2 GiB once decompressed, and
 all layers together at most 16 GiB. A layer that the manifest lists twice counts twice.
 
 `unpack` clears the setuid and setgid bits on every file and directory it writes. An untrusted
