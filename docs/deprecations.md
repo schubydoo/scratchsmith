@@ -136,6 +136,19 @@ Now `unpack` refuses an image whose layers hold more than 16 GiB in all once dec
 exits `1`. A layer listed twice counts twice, and an uncompressed layer counts at its own size.
 The error names the limit. The layers before the one that crosses it are already applied.
 
+### A whiteout that climbs above the image root
+
+A whiteout marker is a layer entry named `.wh.<name>`, which deletes `<name>` from the layers
+below. Through 2.0.2, `unpack` skipped a marker whose path had a `..` part, and applied the rest
+of the layer. That missed a marker like `etc/../etc/.wh.keep`, which Docker cleans to
+`etc/.wh.keep` and honors, so the unpacked tree kept a file that the image deletes.
+
+Now `unpack` cleans the marker's path as Docker does, and deletes what it names. A rooted path
+stops at `/`, so `/../etc/.wh.keep` deletes `etc/keep`. A relative path whose `..` climbs
+above the root, such as `../.wh.x`, makes `unpack` refuse the layer and exit `1`. It refuses
+the layer before it writes or deletes any file for it. Docker refuses that marker too, so no
+working image has one.
+
 ## Tolerances ending in 2.0
 
 No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list

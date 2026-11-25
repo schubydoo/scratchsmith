@@ -398,16 +398,18 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path, applied: &mut Applied) -> Result<u
     Ok(count)
 }
 
-// A whiteout marker's path, cleaned inside the image root as Docker cleans it: a leading `/`
-// and `.` parts drop, and `..` takes back the part before it, so `etc/../etc/.wh.keep` deletes
-// `etc/keep` (TASK-250). A `..` above the root is refused, not clamped to it, since no honest
-// layer writes one.
+// A whiteout marker's path, cleaned inside the image root as Docker cleans it (Go's
+// `filepath.Clean`): `.` parts drop, and `..` takes back the part before it, so
+// `etc/../etc/.wh.keep` deletes `etc/keep` (TASK-250). A rooted path cannot climb above `/`,
+// so `/../etc/.wh.keep` is `/etc/.wh.keep`, and the leading `/` then drops as an entry's does.
+// A relative path whose `..` climbs above the root is refused, as Docker refuses it.
 fn clean_marker_path(path: &Path) -> Result<PathBuf> {
+    let rooted = path.has_root();
     let mut clean = PathBuf::new();
     for part in path.components() {
         match part {
             Component::Normal(n) => clean.push(n),
-            Component::ParentDir if !clean.pop() => bail!(
+            Component::ParentDir if !clean.pop() && !rooted => bail!(
                 "refusing a whiteout that leaves the image root: {}",
                 shown(path.display(), SHOWN_MAX)
             ),
@@ -1347,13 +1349,23 @@ mod tests {
         std::fs::create_dir(&dest).unwrap();
         let mut applied = Applied::default();
         apply_layer(
-            &tar_of_raw_names(&[("etc/keep", b"k"), ("etc/other", b"o"), ("top", b"t")]),
+            &tar_of_raw_names(&[
+                ("etc/keep", b"k"),
+                ("etc/gone", b"g"),
+                ("etc/other", b"o"),
+                ("top", b"t"),
+            ]),
             &dest,
             &mut applied,
         )
         .unwrap();
         apply_layer(
-            &tar_of_raw_names(&[("etc/../etc/.wh.keep", b""), ("/a/b/../../.wh.top", b"")]),
+            &tar_of_raw_names(&[
+                ("etc/../etc/.wh.keep", b""),
+                ("/a/b/../../.wh.top", b""),
+                // Rooted, so the `..` stops at `/`, as Go's `filepath.Clean` stops it.
+                ("/../etc/.wh.gone", b""),
+            ]),
             &dest,
             &mut applied,
         )
@@ -1361,6 +1373,10 @@ mod tests {
         assert!(
             !dest.join("etc/keep").exists(),
             "the cleaned marker deletes"
+        );
+        assert!(
+            !dest.join("etc/gone").exists(),
+            "a rooted `..` stops at the root"
         );
         assert!(
             !dest.join("top").exists(),
@@ -1381,7 +1397,7 @@ mod tests {
             &mut applied,
         )
         .unwrap();
-        for marker in ["../.wh.x", "etc/../../.wh.keep", "/../etc/.wh.keep"] {
+        for marker in ["../.wh.x", "etc/../../.wh.keep", "./../etc/.wh.keep"] {
             // The earlier marker in the same layer is not applied either.
             let err = apply_layer(
                 &tar_of_raw_names(&[("etc/.wh.gone", b""), (marker, b"")]),
