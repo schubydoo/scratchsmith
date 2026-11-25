@@ -496,7 +496,8 @@ fn hard_link_in_root<R: Read>(
         );
     };
     let shown_src = || shown(src.display(), SHOWN_MAX);
-    // tar refused a target outside `dest`. A `..` that pops past the image root still fails.
+    // tar refused a target outside `dest`. A `..` that pops past the image root still fails,
+    // in the link name and in a symlink on the way, as it does for an entry.
     let mut rel = PathBuf::new();
     for part in src.components() {
         match part {
@@ -510,8 +511,8 @@ fn hard_link_in_root<R: Read>(
     let Some(src_name) = rel.file_name() else {
         bail!("refusing a hard link to {}, the target itself", shown_src());
     };
-    let Some((src_dir, _)) = open_dir_in_root(dest_canon, rel.parent().unwrap_or(Path::new("")))?
-    else {
+    let src_parent = rel.parent().unwrap_or(Path::new(""));
+    let Some((src_dir, _)) = walk_in_root(dest_canon, src_parent, Walk::Strict)? else {
         bail!("hard link target {} does not exist", shown_src());
     };
     rustix::fs::linkat(&src_dir, src_name, parent, name, AtFlags::empty()).with_context(|| {
@@ -624,14 +625,14 @@ fn safe_join(dest: &Path, rel: &Path) -> Option<PathBuf> {
 // search permission, as `canonicalize` did. Returns the directory and its path in the image;
 // `None` means absent, not a directory, or a symlink loop.
 fn open_dir_in_root(root: &Path, rel: &Path) -> Result<Option<(OwnedFd, PathBuf)>> {
-    walk_in_root(root, rel, false)
+    walk_in_root(root, rel, Walk::Lookup)
 }
 
 // The same walk for extraction: a missing directory is made, as tar made it, and what the
 // whiteout walk answers with `None` fails instead. A symlink whose `..` would climb above the
 // image root fails too, so a link that leaves the image is refused as tar refused it.
 fn make_dir_in_root(root: &Path, rel: &Path) -> Result<(OwnedFd, PathBuf)> {
-    walk_in_root(root, rel, true)?.with_context(|| {
+    walk_in_root(root, rel, Walk::Make)?.with_context(|| {
         format!(
             "{} is not a directory in the image",
             shown(rel.display(), SHOWN_MAX)
@@ -639,7 +640,20 @@ fn make_dir_in_root(root: &Path, rel: &Path) -> Result<(OwnedFd, PathBuf)> {
     })
 }
 
-fn walk_in_root(root: &Path, rel: &Path, make: bool) -> Result<Option<(OwnedFd, PathBuf)>> {
+// How `walk_in_root` treats what it meets. `Lookup` answers `None` for an absent part, a part
+// that is not a directory or a symlink loop, and keeps a `..` above the root at the root, as a
+// whiteout is read. `Strict` refuses that `..` and a loop instead, for an extracted path.
+// `Make` is `Strict` that also makes a missing directory.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Walk {
+    Lookup,
+    Strict,
+    Make,
+}
+
+fn walk_in_root(root: &Path, rel: &Path, mode: Walk) -> Result<Option<(OwnedFd, PathBuf)>> {
+    let make = mode == Walk::Make;
+    let strict = mode != Walk::Lookup;
     use rustix::fs::{FileType, Mode, OFlags};
     use rustix::io::Errno;
     // The loader's limit on symlinks in one path (MAXSYMLINKS).
@@ -669,7 +683,7 @@ fn walk_in_root(root: &Path, rel: &Path, make: bool) -> Result<Option<(OwnedFd, 
             continue;
         }
         if name == ".." {
-            if chain.pop().is_none() && make {
+            if chain.pop().is_none() && strict {
                 bail!(
                     "refusing to extract through a symlink that leaves the target: {}",
                     shown(rel.display(), SHOWN_MAX)
@@ -696,6 +710,12 @@ fn walk_in_root(root: &Path, rel: &Path, make: bool) -> Result<Option<(OwnedFd, 
             FileType::Directory => chain.push((fd, name)),
             FileType::Symlink => {
                 links += 1;
+                if links > MAX_LINKS && strict {
+                    bail!(
+                        "too many levels of symlinks in the image resolving {}",
+                        shown(rel.display(), SHOWN_MAX)
+                    );
+                }
                 if links > MAX_LINKS {
                     return Ok(None);
                 }
@@ -1294,6 +1314,37 @@ mod tests {
             std::fs::metadata(dest.join("b")).unwrap(),
         );
         assert_eq!(a.ino(), b.ino());
+    }
+
+    #[test]
+    fn a_hard_link_through_a_symlink_above_the_root_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(dest.join("a")).unwrap();
+        std::fs::write(dest.join("secret"), b"s").unwrap();
+        std::os::unix::fs::symlink("../..", dest.join("a/up")).unwrap();
+        let link = tar_of_links(&[("b", tar::EntryType::Link, "a/up/secret")]);
+        let err = apply_layer(&link, &dest, &mut Default::default()).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("symlink that leaves the target"),
+            "{err:#}"
+        );
+        assert!(!dest.join("b").exists());
+    }
+
+    #[test]
+    fn a_symlink_loop_on_the_way_is_named_as_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::os::unix::fs::symlink("l2", dest.join("l1")).unwrap();
+        std::os::unix::fs::symlink("l1", dest.join("l2")).unwrap();
+        let err =
+            apply_layer(&tar_of(&[("l1/x", b"x")]), &dest, &mut Default::default()).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("too many levels of symlinks"),
+            "{err:#}"
+        );
     }
 
     #[test]
