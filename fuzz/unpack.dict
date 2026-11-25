@@ -22,3 +22,4 @@
 "/../"
 # The `./` form of index.json, which with a plain index.json makes two, which unpack refuses.
 "./index.json"
+"././index.json"

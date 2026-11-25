@@ -161,8 +161,9 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
         let mut e = entry.map_err(escape_tar_err)?;
         let stored = e.path()?.to_string_lossy().into_owned();
         // `tar -cf img.tar .` inside a layout directory stores `./index.json`; the name is the
-        // same file, so match it without the prefix. Errors still quote the stored name.
-        let path = stored.strip_prefix("./").unwrap_or(&stored);
+        // same file, so match it without the prefix. Every leading `./` drops, so `././index.json`
+        // cannot hide a second index from the check below. Errors still quote the stored name.
+        let path = strip_dot_slashes(&stored);
         // The `blobs/` and `blobs/sha256/` directory entries carry a trailing slash and
         // an empty body (a skopeo/buildah export tars the layout directory), so only
         // digest-verify real blob files — not the directory entry itself.
@@ -205,6 +206,14 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
     )
     .context("parsing index.json")?;
     Ok((blobs, index))
+}
+
+// A name without its leading `./` parts, and the extra `/` after each, as a path clean reads it.
+fn strip_dot_slashes(mut name: &str) -> &str {
+    while let Some(rest) = name.strip_prefix("./") {
+        name = rest.trim_start_matches('/');
+    }
+    name
 }
 
 // The entries read can never hold more bytes than the archive file itself. A pipe reports no
@@ -2137,6 +2146,19 @@ mod tests {
             err.to_string().contains("second index.json (./index.json)"),
             "{err}"
         );
+        // More `./` parts name the same file too, and cannot skip the check.
+        for twin in ["././index.json", ".//index.json"] {
+            std::fs::write(
+                &path,
+                tar_of_raw_names(&[("index.json", b"{}"), (twin, b"{}")]),
+            )
+            .unwrap();
+            let err = read_archive(&path).unwrap_err();
+            assert!(
+                err.to_string().contains("second index.json"),
+                "{twin}: {err}"
+            );
+        }
     }
 
     #[test]
