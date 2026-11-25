@@ -397,6 +397,43 @@ fn dispatch(cli: Cli) -> Result<()> {
                 ));
             };
 
+            // An SBOM path or format with no --sbom is dropped. Say so in the report rather than
+            // refuse: a refusal would tighten validation, and a config can set them once for
+            // packs that pass --sbom only some of the time.
+            let mut notes = Vec::new();
+            if !(sbom || file.sbom) {
+                let in_config = config
+                    .as_ref()
+                    .map(|p| format!(" in {}", p.display()))
+                    .unwrap_or_default();
+                for (cli_set, file_set, flag, key) in [
+                    (
+                        sbom_file.is_some(),
+                        file.sbom_file.is_some(),
+                        "--sbom-file",
+                        "sbom-file",
+                    ),
+                    (
+                        sbom_format.is_some(),
+                        file.sbom_format.is_some(),
+                        "--sbom-format",
+                        "sbom-format",
+                    ),
+                ] {
+                    let what = if cli_set {
+                        flag.to_string()
+                    } else if file_set {
+                        format!("`{key}`{in_config}")
+                    } else {
+                        continue;
+                    };
+                    notes.push(format!(
+                        "{what} is set, but --sbom is not on, so no SBOM is written and it does \
+                         nothing. Add --sbom, or remove {what}"
+                    ));
+                }
+            }
+
             let opts = crate::pack::PackOptions {
                 smoke: smoke || file.smoke,
                 strip: strip || file.strip, // either source enabling an option is enough
@@ -472,6 +509,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                     .map(|s| crate::report::parse_size(&s).map_err(usage))
                     .transpose()?,
                 runtime: runtime.or(file.runtime).unwrap_or_default(),
+                notes,
                 packages: {
                     let selection =
                         crate::packages::PackagesSelection::from_outputs(if packages.is_empty() {

@@ -169,7 +169,7 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
     // Reject musl up front rather than staging a subtly broken image.
     resolver::ensure_glibc(&info)?;
 
-    let mut warnings = Vec::new();
+    let mut warnings = opts.notes.clone();
     // dlopen'd plugins are invisible to the static graph; warn and point at the fix.
     if info.uses_dlopen {
         warnings.push(
@@ -528,6 +528,9 @@ pub struct PackOptions {
     pub runtime: crate::image::Runtime,
     /// Where the owning-package data for the bundled files goes (`--packages`).
     pub packages: PackagesSelection,
+    /// Warnings the caller found before the pack, such as a flag that has no effect. They lead
+    /// the report's warnings.
+    pub notes: Vec<String>,
 }
 
 /// Where a pack delivers its result. Every sink shares the resolve → stage pipeline and

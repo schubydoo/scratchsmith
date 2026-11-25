@@ -18,8 +18,8 @@ file**.
 | `upx` | `--upx` | Compress the packed binary with UPX (it self-decompresses at runtime). |
 | `smoke` | `--smoke` | Run the built image once. If the binary cannot start, the pack fails. |
 | `sbom` | `--sbom` | Write an SBOM of the packed rootfs (requires `syft`). |
-| `sbom-file` | `--sbom-file` | SBOM output path (default: `sbom.json`). |
-| `sbom-format` | `--sbom-format` | SBOM format: `cyclonedx-json` (default) or `spdx-json`. |
+| `sbom-file` | `--sbom-file` | SBOM output path (default: `sbom.json`). Without `sbom` it is ignored, and the report warns. |
+| `sbom-format` | `--sbom-format` | SBOM format: `cyclonedx-json` (default) or `spdx-json`. Without `sbom` it is ignored, and the report warns. |
 | `scan` | `--scan` | Vulnerability-scan the packed rootfs with grype. When `--sbom` is set, it reuses that SBOM. Otherwise it scans the rootfs. |
 | `scan-fail-on` | `--scan-fail-on` | Fail the pack on a grype finding at or above this severity: `negligible`/`low`/`medium`/`high`/`critical` (implies `--scan`). `negligible` blocks everything, including findings grype cannot rank. Stricter levels ignore unrankable findings. |
 | `ca-certs` | `--ca-certs` | Add the TLS CA bundle (`/etc/ssl/certs/ca-certificates.crt`). |
