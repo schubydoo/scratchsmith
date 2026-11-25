@@ -10,6 +10,8 @@ only in a lockfile waits for the weekly lockFileMaintenance.
 
 `--recursive` is required: without it, a fixed version that needs a newer locked dependency
 is silently not selected, and cargo still exits 0 (url 2.5.9 and form_urlencoded 1.2.3).
+An update can so move a later crate on the list too, so a spec that is no longer locked is
+skipped rather than updated.
 
 `cargo update -p` stays inside the semver ranges that Cargo.toml allows, so it never
 edits a manifest. Every advisory in the second audit is reported as remaining, never
@@ -57,6 +59,12 @@ def audit(ws: pathlib.Path) -> list[dict]:
     die(f"cargo audit on {ws / 'Cargo.lock'} gave no JSON:\n{proc.stderr}")
 
 
+def locked(ws: pathlib.Path) -> set[tuple[str, str]]:
+    """The (name, version) pairs that a workspace's lockfile holds now."""
+    lock = tomllib.loads((ws / "Cargo.lock").read_text())
+    return {(p["name"], p["version"]) for p in lock.get("package", [])}
+
+
 def new_versions(ws: pathlib.Path, name: str, old: str) -> list[str]:
     """Locked versions of `name` other than the vulnerable one, i.e. what it moved to."""
     lock = tomllib.loads((ws / "Cargo.lock").read_text())
@@ -92,6 +100,11 @@ def main() -> None:
             {(v["package"]["name"], v["package"]["version"]) for v in before}
         ):
             spec = f"{pkg[0]}@{pkg[1]}"
+            # A recursive update of an earlier crate can move this one too. cargo then finds
+            # no package to match the spec and fails, though nothing is wrong, so skip it.
+            if pkg not in locked(ws):
+                print(f"{spec} in {ws} already moved with an earlier update")
+                continue
             upd = subprocess.run(
                 [
                     "cargo",
