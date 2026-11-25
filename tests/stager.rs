@@ -4,8 +4,8 @@
 
 use scratchsmith::resolver::{resolve, Sysroot};
 use scratchsmith::stager::{
-    stage, stage_default_includes, stage_with_includes, strip_and_measure, NssSelection,
-    SymlinkMode,
+    stage, stage_default_includes, stage_with_includes, strip_and_measure, strip_and_measure_with,
+    NssSelection, SymlinkMode,
 };
 use std::path::Path;
 
@@ -128,6 +128,41 @@ fn strip_reduces_payload_size() {
         "strip should shrink the payload: {} -> {}",
         report.total_before,
         report.total_after
+    );
+}
+
+#[test]
+fn strip_and_the_size_report_cover_the_nss_modules() {
+    // TASK-243: the modules ship in the image, so they are stripped and counted too.
+    if !strip_available() {
+        skip_required("no strip");
+        return;
+    }
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let resolution = resolve(bin, &Sysroot::new("/")).expect("resolution");
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = tmp.path().join("rootfs");
+    let (tree, includes) = stage_with_includes(
+        bin,
+        &resolution,
+        &dest,
+        SymlinkMode::CopyAll,
+        &NssSelection::default(),
+    )
+    .expect("stage");
+    let report = strip_and_measure_with(&dest, &tree, &resolution, &includes.staged, true, false)
+        .expect("strip+measure");
+    let module = report
+        .entries
+        .iter()
+        .find(|e| e.path.ends_with("libnss_dns.so.2"))
+        .unwrap_or_else(|| panic!("no NSS module in the report: {:?}", report.entries));
+    assert!(module.after <= module.before, "{module:?}");
+    // nsswitch.conf and passwd are not shared objects, so they are neither stripped nor listed.
+    assert!(
+        !report.entries.iter().any(|e| e.path.ends_with("passwd")),
+        "{:?}",
+        report.entries
     );
 }
 
