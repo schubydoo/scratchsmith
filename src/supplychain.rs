@@ -8,7 +8,7 @@
 use anyhow::{bail, Context, Result};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// SBOM output format. CycloneDX is the default (better security-tool support);
 /// SPDX is offered for license/compliance consumers.
@@ -51,6 +51,7 @@ pub fn generate_sbom(rootfs: &Path, format: SbomFormat, out: &Path) -> Result<()
         "syft",
         &syft_args(rootfs, format, out),
         "install syft: https://github.com/anchore/syft",
+        Io::Captured,
     )
 }
 
@@ -67,7 +68,7 @@ const COSIGN_HINT: &str = "install cosign: https://github.com/sigstore/cosign";
 /// Check that cosign runs. `--sign` calls it before the push, since a signing that fails
 /// after the push leaves a public image that is not signed.
 pub fn check_cosign() -> Result<()> {
-    run_tool("cosign", &["version".into()], COSIGN_HINT)
+    run_tool("cosign", &["version".into()], COSIGN_HINT, Io::Captured)
         .context("--sign needs cosign, so nothing was pushed")
 }
 
@@ -82,7 +83,12 @@ fn prefixed(prefix: &str, path: &Path) -> OsString {
 /// Keyless-sign an image (by registry reference) with cosign. Signs a pushed image by
 /// digest, so `pack --push --sign` drives it.
 pub fn cosign_sign(image_ref: &str) -> Result<()> {
-    run_tool("cosign", &cosign_sign_args(image_ref), COSIGN_HINT)
+    run_tool(
+        "cosign",
+        &cosign_sign_args(image_ref),
+        COSIGN_HINT,
+        Io::Terminal,
+    )
 }
 
 fn cosign_sign_args(image_ref: &str) -> Vec<OsString> {
@@ -95,6 +101,7 @@ pub fn cosign_attest(image_ref: &str, sbom: &Path, predicate_type: &str) -> Resu
         "cosign",
         &cosign_attest_args(image_ref, sbom, predicate_type),
         COSIGN_HINT,
+        Io::Terminal,
     )
 }
 
@@ -185,6 +192,7 @@ pub fn run_grype(source: &ScanSource) -> Result<ScanSummary> {
         "grype",
         &grype_args(source),
         "install grype: https://github.com/anchore/grype",
+        Io::Captured,
     )?;
     parse_grype(&out)
 }
@@ -227,15 +235,31 @@ fn parse_grype(json: &[u8]) -> Result<ScanSummary> {
     Ok(s)
 }
 
+// Where a tool's stdin and stderr go. stdout is always captured, so `--format json` on
+// scratchsmith's stdout stays parseable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Io {
+    // stdin closed, stderr captured and quoted in the error on a failure.
+    Captured,
+    // stdin and stderr are scratchsmith's own. Keyless cosign prints a login URL on stderr and
+    // can read a code from stdin, so outside CI the user has to see it and answer it.
+    Terminal,
+}
+
 // Run an external tool, turning a not-found into a clear install hint and a non-zero
 // exit into a reported failure — never a silent skip.
-fn run_tool(tool: &str, args: &[OsString], hint: &str) -> Result<()> {
-    run_tool_capture(tool, args, hint).map(|_| ())
+fn run_tool(tool: &str, args: &[OsString], hint: &str, io: Io) -> Result<()> {
+    run_tool_capture(tool, args, hint, io).map(|_| ())
 }
 
 // As `run_tool`, but returns captured stdout (for tools whose output we parse).
-fn run_tool_capture(tool: &str, args: &[OsString], hint: &str) -> Result<Vec<u8>> {
-    let output = match Command::new(tool).args(args).output() {
+fn run_tool_capture(tool: &str, args: &[OsString], hint: &str, io: Io) -> Result<Vec<u8>> {
+    let mut command = Command::new(tool);
+    command.args(args);
+    if io == Io::Terminal {
+        command.stdin(Stdio::inherit()).stderr(Stdio::inherit());
+    }
+    let output = match command.output() {
         Ok(o) => o,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             bail!("{tool} not found; {hint}")
@@ -243,10 +267,13 @@ fn run_tool_capture(tool: &str, args: &[OsString], hint: &str) -> Result<Vec<u8>
         Err(e) => return Err(e).with_context(|| format!("running {tool}")),
     };
     if !output.status.success() {
-        bail!(
-            "{tool} failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        match io {
+            Io::Captured => bail!(
+                "{tool} failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+            Io::Terminal => bail!("{tool} failed ({}); its messages are above", output.status),
+        }
     }
     Ok(output.stdout)
 }
@@ -306,6 +333,7 @@ mod tests {
             "scratchsmith-no-such-tool",
             &["x".into()],
             "install the thing",
+            Io::Captured,
         )
         .unwrap_err();
         assert!(err.to_string().contains("not found"));
@@ -374,13 +402,49 @@ mod tests {
 
     #[test]
     fn run_tool_capture_returns_stdout_on_success() {
-        let out = run_tool_capture("echo", &["scratchsmith".into()], "hint").unwrap();
+        let out = run_tool_capture("echo", &["scratchsmith".into()], "hint", Io::Captured).unwrap();
         assert_eq!(String::from_utf8_lossy(&out).trim(), "scratchsmith");
     }
 
     #[test]
     fn run_tool_capture_reports_a_nonzero_exit() {
-        let err = run_tool_capture("false", &[], "hint").unwrap_err();
+        let err = run_tool_capture("false", &[], "hint", Io::Captured).unwrap_err();
         assert!(err.to_string().contains("false failed"));
+    }
+
+    // Where the child's fd `n` points, read by the child itself, as /proc shows it.
+    fn child_fd(n: u8, io: Io) -> String {
+        let script = format!("readlink /proc/self/fd/{n}");
+        let out = run_tool_capture("sh", &["-c".into(), script.into()], "hint", io).unwrap();
+        String::from_utf8(out).unwrap().trim().to_string()
+    }
+
+    fn own_fd(n: u8) -> String {
+        std::fs::read_link(format!("/proc/self/fd/{n}"))
+            .unwrap()
+            .display()
+            .to_string()
+    }
+
+    #[test]
+    fn a_terminal_tool_shares_stdin_and_stderr_and_a_captured_one_does_not() {
+        // TASK-233. cosign's login URL and code prompt have to reach the user.
+        assert_eq!(child_fd(0, Io::Terminal), own_fd(0));
+        assert_eq!(child_fd(2, Io::Terminal), own_fd(2));
+        assert_eq!(child_fd(0, Io::Captured), "/dev/null");
+        assert_ne!(child_fd(2, Io::Captured), own_fd(2));
+        // stdout is captured either way, so the JSON report on stdout stays clean.
+        assert_ne!(child_fd(1, Io::Terminal), own_fd(1));
+    }
+
+    #[test]
+    fn a_terminal_tool_failure_points_to_its_own_messages() {
+        let err = run_tool_capture("sh", &["-c".into(), "exit 3".into()], "hint", Io::Terminal)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.starts_with("sh failed (exit status: 3); its messages are above"),
+            "{err}"
+        );
     }
 }
