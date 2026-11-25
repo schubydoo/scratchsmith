@@ -532,7 +532,9 @@ impl SmokeOutcome {
 // The runtime's own line for an entrypoint it could not exec, such as runc's
 // `exec /app: no such file or directory` or crun's `exec container process `/app`: No such
 // file or directory`. A missing PT_INTERP fails this way. The phrase alone is not enough: an
-// app that fails to open one of its own files prints it too.
+// app that fails to open one of its own files prints it too. The mid-line `exec ` form is
+// needed for podman with runc (`... container process: exec /app: ...`), so an app's own
+// `myapp: exec /helper: ...` still counts. A `/` before it, as in Go's `fork/exec`, does not.
 fn exec_not_found(line: &str) -> bool {
     let line = line.to_ascii_lowercase();
     line.find("no such file or directory").is_some_and(|at| {
@@ -1063,9 +1065,13 @@ mod tests {
             "open /data/config.yml: no such file or directory",
             "error: /usr/libexec/helper: no such file or directory",
             "executor: cache dir: No such file or directory",
+            "fork/exec /usr/bin/helper: no such file or directory",
         ] {
             assert!(!outcome(Some(1), line).loader_failed(), "{line}");
         }
+        // A known limit: an app's own failed exec of a helper reads like the runtime's line.
+        let line = "myapp: exec /helper: No such file or directory";
+        assert!(outcome(Some(1), line).loader_failed(), "{line}");
     }
 
     #[test]

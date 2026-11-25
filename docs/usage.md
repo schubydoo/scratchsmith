@@ -77,7 +77,8 @@ scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate f
 
 `--smoke` runs the image once and fails the pack only when the binary could not start: a
 missing library or loader, or an entrypoint the runtime could not exec. An app that starts and
-exits with an error passes. A binary still running after 15 seconds counts as started, and its
+exits with an error passes, unless the code is 126 or 127, which shells use for a command
+that could not run. A binary still running after 15 seconds counts as started, and its
 container is removed.
 
 The report names the loader the image carries, because the binary's `PT_INTERP` chooses that
