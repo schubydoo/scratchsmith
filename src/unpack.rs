@@ -1303,9 +1303,10 @@ mod tests {
     }
 
     #[test]
-    fn a_step_up_that_lands_elsewhere_stops_the_walk() {
-        // The step back up through `..` checks it reached the directory it left, so a tree
-        // moved while unpack runs stops it instead of acting on another place.
+    fn check_id_refuses_a_different_directory() {
+        // The check that each step back up through `..` runs, in `walk_in_root` and in
+        // `clear_dir`. Moving a directory in the middle of a walk would need a race, so this
+        // tests the check itself and not the call sites.
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("a")).unwrap();
         std::fs::create_dir(tmp.path().join("b")).unwrap();
