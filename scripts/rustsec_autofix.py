@@ -10,7 +10,7 @@ only in a lockfile waits for the weekly lockFileMaintenance.
 
 `--recursive` is required: without it, a fixed version that needs a newer locked dependency
 is silently not selected, and cargo still exits 0 (url 2.5.9 and form_urlencoded 1.2.3).
-An update can so move a later crate on the list too, so a spec that is no longer locked is
+An update can also move a later crate on the list, so a spec that is no longer locked is
 skipped rather than updated.
 
 `cargo update -p` stays inside the semver ranges that Cargo.toml allows, so it never
