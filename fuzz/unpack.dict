@@ -17,3 +17,6 @@
 ".wh..wh..opq"
 # A PAX record key that marks a sparse layer entry, which unpack refuses.
 "GNU.sparse."
+# A marker path with a `..` part, which unpack cleans inside the root or refuses.
+"../.wh."
+"/../"
