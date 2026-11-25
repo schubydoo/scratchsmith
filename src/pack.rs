@@ -1008,10 +1008,42 @@ fn init_entrypoint(tini: &str, base: Vec<String>) -> Vec<String> {
 fn image_tag(binary: &Path) -> String {
     let name = binary
         .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("image")
-        .to_lowercase();
-    format!("scratchsmith/{name}:packed")
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    format!("scratchsmith/{}:packed", path_component(&name))
+}
+
+// `name` as one reference path component, `[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*`. Each other
+// character becomes `-`, a run of separators the grammar does not allow becomes one `-`, and a
+// leading or trailing separator is dropped. A name that is already valid is kept as it is.
+fn path_component(name: &str) -> String {
+    let mapped: String = name
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | '0'..='9' | '.' | '_' | '-' => c,
+            _ => '-',
+        })
+        .collect();
+    let mut out = String::new();
+    let mut sep = String::new();
+    for c in mapped.chars() {
+        if c.is_ascii_alphanumeric() {
+            if !out.is_empty() && !sep.is_empty() {
+                let allowed =
+                    matches!(sep.as_str(), "." | "_" | "__") || sep.bytes().all(|b| b == b'-');
+                out.push_str(if allowed { &sep } else { "-" });
+            }
+            sep.clear();
+            out.push(c);
+        } else {
+            sep.push(c);
+        }
+    }
+    if out.is_empty() {
+        "image".into()
+    } else {
+        out
+    }
 }
 
 #[cfg(test)]
@@ -1217,6 +1249,45 @@ mod tests {
             image_tag(Path::new("/usr/bin/MyApp")),
             "scratchsmith/myapp:packed"
         );
+    }
+
+    #[test]
+    fn the_default_tag_is_a_valid_reference_for_any_name() {
+        // TASK-210. Each of these gave an invalid reference before.
+        for (name, want) in [
+            ("c++filt", "c--filt"),
+            ("my app", "my-app"),
+            (".hidden", "hidden"),
+            ("naïve", "na-ve"),
+            ("Ünïcode-tool", "n-code-tool"),
+            ("a._b", "a-b"),
+            ("a___b", "a-b"),
+            ("+++", "image"),
+            ("x86_64-linux-gnu-g++", "x86_64-linux-gnu-g"),
+        ] {
+            let tag = image_tag(&Path::new("/usr/bin").join(name));
+            assert_eq!(tag, format!("scratchsmith/{want}:packed"), "{name}");
+            tag.parse::<oci_client::Reference>()
+                .unwrap_or_else(|e| panic!("{name}: {tag}: {e}"));
+        }
+    }
+
+    #[test]
+    fn a_tag_that_is_valid_today_is_unchanged() {
+        for name in [
+            "myapp",
+            "my-app",
+            "my--app",
+            "my_app",
+            "my__app",
+            "ld.so",
+            "python3.12",
+        ] {
+            assert_eq!(
+                image_tag(&Path::new("/usr/bin").join(name)),
+                format!("scratchsmith/{name}:packed")
+            );
+        }
     }
 
     #[test]
