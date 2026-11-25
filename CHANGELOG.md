@@ -5,6 +5,100 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 2.0.2 (2026-11-25)
+
+### Fixes
+
+#### The image's ld.so.cache lists the NSS modules ([#538](https://github.com/schubydoo/scratchsmith/pull/538))
+
+`pack` built the image's `ld.so.cache` before it staged the NSS modules, so the cache did not list them. glibc loads those modules by name, so a glibc that the binary reaches only through its RUNPATH could not find them in the image. The cache is now built after every library and NSS module is staged.
+
+#### `--sign` shows cosign's keyless login prompt ([#554](https://github.com/schubydoo/scratchsmith/pull/554))
+
+`pack --push --sign` and `index --sign` ran cosign with standard input closed and standard error captured. Outside CI, keyless signing prints a login URL on standard error and can read a code from standard input, so the prompt never showed and the run waited or failed. cosign now signs and attests with the terminal's standard input and standard error. Its standard output stays captured, so `--format json` is unchanged.
+
+#### The loader is staged once on merged-/usr hosts ([#558](https://github.com/schubydoo/scratchsmith/pull/558))
+
+On a merged-/usr host such as Debian or Ubuntu, the image held two copies of the dynamic loader: one at its `PT_INTERP` path (`/lib64/ld-linux-x86-64.so.2`) and one at its real path (`/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2`). The second path is now a relative symlink to the first, which leaves one copy of the loader (about 230 KiB unpacked) out of the image. The payload report lists the loader once.
+
+#### A library that two objects need now resolves like ld.so ([#530](https://github.com/schubydoo/scratchsmith/pull/530))
+
+`pack` and `graph` failed with "unresolved dependencies" when a library was needed by the program and by another library, and only the program had a RUNPATH for it. The resolver now uses a library that is already loaded under that name, as the loader does. With a custom `PT_INTERP`, libc's dependency on the loader now resolves to that loader, so the image no longer gets a second, host copy of it.
+
+#### $ORIGIN of a library found through a symlink names the symlink's directory ([#536](https://github.com/schubydoo/scratchsmith/pull/536))
+
+When a search found a library through a symlink, the resolver expanded that library's `$ORIGIN` from the symlink's target, so `pack` and `graph` could report a dependency missing that the loader finds. It now expands `$ORIGIN` to the directory that holds the symlink, as `ld.so` does. The image still ships the real file, once.
+
+#### `--push` and `index` stop waiting on a registry that never accepts the connection ([#556](https://github.com/schubydoo/scratchsmith/pull/556))
+
+The registry clients had no connect timeout, so a registry or token host that never answered blocked `pack --push` and `index` with no output. A connect now fails after 30 seconds with an error that names the endpoint. The identity-token exchange also fails when the token host goes quiet for 60 seconds. The registry client gets no read timeout, so a slow upload of a large layer is not cut off, and a registry that accepts the connection and then sends nothing still keeps the command waiting.
+
+#### The root-user warning is a report warning ([#544](https://github.com/schubydoo/scratchsmith/pull/544))
+
+The warning for a root `--user` (`0`, `0:0` or `root`) was printed to stderr only, so a gate on the JSON report's `warnings` array missed it. It is now one of the report's warnings, and the text report still prints it.
+
+#### --sign checks cosign before the push ([#535](https://github.com/schubydoo/scratchsmith/pull/535))
+
+`pack --push --sign` and `index --sign` now check that cosign runs before they push anything, so a missing cosign no longer leaves a public image that is not signed. When the registry's answer names no digest, `--sign` now signs the digest of the manifest that scratchsmith sent, where it used to refuse. A digest that the registry names and that differs is still refused. If signing fails after the push, the error now says that the image was pushed but is not signed. If only the SBOM attestation fails, it says the image was signed but not attested.
+
+#### The resolver skips a library of another ELF class or machine ([#551](https://github.com/schubydoo/scratchsmith/pull/551))
+
+With RPATH `lib:lib64` and 32-bit copies in `lib`, the resolver staged the 32-bit library, and the image exited 127 while the pack exited 0. Like `ld.so`, it now skips a file of another class or machine than the binary and keeps searching. When every copy is of another arch, or the binary names the file by path, the file still stages as before, and a warning on stderr names it and says the image cannot load it. The exit code does not change.
+
+#### --smoke reports only real loader failures, and ends at its limit ([#537](https://github.com/schubydoo/scratchsmith/pull/537))
+
+`--smoke` failed the pack for any app whose error output held "no such file or directory", such as an app that could not find its own config file. It now counts that phrase only on the runtime's own line for an entrypoint it could not exec. A long-running entrypoint that ignores SIGTERM, such as a server running as PID 1, could also keep the smoke run waiting for good. The run now removes its container at the limit, so it ends and leaves no container behind.
+
+#### --strip and the size report cover the NSS modules ([#541](https://github.com/schubydoo/scratchsmith/pull/541))
+
+`--strip` left the staged NSS modules unstripped, and the size report did not list them, though they ship in the image. Both now include them. The size report totals grow by the size of the modules. With `--strip`, the image gets smaller, and so does the total that `--max-size` checks.
+
+#### syft, grype and cosign get non-UTF-8 paths byte for byte ([#547](https://github.com/schubydoo/scratchsmith/pull/547))
+
+A path with a byte that is not UTF-8 reached syft, grype and cosign with that byte replaced, so `--sbom` wrote the SBOM to another file and `--scan` read nothing. The tools now get the exact path. The report's `sbom` field still shows the path as text.
+
+#### syft, grype and cosign runs have a time limit ([#555](https://github.com/schubydoo/scratchsmith/pull/555))
+
+A stalled syft, grype or cosign blocked the pack with no output. Each run now has a limit: syft 15 minutes, grype 30 minutes, and cosign 10 minutes. A run past its limit is stopped, and the pack fails with an error that names the tool and the limit. grype's limit leaves room for the first run's database download.
+
+#### unpack handles a deep directory tree ([#548](https://github.com/schubydoo/scratchsmith/pull/548))
+
+unpack held one file descriptor per directory level while it walked or removed a tree, so a whiteout or an entry in a tree deeper than the open-file limit failed with "Too many open files". With a limit of 1024 that was at about 1020 levels. It now holds one directory open at a time, and a step back up checks that it reached the directory it left.
+
+#### unpack follows the image's own symlinks inside the target ([#534](https://github.com/schubydoo/scratchsmith/pull/534))
+
+`unpack` refused an image that wrote through an absolute symlink, such as a file under Debian's `var/run -> /run`, because it resolved the link against the host. It now resolves every symlink with the target directory as the image's `/`, so the file lands at `run/app.pid`. An entry, symlink or hard link that would climb out of the target is still refused.
+
+#### unpack no longer fails on a read-only directory ([#532](https://github.com/schubydoo/scratchsmith/pull/532))
+
+Run as a user who is not root, `unpack` failed with "Permission denied" when a layer held a directory without owner write permission, such as `/root` in Fedora and UBI images. It now keeps each such directory open to its owner while it extracts, and applies the image's mode after the last layer. A failed unpack leaves a tree that its owner can remove without `chmod`.
+
+#### unpack applies a layer that replaces a hard link or changes a path's type ([#533](https://github.com/schubydoo/scratchsmith/pull/533))
+
+`unpack` failed with "File exists" or "Is a directory" when a later layer wrote a hard link again or turned a directory into a symlink, which package upgrades and merged-`/usr` conversions do. It now replaces the existing path, as the OCI layer rules say, and a directory over a directory keeps its contents. A second `unpack` into the same directory works too.
+
+#### `unpack` warns when an archive's index lists more than one manifest ([#553](https://github.com/schubydoo/scratchsmith/pull/553))
+
+`unpack` applies only the first manifest of the archive's index. With more than one, it said nothing, so an audit of a multi-platform archive could pass for a platform it never read. It now prints a warning on stderr that names the digest of the manifest it applied, and its platform when the index gives one. The output on stdout and the exit code do not change.
+
+#### The default image tag is valid for any binary name ([#542](https://github.com/schubydoo/scratchsmith/pull/542))
+
+A binary named with a `+`, a space, a leading dot or a non-ASCII letter, like `c++filt`, gave a default tag `docker load` refused. Each character a tag can't hold now becomes `-`, and a leading or trailing separator is dropped, so `c++filt` is tagged `scratchsmith/c--filt:packed`. A UTF-8 name that already made a valid tag keeps it. A name that is not valid UTF-8 used to get `scratchsmith/image:packed`, and now gets a tag from its name, where the bytes that are not UTF-8 count as characters a tag can't hold.
+
+#### A warning for --sbom-file or --sbom-format without --sbom ([#543](https://github.com/schubydoo/scratchsmith/pull/543))
+
+`pack --sbom-file s.json` without `--sbom` wrote no SBOM and said nothing. The report's warnings now name each SBOM flag or config key that is set while `--sbom` is off. The exit code stays 0.
+
+### Security
+
+#### unpack honors a whiteout with an absolute path ([#550](https://github.com/schubydoo/scratchsmith/pull/550))
+
+unpack extracted a file with an absolute path such as `/etc/secret`, but ignored a whiteout with one, so a later layer's `/etc/.wh.secret` left the file in the unpacked tree, though the image deletes it. A marker's leading `/` and `.` parts now drop, as an entry's do, and the deletion still runs inside the target.
+
+#### `unpack` stops at 16 GiB of decompressed layers in all ([#552](https://github.com/schubydoo/scratchsmith/pull/552))
+
+Each layer was capped at 2 GiB, but one small gzip layer that the manifest lists many times decompressed again for each listing, so `unpack` could write many times 2 GiB to the target. `unpack` now refuses an image whose layers hold more than 16 GiB in all once decompressed, and exits `1` with an error that names the limit. A layer listed twice counts twice.
+
 ## 2.0.1 (2026-11-25)
 
 ### Fixes
