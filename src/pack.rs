@@ -844,7 +844,9 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
 
     if let Some(user) = &cfg.user {
         if image::is_root_user(user) {
-            eprintln!("warning: --user {user} runs the image as root; the default non-root user is recommended");
+            warnings.push(format!(
+                "--user {user} runs the image as root; the default non-root user is recommended"
+            ));
         }
     }
 
