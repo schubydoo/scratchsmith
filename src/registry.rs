@@ -664,8 +664,9 @@ async fn read_capped(mut res: reqwest::Response, limit: usize) -> Result<(Vec<u8
 }
 
 // The realm the refresh token may be sent to. The registry names it in its challenge, so it
-// is untrusted: only https, as Docker CLI requires. Plain http only for a loopback realm of a
-// local registry, which already speaks http (`registry_scheme`) and never leaves the host.
+// is untrusted: only https, so the token never crosses the network in the clear. Plain http
+// only for a loopback realm of a local registry, which already speaks http (`registry_scheme`)
+// and never leaves the host.
 fn token_realm(realm: &str, endpoint: &str) -> Result<reqwest::Url> {
     let shown = crate::resolver::escape_for_display;
     let url = reqwest::Url::parse(realm).with_context(|| {

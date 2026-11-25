@@ -1,5 +1,5 @@
 ---
-default: patch
+default: security
 ---
 
 #### The identity-token exchange sends the token only over https

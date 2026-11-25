@@ -160,6 +160,20 @@ Now `unpack` refuses the archive and exits `1`. The error names the second entry
 stored. It refuses before it reads that entry. No OCI layout writer puts two `index.json`
 files in one archive, so no working image has one.
 
+### An identity token sent to an `http` realm, or across a redirect
+
+A Docker config can hold a login as an identity token, a refresh token that `--push` and
+`index` exchange for an access token at the realm that the registry names. Through 2.0.2, the
+exchange posted the refresh token to that realm over plain `http` too, and followed a redirect
+from it with the token in the body. A registry, or anyone on the network path, could then read
+the refresh token.
+
+Now the realm must be `https`, and a redirect from it is refused, not followed. Either one makes
+`--push` or `index` fail with exit `1`. The one exception is an `http` realm on a loopback
+address, for a registry at `localhost`, `127.0.0.1` or `::1`, which scratchsmith already
+reaches over `http`. Hosted registries such as Docker Hub and GHCR name an `https` realm, and
+a local test registry keeps working, so no working push depends on the refused realm.
+
 ## Tolerances ending in 2.0
 
 No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list
