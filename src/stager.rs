@@ -2,7 +2,7 @@
 //! at the paths the runtime expects, recreate soname symlinks, and regenerate the
 //! loader cache. Consumes the [`Resolution`] produced by [`crate::resolver`].
 
-use crate::resolver::Resolution;
+use crate::resolver::{Resolution, ResolvedLib};
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -827,6 +827,10 @@ pub fn strip_and_measure_with(
     // Measure where the walk resolved the library, but label it by its own path, as the
     // loader is labelled above.
     for lib in &resolution.libs {
+        // The loader reached again by its real path is the same file, already counted above.
+        if tree.loader.is_some() && is_loader_alias(resolution, lib) {
+            continue;
+        }
         let staged = staged_path(dest, &lib.path, false)?;
         targets.push((staged, display_image_path(dest, &under(dest, &lib.path))));
     }
@@ -982,7 +986,12 @@ fn stage_files(
     // Each library: place the real file, then recreate the soname symlink the loader
     // looks up when the real file name differs (the versioned-soname case).
     for lib in &resolution.libs {
-        copy_into(&lib.path, dest, &lib.path)?;
+        // On a merged-/usr host the loader has two names: PT_INTERP (`/lib64/...`) and the
+        // real path libc's DT_NEEDED resolves to. One host file stays one file in the image.
+        match loader.as_ref().filter(|_| is_loader_alias(resolution, lib)) {
+            Some(loader) => link_to_loader(dest, &lib.path, loader)?,
+            None => copy_into(&lib.path, dest, &lib.path)?,
+        }
         if lib.path.file_name() != Some(OsStr::new(&lib.soname)) {
             symlink_soname(dest, &lib.path, &lib.soname)?;
         }
@@ -1182,6 +1191,35 @@ fn write_into(dest: &Path, image: &Path, body: &[u8]) -> Result<()> {
     tmp.persist(&target)
         .with_context(|| format!("replacing {}", target.display()))?;
     Ok(())
+}
+
+// Whether `lib` is the loader itself, found again by its real path (libc's DT_NEEDED on a
+// merged-/usr host). `stage_files` links it and the size report skips it; both ask here.
+fn is_loader_alias(resolution: &Resolution, lib: &ResolvedLib) -> bool {
+    resolution
+        .interpreter
+        .as_ref()
+        .is_some_and(|interp| interp.source == lib.path)
+}
+
+// Stage `image_path` as a relative link to the staged loader, unless it is the loader's own
+// path. Whatever is already at the name is replaced, as `copy_into` replaces it.
+fn link_to_loader(dest: &Path, image_path: &Path, loader: &Path) -> Result<()> {
+    let name = image_path
+        .file_name()
+        .context("a staged file has no name")?;
+    let dir = image_dir(dest, image_path.parent().unwrap_or(Path::new("/")), true)?;
+    let at = dir.join(name);
+    if at == loader {
+        return Ok(());
+    }
+    let link = under(dest, &at);
+    if link.symlink_metadata().is_ok_and(|md| !md.is_dir()) {
+        std::fs::remove_file(&link).with_context(|| format!("replacing {}", link.display()))?;
+    }
+    let value = relative_link_value(&dir, loader);
+    std::os::unix::fs::symlink(&value, &link)
+        .with_context(|| format!("linking {} -> {}", at.display(), value.display()))
 }
 
 fn copy_into(src: &Path, root: &Path, abs_target: &Path) -> Result<()> {
@@ -1430,6 +1468,51 @@ mod tests {
             "loader must be at its PT_INTERP path"
         );
         assert_eq!(fs::read(&staged_loader).unwrap(), b"LOADER");
+    }
+
+    #[test]
+    fn a_loader_reached_by_two_paths_is_staged_once() {
+        // Merged /usr: PT_INTERP names /lib64/..., libc's DT_NEEDED resolves the loader to its
+        // real path, and the resolver lists that path in `libs` too. Both are one host file.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&src.join("app"), b"binary");
+        let loader = make_file(&src.join("usr/lib/ld-linux-x86-64.so.2"), b"LOADER");
+
+        let mut res = with_interp("/lib64/ld-linux-x86-64.so.2", &loader);
+        res.libs = vec![ResolvedLib {
+            soname: "ld-linux-x86-64.so.2".into(),
+            path: loader.clone(),
+        }];
+        let tree = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+
+        let real = dest.join("lib64/ld-linux-x86-64.so.2");
+        assert!(real.symlink_metadata().unwrap().is_file());
+        let alias = under(&dest, &loader);
+        let value = fs::read_link(&alias).expect("the second path is a link");
+        assert!(value.is_relative(), "{value:?}");
+        assert_eq!(fs::read(&alias).unwrap(), b"LOADER");
+
+        // The report lists the loader once, by its PT_INTERP path.
+        let report = strip_and_measure(&dest, &tree, &res, false, false).unwrap();
+        assert_eq!(report.entries.len(), 2, "{report}");
+        assert_eq!(
+            report.total_after,
+            (b"binary".len() + b"LOADER".len()) as u64
+        );
+    }
+
+    #[test]
+    fn a_lib_at_the_loaders_own_pt_interp_path_is_left_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("dest");
+        let loader = make_file(&tmp.path().join("lib64/ld.so"), b"LOADER");
+        // PT_INTERP is the real path, so both names are one image path: no link is made.
+        let image = PathBuf::from(&loader);
+        copy_into(&loader, &dest, &image).unwrap();
+        link_to_loader(&dest, &image, &image).unwrap();
+        assert!(under(&dest, &image).symlink_metadata().unwrap().is_file());
     }
 
     #[test]
