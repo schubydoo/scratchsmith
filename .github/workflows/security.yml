@@ -34,7 +34,7 @@ jobs:
   gitleaks:
     name: secret scan
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10 # its green runs take well under a minute; 10-minute floor, as in ci.yml
     permissions:
       contents: read
     steps:
@@ -67,7 +67,7 @@ jobs:
   zizmor:
     name: workflow audit
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10 # its green runs take well under a minute; 10-minute floor, as in ci.yml
     permissions:
       security-events: write
       contents: read
@@ -124,7 +124,7 @@ jobs:
       - gitleaks
       - zizmor
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 10 # only checks the needs results; 10-minute floor, as in ci.yml
     steps:
       - name: Check required jobs passed
         env:
