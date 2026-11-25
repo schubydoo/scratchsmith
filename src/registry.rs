@@ -584,9 +584,14 @@ async fn exchange_identity_token(
         .with_context(|| {
             format!("{endpoint} presented no Bearer challenge; cannot exchange the identity token")
         })?;
+    let shown = crate::resolver::escape_for_display;
     let realm = extract_challenge_param(&challenge, "realm").with_context(|| {
-        format!("no realm in the auth challenge from {endpoint}: {challenge:?}")
+        format!(
+            "no realm in the auth challenge from {endpoint}: \"{}\"",
+            shown(&challenge)
+        )
     })?;
+    let realm = token_realm(&realm, endpoint)?;
     let service =
         extract_challenge_param(&challenge, "service").unwrap_or_else(|| endpoint.to_string());
 
@@ -600,24 +605,91 @@ async fn exchange_identity_token(
         ("refresh_token", refresh_token),
     ];
     let res = http
-        .post(&realm)
+        .post(realm.clone())
         .form(&params)
         .send()
         .await
         .with_context(|| format!("exchanging the identity token at {realm}"))?;
     let status = res.status();
+    // The token client follows no redirect, so the refresh token is never sent on to a host
+    // the challenge did not name. A redirect is refused, not followed by hand. A client that
+    // did follow one has already resent the body, and its answer is not used either.
+    if status.is_redirection() || res.url() != &realm {
+        anyhow::bail!(
+            "the token endpoint {realm} answered with a redirect ({status}); scratchsmith does \
+             not send the identity token on to another address"
+        );
+    }
     // A body that cannot be READ is not an empty body. `unwrap_or_default()` turned a
     // connection reset mid-response into "", which then surfaced as a token-decoding error
     // that named the wrong cause. The status rides along in the context, so a non-success
     // exchange still reports it even when the body is unreadable.
-    let body = res
-        .text()
+    if !status.is_success() {
+        let (head, cut) = read_capped(res, TOKEN_ERROR_SHOWN).await.with_context(|| {
+            format!("reading the identity-token response from {realm} ({status})")
+        })?;
+        let more = if cut { "..." } else { "" };
+        anyhow::bail!(
+            "identity-token exchange at {realm} failed ({status}): {}{more}",
+            shown(&String::from_utf8_lossy(&head))
+        );
+    }
+    let (body, cut) = read_capped(res, TOKEN_BODY_LIMIT)
         .await
         .with_context(|| format!("reading the identity-token response from {realm} ({status})"))?;
-    if !status.is_success() {
-        anyhow::bail!("identity-token exchange at {realm} failed ({status}): {body}");
+    if cut {
+        anyhow::bail!("the token response from {realm} is larger than {TOKEN_BODY_LIMIT} bytes");
     }
-    select_token(body.as_bytes(), &realm)
+    select_token(&body, realm.as_str())
+}
+
+// The most of a token response that is read. A token is a few KiB; this only stops a host
+// that streams without end from filling memory.
+const TOKEN_BODY_LIMIT: usize = 1 << 20;
+// How much of a failed exchange's body the error shows.
+const TOKEN_ERROR_SHOWN: usize = 1024;
+
+// Read at most `limit` bytes of the body, and whether there was more.
+async fn read_capped(mut res: reqwest::Response, limit: usize) -> Result<(Vec<u8>, bool)> {
+    let mut body = Vec::new();
+    while let Some(chunk) = res.chunk().await? {
+        let room = limit - body.len();
+        if chunk.len() > room {
+            body.extend_from_slice(&chunk[..room]);
+            return Ok((body, true));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok((body, false))
+}
+
+// The realm the refresh token may be sent to. The registry names it in its challenge, so it
+// is untrusted: only https, as Docker CLI requires. Plain http only for a loopback realm of a
+// local registry, which already speaks http (`registry_scheme`) and never leaves the host.
+fn token_realm(realm: &str, endpoint: &str) -> Result<reqwest::Url> {
+    let shown = crate::resolver::escape_for_display;
+    let url = reqwest::Url::parse(realm).with_context(|| {
+        format!(
+            "the auth challenge from {endpoint} names a realm that is not a URL: \"{}\"",
+            shown(realm)
+        )
+    })?;
+    let loopback = url.host_str().is_some_and(|h| {
+        h.eq_ignore_ascii_case("localhost")
+            || h.trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    });
+    match url.scheme() {
+        "https" => Ok(url),
+        "http" if loopback && registry_scheme(endpoint) == "http" => Ok(url),
+        _ => anyhow::bail!(
+            "the auth challenge from {endpoint} names the realm \"{}\", which is not https; \
+             scratchsmith sends the identity token only over https",
+            shown(realm)
+        ),
+    }
 }
 
 /// Pick the usable token from a token-endpoint response body. A byte-level entry point for
@@ -676,10 +748,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const TOKEN_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 // The plain client for the identity-token exchange, with its limits.
+// It follows no redirect: one would resend the refresh token to whatever address it names.
 fn token_client(connect: Duration, read: Duration) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .connect_timeout(connect)
         .read_timeout(read)
+        .redirect(reqwest::redirect::Policy::none())
 }
 
 /// The two HTTP clients a registry command uses: oci-client for the registry protocol, and a
@@ -1357,10 +1431,162 @@ mod tests {
                 CredentialPlan::IdentityToken("refresh-xyz".into()),
                 &endpoint,
                 repository,
-                &reqwest::Client::new(),
+                &test_token_client(),
             )
             .await
         })
+    }
+
+    // The client the commands build, with short limits.
+    fn test_token_client() -> reqwest::Client {
+        token_client(Duration::from_secs(5), Duration::from_secs(5))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn the_token_realm_must_be_https_except_on_loopback_for_a_local_registry() {
+        for ok in [
+            ("https://auth.docker.io/token", "registry-1.docker.io"),
+            ("https://ghcr.io/token", "ghcr.io"),
+            ("https://127.0.0.1/token", "localhost:5000"),
+            ("http://127.0.0.1:5001/token", "localhost:5000"),
+            ("http://localhost:5001/token", "127.0.0.1:5000"),
+            ("http://[::1]:5001/token", "[::1]:5000"),
+        ] {
+            assert!(token_realm(ok.0, ok.1).is_ok(), "{ok:?}");
+        }
+        for (realm, endpoint) in [
+            // Plain http to a real host, from a remote or a local registry.
+            ("http://auth.example.com/token", "registry.example.com"),
+            ("http://auth.example.com/token", "localhost:5000"),
+            // Loopback http is only for a registry that is itself local.
+            ("http://127.0.0.1:5001/token", "ghcr.io"),
+            ("ftp://ghcr.io/token", "ghcr.io"),
+            ("not a url", "ghcr.io"),
+            ("/token", "ghcr.io"),
+        ] {
+            let err = token_realm(realm, endpoint).expect_err(realm);
+            assert!(format!("{err:#}").contains(endpoint), "{err:#}");
+        }
+        // The realm is the registry's text: escaped in the error.
+        let err = format!(
+            "{:#}",
+            token_realm("http://a.example/\n\x1b[2J", "ghcr.io").unwrap_err()
+        );
+        assert!(!err.contains('\n') && !err.contains('\x1b'), "{err:?}");
+    }
+
+    #[test]
+    fn an_http_realm_never_receives_the_refresh_token() {
+        let err = block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v2/"))
+                .respond_with(ResponseTemplate::new(401).insert_header(
+                    "WWW-Authenticate",
+                    r#"Bearer realm="http://auth.example.com/token",service="mock""#,
+                ))
+                .mount(&server)
+                .await;
+            let endpoint = server.uri().strip_prefix("http://").unwrap().to_string();
+            resolve_auth(
+                CredentialPlan::IdentityToken("refresh-xyz".into()),
+                &endpoint,
+                "owner/img",
+                &test_token_client(),
+            )
+            .await
+        })
+        .expect_err("an http realm must be refused");
+        assert!(format!("{err:#}").contains("not https"), "{err:#}");
+    }
+
+    // A mock whose token endpoint redirects to `/elsewhere`, which counts its hits.
+    fn exchange_against_a_redirect(http: reqwest::Client) -> (Result<RegistryAuth>, usize) {
+        block_on(async {
+            let server = MockServer::start().await;
+            let realm = format!("{}/token", server.uri());
+            Mock::given(method("GET"))
+                .and(path("/v2/"))
+                .respond_with(ResponseTemplate::new(401).insert_header(
+                    "WWW-Authenticate",
+                    format!(r#"Bearer realm="{realm}",service="mock""#).as_str(),
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/token"))
+                .respond_with(
+                    ResponseTemplate::new(307)
+                        .insert_header("Location", format!("{}/elsewhere", server.uri()).as_str()),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/elsewhere"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "access_token": "stolen" })),
+                )
+                .mount(&server)
+                .await;
+            let endpoint = server.uri().strip_prefix("http://").unwrap().to_string();
+            let got = resolve_auth(
+                CredentialPlan::IdentityToken("refresh-xyz".into()),
+                &endpoint,
+                "owner/img",
+                &http,
+            )
+            .await;
+            let hits = server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|r| r.url.path() == "/elsewhere")
+                .count();
+            (got, hits)
+        })
+    }
+
+    #[test]
+    fn a_redirected_token_exchange_is_refused_and_not_followed() {
+        let (got, hits) = exchange_against_a_redirect(test_token_client());
+        let err = got.expect_err("a redirect must be refused");
+        assert!(format!("{err:#}").contains("redirect"), "{err:#}");
+        assert_eq!(hits, 0, "the refresh token went to the redirect target");
+        // A client that follows redirects has resent the body by then; its answer is still
+        // not used.
+        let (got, _) = exchange_against_a_redirect(reqwest::Client::new());
+        assert!(format!("{:#}", got.expect_err("followed")).contains("redirect"));
+    }
+
+    #[test]
+    fn a_failed_exchange_shows_a_short_escaped_part_of_the_body() {
+        let body = format!("bad\n\x1b[2Jforged line{}", "x".repeat(10_000));
+        let err = resolve_via_mock(
+            Some(r#"Bearer realm="{realm}",service="mock""#),
+            ResponseTemplate::new(500).set_body_string(body),
+            "owner/img",
+        )
+        .expect_err("a 500 is a failure");
+        let msg = format!("{err:#}");
+        assert!(!msg.contains('\n') && !msg.contains('\x1b'), "{msg:?}");
+        assert!(msg.contains("bad\\n\\u{1b}[2Jforged line"), "{msg}");
+        assert!(msg.ends_with("..."), "{msg}");
+        assert!(msg.len() < 2 * TOKEN_ERROR_SHOWN, "{}", msg.len());
+    }
+
+    #[test]
+    fn an_endless_token_response_is_cut_off() {
+        let err = resolve_via_mock(
+            Some(r#"Bearer realm="{realm}",service="mock""#),
+            ResponseTemplate::new(200).set_body_string("x".repeat(TOKEN_BODY_LIMIT + 1)),
+            "owner/img",
+        )
+        .expect_err("an oversized body is refused");
+        assert!(format!("{err:#}").contains("larger than"), "{err:#}");
     }
 
     #[test]
