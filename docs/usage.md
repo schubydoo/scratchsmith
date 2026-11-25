@@ -6,7 +6,7 @@ Pack a dynamic binary into a scratch image and run it:
 
 ```sh
 scratchsmith pack ./app
-docker run --rm scratchsmith/app:packed --version   # image is named scratchsmith/<name>:packed
+docker run --rm scratchsmith/app:packed --version   # image is named scratchsmith/<name>:packed (characters a tag cannot hold become -)
 ```
 
 The default sink loads into Docker. To load with **podman** or **nerdctl** instead (and run
