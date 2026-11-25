@@ -639,6 +639,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#an-identity-token-sent-to-an-http-realm-or-across-a-redirect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An identity token sent to an http realm, or across a redirect
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1056,6 +1067,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#an-identity-token-sent-to-an-http-realm-or-across-a-redirect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An identity token sent to an http realm, or across a redirect
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1272,6 +1294,17 @@ the same archive.</p>
 <p>Now <code>unpack</code> refuses the archive and exits <code>1</code>. The error names the second entry as it is
 stored. It refuses before it reads that entry. No OCI layout writer puts two <code>index.json</code>
 files in one archive, so no working image has one.</p>
+<h3 id="an-identity-token-sent-to-an-http-realm-or-across-a-redirect">An identity token sent to an <code>http</code> realm, or across a redirect<a class="headerlink" href="#an-identity-token-sent-to-an-http-realm-or-across-a-redirect" title="Permanent link">&para;</a></h3>
+<p>A Docker config can hold a login as an identity token, a refresh token that <code>--push</code> and
+<code>index</code> exchange for an access token at the realm that the registry names. Through 2.0.2, the
+exchange posted the refresh token to that realm over plain <code>http</code> too, and followed a redirect
+from it with the token in the body. A registry, or anyone on the network path, could then read
+the refresh token.</p>
+<p>Now the realm must be <code>https</code>, and a redirect from it is refused, not followed. Either one makes
+<code>--push</code> or <code>index</code> fail with exit <code>1</code>. The one exception is an <code>http</code> realm on a loopback
+address, for a registry at <code>localhost</code>, <code>127.0.0.1</code> or <code>::1</code>, which scratchsmith already
+reaches over <code>http</code>. Hosted registries such as Docker Hub and GHCR name an <code>https</code> realm, and
+a local test registry keeps working, so no working push depends on the refused realm.</p>
 <h2 id="tolerances-ending-in-20">Tolerances ending in 2.0<a class="headerlink" href="#tolerances-ending-in-20" title="Permanent link">&para;</a></h2>
 <p>No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list
 <a href="#removed-in-200">Removed in 2.0.0</a> names each one.</p>
