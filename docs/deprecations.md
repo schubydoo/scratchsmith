@@ -168,10 +168,11 @@ exchange posted the refresh token to that realm over plain `http` too, and follo
 from it with the token in the body. A registry, or anyone on the network path, could then read
 the refresh token.
 
-Now the realm must be `https`, and a redirect from it is refused, not followed. Both fail the
-login with exit `1`. The one exception is an `http` realm on a loopback address, such as
-`localhost`, for a registry that itself runs on `http`, like a local test registry. A remote
-registry whose challenge names an `http` realm must name an `https` one instead.
+Now the realm must be `https`, and a redirect from it is refused, not followed. Either one makes
+`--push` or `index` fail with exit `1`. The one exception is an `http` realm on a loopback
+address, for a registry at `localhost`, `127.0.0.1` or `::1`, which scratchsmith already
+reaches over `http`. Hosted registries such as Docker Hub and GHCR name an `https` realm, and
+a local test registry keeps working, so no working push depends on the refused realm.
 
 ## Tolerances ending in 2.0
 
