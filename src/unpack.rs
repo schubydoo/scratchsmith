@@ -255,8 +255,9 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path, applied: &mut Applied) -> Result<u
     // the directory.
     for path in scan_layer(tar_bytes)? {
         // Read the marker's path as an entry's: a leading `/` or `.` part drops, so
-        // `/etc/.wh.secret` deletes what `/etc/secret` extracted. A `..` part names nothing in
-        // the image, and the marker stays ignored, as before.
+        // `/etc/.wh.secret` deletes what `/etc/secret` extracted. A marker with a `..` part is
+        // still skipped, as before. Docker cleans the path first, so this can differ; whether
+        // to refuse it, as an entry with `..` is refused, is a separate decision.
         let Some(path) = path
             .components()
             .filter(|c| !matches!(c, Component::RootDir | Component::CurDir))
@@ -1269,7 +1270,7 @@ mod tests {
         );
         assert!(dest.join("etc/keep").is_file(), "only the named file goes");
         assert_eq!(std::fs::read_dir(dest.join("x")).unwrap().count(), 0);
-        // A `..` in a marker still names nothing, and deletes nothing.
+        // A marker with a `..` part is still skipped, as before this change.
         apply_layer(
             &tar_of_raw_names(&[("etc/../etc/.wh.keep", b"")]),
             &dest,
