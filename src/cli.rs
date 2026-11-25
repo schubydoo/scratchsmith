@@ -386,6 +386,20 @@ fn dispatch(cli: Cli) -> Result<()> {
             };
             let smoke_set = bool_set(|c| c.smoke);
             let sign_set = bool_set(|c| c.sign);
+            // Where `sbom-file` and `sbom-format` are set, for the warning below. A selected
+            // profile's value wins over the base's, so the profile is named when it sets one.
+            let key_in = |pick: fn(&crate::config::Config) -> bool| {
+                let path = config.as_ref()?;
+                match &profile {
+                    Some(name) if file.profile.get(name).is_some_and(pick) => {
+                        Some(format!("{} [profile.{name}]", path.display()))
+                    }
+                    _ if pick(&file) => Some(path.display().to_string()),
+                    _ => None,
+                }
+            };
+            let sbom_file_in = key_in(|c| c.sbom_file.is_some());
+            let sbom_format_in = key_in(|c| c.sbom_format.is_some());
             let file = match &profile {
                 Some(name) => file.select_profile(name).map_err(usage)?,
                 None => file,
@@ -396,6 +410,39 @@ fn dispatch(cli: Cli) -> Result<()> {
                         .into()
                 ));
             };
+
+            // An SBOM path or format with no --sbom is dropped. Say so in the report rather than
+            // refuse: a refusal would tighten validation, and a config can set them once for
+            // packs that pass --sbom only some of the time.
+            let mut notes = Vec::new();
+            if !(sbom || file.sbom) {
+                for (cli_set, file_in, flag, key) in [
+                    (
+                        sbom_file.is_some(),
+                        sbom_file_in,
+                        "--sbom-file",
+                        "sbom-file",
+                    ),
+                    (
+                        sbom_format.is_some(),
+                        sbom_format_in,
+                        "--sbom-format",
+                        "sbom-format",
+                    ),
+                ] {
+                    let what = if cli_set {
+                        flag.to_string()
+                    } else if let Some(at) = file_in {
+                        format!("`{key}` in {at}")
+                    } else {
+                        continue;
+                    };
+                    notes.push(format!(
+                        "{what} is set, but --sbom is not on, so no SBOM is written and it does \
+                         nothing. Add --sbom, or remove {what}"
+                    ));
+                }
+            }
 
             let opts = crate::pack::PackOptions {
                 smoke: smoke || file.smoke,
@@ -472,6 +519,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                     .map(|s| crate::report::parse_size(&s).map_err(usage))
                     .transpose()?,
                 runtime: runtime.or(file.runtime).unwrap_or_default(),
+                notes,
                 packages: {
                     let selection =
                         crate::packages::PackagesSelection::from_outputs(if packages.is_empty() {

@@ -2675,3 +2675,105 @@ fn the_documented_full_config_passes_every_sink_check() {
     pack(&[], "./dist/app");
     pack(&["--push", "ghcr.io/you/app:dev", "./other"], "./other");
 }
+
+#[test]
+fn an_sbom_path_or_format_without_sbom_is_named_in_the_report() {
+    // TASK-218. Both are dropped with --sbom off, and a pack that asked for one must say so.
+    // A warning, not a refusal, and the exit code stays 0.
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("scratchsmith.toml");
+    std::fs::write(&config, "sbom-format = \"spdx-json\"\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args([
+            "pack",
+            "--no-build",
+            "--packages",
+            "none",
+            "--format",
+            "json",
+        ])
+        .arg("--config")
+        .arg(&config)
+        .arg("--sbom-file")
+        .arg(tmp.path().join("s.json"))
+        .arg("-o")
+        .arg(tmp.path().join("rootfs"))
+        .arg(bin)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let warnings: Vec<&str> = report["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|w| w.as_str())
+        .collect();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.starts_with("--sbom-file is set, but --sbom is not on")),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.starts_with(&format!("`sbom-format` in {} is set", config.display()))),
+        "{warnings:?}"
+    );
+    assert!(!tmp.path().join("s.json").exists());
+
+    // A key that the selected profile sets is named with the profile.
+    std::fs::write(
+        &config,
+        "sbom-format = \"spdx-json\"\n[profile.ci]\nsbom-format = \"cyclonedx-json\"\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args([
+            "pack",
+            "--no-build",
+            "--packages",
+            "none",
+            "--format",
+            "json",
+            "--profile",
+            "ci",
+        ])
+        .arg("--config")
+        .arg(&config)
+        .arg("-o")
+        .arg(tmp.path().join("rootfs-profile"))
+        .arg(bin)
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let want = format!("`sbom-format` in {} [profile.ci] is set", config.display());
+    assert!(report["warnings"].to_string().contains(&want), "{report}");
+
+    // A pack that sets neither says nothing about them.
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args([
+            "pack",
+            "--no-build",
+            "--packages",
+            "none",
+            "--format",
+            "json",
+            "-o",
+        ])
+        .arg(tmp.path().join("rootfs-2"))
+        .arg(bin)
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        !report["warnings"].to_string().contains("--sbom is not on"),
+        "{report}"
+    );
+}
