@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/favicon.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
     
     
   
@@ -766,8 +766,19 @@
    <code>ld.so.cache</code>. If <code>ldconfig</code> does not cache the library under the needed name, Scratchsmith
    does not take it. The name must start with <code>lib</code> or <code>ld-</code> and hold <code>.so</code>, or start with
    <code>ld.so.</code> or <code>ld64.so.</code>. The library's own soname must be that name, or absent. An <code>--include</code>
-   file in that directory stages with no such check. Scratchsmith never scrapes
-   the host's <code>ldd</code>, <code>ld.so.cache</code>, or <code>LD_LIBRARY_PATH</code>, so the result is deterministic.</li>
+   file in that directory stages with no such check. Three kinds of entry are searched here as
+   they always were, though <code>ld.so</code> does not search them: a wholly empty string (read as
+   <code>$ORIGIN</code>), a relative entry (read against the object's directory, where <code>ld.so</code> reads it
+   against the working directory), and a name glued to a token, such as <code>$ORIGINX</code> or
+   <code>$ORIGIN_x</code> (expanded, where <code>ld.so</code> keeps it literal). A library found only through such an
+   entry loads from the image's <code>ld.so.cache</code>, if <code>ldconfig</code> caches it under the needed name by
+   the rule above. <code>pack</code> prints one note on stderr for the entry, and the note names any
+   library that the cache does not list, which the image then cannot load. On x86_64,
+   <code>$PLATFORM</code> is read as <code>x86_64</code>. glibc reads it as <code>haswell</code> or <code>xeon_phi</code> on some Intel CPUs,
+   but those copies are optimized builds that not every CPU can run, so they never stage. A
+   library missing as <code>x86_64</code> but present under such a name gets a hint, and a library that
+   ships while <code>ld.so</code> on such a CPU would load such a copy gets a note on stderr. Scratchsmith never
+   scrapes the host's <code>ldd</code>, <code>ld.so.cache</code>, or <code>LD_LIBRARY_PATH</code>, so the result is deterministic.</li>
 <li><strong>Stage</strong>: copy the interpreter to its verbatim path, mirror the libraries, recreate
    versioned-soname symlinks, regenerate <code>ld.so.cache</code>, and add the glibc NSS pieces.</li>
 <li><strong>Assemble</strong>: build a non-root image with reproducible layers (sorted entries, zeroed
@@ -862,7 +873,7 @@ stderr, remove only in the next major), and how a test guards each surface.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.sections", "navigation.tracking", "toc.follow", "content.code.copy", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
       
     
   </body>

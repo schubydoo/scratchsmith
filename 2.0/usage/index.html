@@ -25,7 +25,7 @@
       
       
       <link rel="icon" href="../assets/favicon.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
     
     
   
@@ -1578,7 +1578,10 @@ The same keys work in <code>scratchsmith.toml</code> as <code>deny</code> and <c
 <a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>scratchsmith<span class="w"> </span>diff<span class="w"> </span>--exit-code<span class="w"> </span>old<span class="w"> </span>new<span class="w">  </span><span class="c1"># exit non-zero on any difference (a CI gate)</span>
 </code></pre></div>
 <p><code>diff</code> marks an added file with <code>+</code>, a removed file with <code>-</code>, and a changed file with <code>~</code>.
-It then prints the total size delta. <code>--format json</code> emits the same data for a machine.</p>
+It then prints the total size delta. <code>--format json</code> emits the same data for a machine.
+A file name that is not valid UTF-8 is escaped whole, in both the text and the JSON output:
+its invalid bytes become <code>\xNN</code>, and a backslash, a quote or a control character in it is
+escaped too.</p>
 <h2 id="unpack-an-image">Unpack an image<a class="headerlink" href="#unpack-an-image" title="Permanent link">&para;</a></h2>
 <p>To audit an image you did not build, extract its OCI archive to a directory:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>scratchsmith<span class="w"> </span>unpack<span class="w"> </span>app.oci.tar<span class="w"> </span>./rootfs<span class="w">   </span><span class="c1"># apply the layers into ./rootfs</span>
@@ -1586,6 +1589,9 @@ It then prints the total size delta. <code>--format json</code> emits the same d
 <p><code>unpack</code> reads an OCI-layout archive (what <code>pack --oci-archive</code> writes, or a skopeo/buildah
 export), applies each layer in order, and honors whiteouts. Combine it with <code>diff</code> to
 compare two images: unpack both, then run <code>scratchsmith diff old new</code>.</p>
+<p><code>unpack</code> reads every gzip member of a layer, as Docker does. It refuses a layer that is cut
+short, has data after its end, or holds a sparse entry or a malformed PAX record, and exits <code>1</code>
+before it writes any file from that layer.</p>
 <p><code>unpack</code> clears the setuid and setgid bits on every file and directory it writes. An untrusted
 image cannot then plant a setuid program owned by the user who unpacks it. <code>unpack</code> prints one
 warning line on standard error for each path in the final image that had one of those bits.
@@ -1610,6 +1616,17 @@ cross-arch resolution happens. The sources must already be pushed, and must live
 <strong>target's repository</strong>. An index references its children by digest within one repository, so
 this is typically the same repo with a different tag, as above. Add <code>--sign</code> to cosign-sign the
 index by digest.</p>
+<p><code>index --format json</code> prints one object with four fields:</p>
+<ul>
+<li><code>pushed</code>: the target reference, as you gave it.</li>
+<li><code>manifests</code>: one entry per source, in the order you gave them. Each entry has <code>source</code> (the
+  reference as you gave it), <code>platform</code> (such as <code>linux/amd64</code>, read from the source's image
+  configuration) and <code>digest</code> (the child manifest's <code>sha256:</code> digest).</li>
+<li><code>signed</code>: the by-digest reference that <code>--sign</code> signed, or <code>null</code> without <code>--sign</code>.</li>
+<li><code>warnings</code>: a list of warnings about the push, such as a registry that answered with another
+  digest. It is empty when there are none. With <code>--sign</code>, a digest mismatch fails the command
+  instead, so <code>warnings</code> stays empty.</li>
+</ul>
 <h2 id="image-metadata-and-entrypoint">Image metadata and entrypoint<a class="headerlink" href="#image-metadata-and-entrypoint" title="Permanent link">&para;</a></h2>
 <p>Set what the image runs: entrypoint, arguments, environment, working directory, and user:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app<span class="w"> </span><span class="se">\</span>
@@ -1755,7 +1772,7 @@ scratch image. See <a href="../verifying/">Verifying releases</a>.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.sections", "navigation.tracking", "toc.follow", "content.code.copy", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
       
     
   </body>

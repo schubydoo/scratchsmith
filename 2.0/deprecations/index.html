@@ -25,7 +25,7 @@
       
       
       <link rel="icon" href="../assets/favicon.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
     
     
   
@@ -562,6 +562,50 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#a-gzip-layer-of-more-than-one-member" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A gzip layer of more than one member
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-layer-with-data-after-its-end-or-cut-short" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A layer with data after its end, or cut short
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-sparse-entry-in-a-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A sparse entry in a layer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-malformed-pax-record-in-a-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A malformed PAX record in a layer
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -902,6 +946,50 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#a-gzip-layer-of-more-than-one-member" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A gzip layer of more than one member
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-layer-with-data-after-its-end-or-cut-short" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A layer with data after its end, or cut short
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-sparse-entry-in-a-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A sparse entry in a layer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-malformed-pax-record-in-a-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A malformed PAX record in a layer
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1032,6 +1120,10 @@ such input with no deprecation cycle, and this section lists each case.</p>
 FIFO waited forever for a writer, or read a writer's stream with no end. Now <code>pack</code> and <code>graph</code>
 refuse such a library before they open it, and exit <code>1</code>. No library is a FIFO, so no working
 image depends on one.</p>
+<p>A FIFO that you name with <code>--include</code> is still read, so <code>graph --include &lt;(cat libplugin.so)</code>
+works. <code>pack</code> reads it too, but then it refuses to stage it, because it is not a regular file, and
+exits <code>1</code>. Both commands open the FIFO and wait for a writer, as <code>cat</code> does. With no writer they
+wait until you stop them, and that is accepted behavior.</p>
 <h3 id="a-file-that-is-not-an-elf-named-by-the-binary-or-a-library">A file that is not an ELF, named by the binary or a library<a class="headerlink" href="#a-file-that-is-not-an-elf-named-by-the-binary-or-a-library" title="Permanent link">&para;</a></h3>
 <p>A <code>DT_NEEDED</code> entry in the binary or in a library names a file. The binary's program
 interpreter (<code>PT_INTERP</code>) names a file too. Through 1.7.2, scratchsmith staged that file, and
@@ -1061,6 +1153,34 @@ an uncompressed layer over 2 GiB is now refused too. An archive file on disk kee
 as the total limit.</p>
 <p>There is no way around this limit. <code>unpack</code> cannot read a layer over 2 GiB of either type, and
 gzipping the layer does not help, because a gzip layer stops at the same limit.</p>
+<h3 id="a-gzip-layer-of-more-than-one-member">A gzip layer of more than one member<a class="headerlink" href="#a-gzip-layer-of-more-than-one-member" title="Permanent link">&para;</a></h3>
+<p>A gzip layer can hold several gzip members, one after another, as <code>cat a.gz b.gz</code> writes.
+Docker reads every member. Through 2.0.0, <code>unpack</code> read only the first, so a second member
+could carry files that the image installs and the audit never showed.</p>
+<p>Now <code>unpack</code> reads every member. Bytes after the last member that do not start another member
+make <code>unpack</code> fail with exit <code>1</code>. Docker refuses those bytes too, so no working image has them.</p>
+<h3 id="a-layer-with-data-after-its-end-or-cut-short">A layer with data after its end, or cut short<a class="headerlink" href="#a-layer-with-data-after-its-end-or-cut-short" title="Permanent link">&para;</a></h3>
+<p>A layer's tar ends with a block of zeros. Through 2.0.0, <code>unpack</code> stopped there and ignored what
+followed. A reader that skips zero blocks would find entries hidden after it. <code>unpack</code> also
+deleted a lower layer's files for a layer's whiteouts before it found that the layer was cut
+short.</p>
+<p>Now <code>unpack</code> refuses a layer with any byte other than zero after that block, and exits <code>1</code>.
+Zeros there are only padding, and still pass. A layer cut short inside an entry fails before
+<code>unpack</code> writes or deletes any file for that layer. The layers before it are already applied.</p>
+<h3 id="a-sparse-entry-in-a-layer">A sparse entry in a layer<a class="headerlink" href="#a-sparse-entry-in-a-layer" title="Permanent link">&para;</a></h3>
+<p>A sparse tar entry stores only part of a file, and the reader fills the holes with zeros. A
+few header bytes can then claim a file of any size, and fill the disk. Through 2.0.0, <code>unpack</code>
+wrote such an entry from a layer. It already refused one in the outer archive.</p>
+<p>Now <code>unpack</code> refuses a sparse entry in a layer, in GNU or PAX form, and exits <code>1</code>. It refuses
+the layer before it writes any file from it. Docker and BuildKit write layers with Go's tar
+library, which cannot write a sparse entry, so no working image has one.</p>
+<h3 id="a-malformed-pax-record-in-a-layer">A malformed PAX record in a layer<a class="headerlink" href="#a-malformed-pax-record-in-a-layer" title="Permanent link">&para;</a></h3>
+<p>A PAX record is a line in a tar header that holds extra details for the next entry, such as a
+long name. Through 2.0.0, <code>unpack</code> skipped a record that it could not parse, and wrote the
+entry anyway.</p>
+<p>Now <code>unpack</code> refuses a layer with a malformed PAX record, and exits <code>1</code>. It refuses the layer
+before it writes any file from it, and the error names the entry. Docker's tar reader refuses
+such a record too, so no working image has one.</p>
 <h2 id="tolerances-ending-in-20">Tolerances ending in 2.0<a class="headerlink" href="#tolerances-ending-in-20" title="Permanent link">&para;</a></h2>
 <p>No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list
 <a href="#removed-in-200">Removed in 2.0.0</a> names each one.</p>
@@ -1258,7 +1378,7 @@ directory name in the search path and do not use the token:</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.top", "navigation.sections", "navigation.tracking", "toc.follow", "content.code.copy", "search.suggest", "search.highlight"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
+      <script src="../assets/javascripts/bundle.a5f9d56c.min.js"></script>
       
     
   </body>
