@@ -126,6 +126,16 @@ Now `unpack` refuses a layer with a malformed PAX record, and exits `1`. It refu
 before it writes any file from it, and the error names the entry. Docker's tar reader refuses
 such a record too, so no working image has one.
 
+### An image whose layers decompress past 16 GiB in all
+
+Each layer stops at 2 GiB once decompressed, but a manifest can list the same layer many
+times. Through 2.0.1, one small gzip layer listed N times decompressed N times, and `unpack`
+wrote up to N times 2 GiB to the target.
+
+Now `unpack` refuses an image whose layers hold more than 16 GiB in all once decompressed, and
+exits `1`. A layer listed twice counts twice, and an uncompressed layer counts at its own size.
+The error names the limit. The layers before the one that crosses it are already applied.
+
 ## Tolerances ending in 2.0
 
 No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list

@@ -27,6 +27,11 @@ const MAX_LAYER_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 // decompresses to (stored deflate blocks add 5 bytes per 64 KiB), so leave 2 MiB of room.
 const MAX_ENTRY_BYTES: u64 = MAX_LAYER_BYTES + (MAX_LAYER_BYTES >> 10);
 
+// The most all of an image's layers may hold together once decompressed. Each layer stops at
+// MAX_LAYER_BYTES, but a manifest can list one small gzip bomb many times, and each listing
+// inflates again and is written to the target.
+const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
 // The most a pipe may yield in all. A pipe reports no length to bound the entries by, and every
 // blob is held in memory.
 const MAX_PIPE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
@@ -39,6 +44,12 @@ const TAR_ERR_MAX: usize = 64 * 1024;
 
 /// Extract the OCI archive at `archive` into `dest`, applying every layer in order.
 pub fn run(archive: &Path, dest: &Path) -> Result<UnpackReport> {
+    run_within(archive, dest, MAX_TOTAL_BYTES)
+}
+
+// As `run`, with `total` as the most all layers may hold once decompressed, so a test can reach
+// the limit without 16 GiB of layers.
+fn run_within(archive: &Path, dest: &Path, total: u64) -> Result<UnpackReport> {
     let (blobs, index) = read_archive(archive)?;
 
     let manifest_digest = strip_sha256(
@@ -59,6 +70,7 @@ pub fn run(archive: &Path, dest: &Path) -> Result<UnpackReport> {
     std::fs::create_dir_all(dest).with_context(|| format!("creating {}", dest.display()))?;
     let mut files = 0usize;
     let mut applied = Applied::default();
+    let mut left = total;
     for layer in layers {
         let digest = strip_sha256(
             layer["digest"]
@@ -67,14 +79,23 @@ pub fn run(archive: &Path, dest: &Path) -> Result<UnpackReport> {
         )?;
         let media = layer["mediaType"].as_str().unwrap_or_default();
         let bytes = blob(&blobs, digest)?;
-        if media.ends_with("gzip") {
-            files += apply_layer(&gunzip(bytes)?, dest, &mut applied)?;
+        let tar = if media.ends_with("gzip") {
+            std::borrow::Cow::Owned(gunzip(bytes, left)?)
         } else if media.ends_with("tar") {
             // Uncompressed: hand the blob straight through, no second copy.
-            files += apply_layer(bytes, dest, &mut applied)?;
+            std::borrow::Cow::Borrowed(bytes)
         } else {
             bail!("unsupported layer media type: {}", shown(media, SHOWN_MAX));
-        }
+        };
+        // An uncompressed layer counts too: listed again, it is written again.
+        left = left.checked_sub(tar.len() as u64).with_context(|| {
+            format!(
+                "the image's layers decompress past {total} bytes ({}) in all; refusing \
+                 (possible decompression bomb)",
+                gib(total)
+            )
+        })?;
+        files += apply_layer(&tar, dest, &mut applied)?;
     }
     let dest_canon =
         std::fs::canonicalize(dest).with_context(|| format!("resolving {}", dest.display()))?;
@@ -1003,17 +1024,23 @@ impl std::fmt::Write for Head {
 // Decompress a gzip layer, refusing one that expands past the cap (decompression bomb).
 // Every member is read, as Go's `gzip.Reader` (and so Docker) reads them: a first-member-only
 // read let a second member carry files the runtime installs and the audit never saw. Bytes
-// after the last member that are not another gzip header fail, as they do in Go.
-fn gunzip(data: &[u8]) -> Result<Vec<u8>> {
+// after the last member that are not another gzip header fail, as they do in Go. `left` is what
+// the total budget still allows: decoding stops one byte past it, and the caller refuses.
+fn gunzip(data: &[u8], left: u64) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     flate2::read::MultiGzDecoder::new(data)
-        .take(MAX_LAYER_BYTES + 1)
+        .take(MAX_LAYER_BYTES.min(left) + 1)
         .read_to_end(&mut out)
         .context("decompressing layer")?;
     if out.len() as u64 > MAX_LAYER_BYTES {
         bail!("layer decompresses past {MAX_LAYER_BYTES} bytes; refusing (possible decompression bomb)");
     }
     Ok(out)
+}
+
+// A byte count as GiB, for an error that names a limit.
+fn gib(bytes: u64) -> String {
+    format!("{} GiB", bytes >> 30)
 }
 
 #[cfg(test)]
@@ -2470,6 +2497,60 @@ mod tests {
         let report = run(&archive, &dest).unwrap();
         assert_eq!(report.files, 2);
         assert_eq!(std::fs::read(dest.join("b")).unwrap(), b"second");
+    }
+
+    // An archive whose manifest lists the one blob `times` times, as layers of `media`.
+    fn archive_listing_one_layer(dir: &Path, media: &str, blob: &[u8], times: usize) -> PathBuf {
+        let layer = serde_json::json!({
+            "mediaType": media,
+            "digest": format!("sha256:{}", hex(Sha256::digest(blob))),
+        });
+        let manifest = serde_json::json!({ "layers": vec![layer; times] });
+        archive_of(dir, &manifest, &[blob])
+    }
+
+    #[test]
+    fn one_gzip_layer_listed_many_times_stops_at_the_total_budget() {
+        // TASK-237. Each listing of the same gzip layer inflates again, so the total, not the
+        // layer cap, bounds it. 100 KiB of zeros compresses to about 100 bytes.
+        let tmp = tempfile::tempdir().unwrap();
+        let tar = tar_of(&[("z", &vec![0u8; 100 * 1024])]);
+        let len = tar.len() as u64;
+        let blob = gzip_of(&tar);
+        assert!(blob.len() * 50 < tar.len(), "{} bytes", blob.len());
+        let archive = archive_listing_one_layer(tmp.path(), GZIP_LAYER, &blob, 4);
+
+        // Room for exactly three listings: each one is counted again.
+        let err = run_within(&archive, &tmp.path().join("out"), 3 * len).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(&format!("decompress past {} bytes", 3 * len)) && msg.contains("in all"),
+            "{msg}"
+        );
+        // With room for all four, it unpacks.
+        let report = run_within(&archive, &tmp.path().join("ok"), 4 * len).unwrap();
+        assert_eq!((report.layers, report.files), (4, 4));
+    }
+
+    #[test]
+    fn an_uncompressed_layer_counts_toward_the_total_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tar = tar_of(&[("a", b"x")]);
+        let len = tar.len() as u64;
+        let archive = archive_listing_one_layer(tmp.path(), TAR, &tar, 2);
+        let err = run_within(&archive, &tmp.path().join("out"), 2 * len - 1).unwrap_err();
+        assert!(format!("{err:#}").contains("in all"), "{err:#}");
+        assert_eq!(
+            run_within(&archive, &tmp.path().join("ok"), 2 * len)
+                .unwrap()
+                .layers,
+            2
+        );
+    }
+
+    #[test]
+    fn the_total_budget_error_names_the_real_limit() {
+        assert_eq!(gib(MAX_TOTAL_BYTES), "16 GiB");
     }
 
     #[test]
