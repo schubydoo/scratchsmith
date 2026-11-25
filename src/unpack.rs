@@ -196,24 +196,6 @@ fn read_bounded(
     Ok(buf)
 }
 
-// Apply one layer's tar into `dest`: first honor its whiteouts (deletions of lower layers),
-// then extract its real files. Both paths refuse anything that escapes `dest`.
-// An entry path as the image path it names: `./usr/bin/x` and `usr/bin/x` are both `/usr/bin/x`.
-// `..` pops, as the extractor resolves it, so `usr/../etc/su` is `/etc/su`.
-fn image_path(entry: &Path) -> PathBuf {
-    let mut out = PathBuf::from("/");
-    for c in entry.components() {
-        match c {
-            std::path::Component::Normal(n) => out.push(n),
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
 /// Archive text for a line `unpack`'s caller prints: escaped, bounded and quoted, as this
 /// module's own errors show it.
 pub(crate) fn shown_archive_text(text: &str) -> String {
@@ -262,6 +244,8 @@ fn forget_under(applied: &mut Applied, path: &Path, keep_self: bool) {
     }
 }
 
+// Apply one layer's tar into `dest`: first honor its whiteouts (deletions of lower layers),
+// then extract its real files. Both paths refuse anything that escapes `dest`.
 fn apply_layer(tar_bytes: &[u8], dest: &Path, applied: &mut Applied) -> Result<usize> {
     let dest_canon =
         std::fs::canonicalize(dest).with_context(|| format!("resolving {}", dest.display()))?;
@@ -303,30 +287,54 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path, applied: &mut Applied) -> Result<u
         {
             continue;
         }
+        // Read the path as tar does: leading `/` and `.` parts drop, and a `..` part is refused
+        // loudly, since a silently-dropped entry ships a rootfs that does not match the image.
+        let mut rel = PathBuf::new();
+        for part in path.components() {
+            match part {
+                Component::Normal(n) => rel.push(n),
+                Component::ParentDir => bail!(
+                    "refusing to extract an entry that escapes the target: {}",
+                    shown(path.display(), SHOWN_MAX)
+                ),
+                _ => {}
+            }
+        }
+        // Only `/` or `.`: that names `dest` itself, which tar leaves alone.
+        let Some(name) = rel.file_name().map(OsStr::to_os_string) else {
+            count += 1;
+            continue;
+        };
+        // The parent is walked inside the image, as the runtime and the whiteouts see it, so
+        // Debian's `var/run -> /run` lands under `dest/run`. tar resolved it on the host.
+        let parent_rel = rel.parent().unwrap_or(Path::new(""));
+        let (parent, parent_image) = make_dir_in_root(&dest_canon, parent_rel)
+            .with_context(|| format!("extracting {}", shown(path.display(), SHOWN_MAX)))?;
+        let image = parent_image.join(&name);
+        let kind = e.header().entry_type();
         replace_existing(
-            &dest_canon,
-            dest,
-            &path,
-            e.header().entry_type().is_dir(),
+            &parent,
+            &dest.join(parent_rel),
+            &name,
+            &image,
+            kind.is_dir(),
             applied,
         )?;
-        // `unpack_in` returns Ok(false) when it refuses a path that escapes `dest`. Fail
-        // loudly: a silently-dropped entry ships a rootfs that does not match the image.
         // The mask clears the bits on disk; remember where, so the report can say so.
-        let image = image_path(&path);
         if e.header().mode().is_ok_and(|m| m & 0o6000 != 0) {
-            applied.setid.insert(image);
+            applied.setid.insert(image.clone());
         } else {
             applied.setid.remove(&image);
         }
-        if !e.unpack_in(dest).map_err(escape_tar_err)? {
-            bail!(
-                "refusing to extract an entry that escapes the target: {}",
-                shown(path.display(), SHOWN_MAX)
-            );
+        if kind.is_hard_link() {
+            hard_link_in_root(&dest_canon, &mut e, &path, &parent, &name)?;
+        } else {
+            // The walk left no symlink in this path, so tar writes where the image means.
+            let target = dest_canon.join(image.strip_prefix("/").unwrap_or(&image));
+            e.unpack(&target).map_err(escape_tar_err)?;
         }
-        if e.header().entry_type().is_dir() {
-            hold_dir_mode(&dest_canon, &path, e.header().mode()?, applied)?;
+        if kind.is_dir() {
+            hold_dir_mode(&parent, &name, &image, e.header().mode()?, applied)?;
         }
         count += 1;
     }
@@ -440,26 +448,17 @@ fn apply_whiteout(
 // directory, and anything else replaces what is there. tar replaces only a regular file (a
 // hard link, a symlink over a directory, a type change all fail), so remove the rest here,
 // through the opened parent as a whiteout does, so no path is resolved twice.
+// `dir` is the entry's parent, `shown_dir` names it in messages, and `image` is the entry.
 fn replace_existing(
-    dest_canon: &Path,
-    dest: &Path,
-    path: &Path,
+    dir: &OwnedFd,
+    shown_dir: &Path,
+    name: &OsStr,
+    image: &Path,
     entry_is_dir: bool,
     applied: &mut Applied,
 ) -> Result<()> {
     use rustix::fs::{AtFlags, FileType};
-    let Some(name) = path.file_name() else {
-        return Ok(());
-    };
-    let parent = path.parent().unwrap_or(Path::new(""));
-    // `None` is a `..` or an absolute entry path, which `unpack_in` handles as before.
-    let Some(shown_dir) = safe_join(dest, parent) else {
-        return Ok(());
-    };
-    let Some((dir, image)) = open_dir_in_root(dest_canon, parent)? else {
-        return Ok(()); // nothing exists at that path yet
-    };
-    let stat = match rustix::fs::statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+    let stat = match rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW) {
         Ok(stat) => stat,
         Err(rustix::io::Errno::NOENT) => return Ok(()),
         Err(e) => {
@@ -472,38 +471,78 @@ fn replace_existing(
     if was_dir && entry_is_dir {
         return Ok(());
     }
-    remove_at(&dir, name, &shown_dir)?;
+    remove_at(dir, name, shown_dir)?;
     // The caller sets the path's own setid record next, so dropping it here costs nothing.
     if was_dir {
-        forget_under(applied, &image.join(name), false);
+        forget_under(applied, image, false);
     }
     Ok(())
+}
+
+// A hard link's target is walked inside the image too, and the link is made between the two
+// opened parents. linkat never follows a symlink, as link(2) does not.
+fn hard_link_in_root<R: Read>(
+    dest_canon: &Path,
+    e: &mut tar::Entry<'_, R>,
+    path: &Path,
+    parent: &OwnedFd,
+    name: &OsStr,
+) -> Result<()> {
+    use rustix::fs::AtFlags;
+    let Some(src) = e.link_name().map_err(escape_tar_err)? else {
+        bail!(
+            "hard link {} has no target",
+            shown(path.display(), SHOWN_MAX)
+        );
+    };
+    let shown_src = || shown(src.display(), SHOWN_MAX);
+    // tar refused a target outside `dest`. A `..` that pops past the image root still fails,
+    // in the link name and in a symlink on the way, as it does for an entry.
+    let mut rel = PathBuf::new();
+    for part in src.components() {
+        match part {
+            Component::Normal(n) => rel.push(n),
+            Component::ParentDir if !rel.pop() => {
+                bail!("refusing a hard link to {} outside the target", shown_src())
+            }
+            _ => {}
+        }
+    }
+    let Some(src_name) = rel.file_name() else {
+        bail!("refusing a hard link to {}, the target itself", shown_src());
+    };
+    let src_parent = rel.parent().unwrap_or(Path::new(""));
+    let Some((src_dir, _)) = walk_in_root(dest_canon, src_parent, Walk::Strict)? else {
+        bail!("hard link target {} does not exist", shown_src());
+    };
+    rustix::fs::linkat(&src_dir, src_name, parent, name, AtFlags::empty()).with_context(|| {
+        format!(
+            "hard linking {} to {}",
+            shown_src(),
+            shown(path.display(), SHOWN_MAX)
+        )
+    })
 }
 
 // tar has just set the directory `path` to the mode its entry names. When that mode lacks
 // owner rwx, a user who is not root could not write the entries that follow, so record the
 // mode for `restore_dir_modes` and open the directory up to its owner until then.
-fn hold_dir_mode(dest_canon: &Path, path: &Path, mode: u32, applied: &mut Applied) -> Result<()> {
+fn hold_dir_mode(
+    parent: &OwnedFd,
+    name: &OsStr,
+    image: &Path,
+    mode: u32,
+    applied: &mut Applied,
+) -> Result<()> {
     let wanted = mode & 0o7777 & !0o6000;
-    if wanted & 0o700 == 0o700 && applied.dir_modes.is_empty() {
-        return Ok(());
-    }
-    // An entry of only `/` or `.` names `dest` itself, which tar leaves alone.
-    let Some(name) = path.file_name() else {
-        return Ok(());
-    };
-    let opening = || format!("opening {}", shown(path.display(), SHOWN_MAX));
-    // tar created the directory, so a parent that is absent now is a broken walk, not a skip.
-    let (parent, at) = open_dir_in_root(dest_canon, path.parent().unwrap_or(Path::new("")))?
-        .with_context(opening)?;
-    let image = at.join(name);
     if wanted & 0o700 == 0o700 {
-        applied.dir_modes.remove(&image);
+        applied.dir_modes.remove(image);
         return Ok(());
     }
-    let fd = open_dir_handle(&parent, name).with_context(opening)?;
-    chmod_fd(&fd, wanted | 0o700, path)?;
-    applied.dir_modes.insert(image, wanted);
+    let fd = open_dir_handle(parent, name)
+        .with_context(|| format!("opening {}", shown(image.display(), SHOWN_MAX)))?;
+    chmod_fd(&fd, wanted | 0o700, image)?;
+    applied.dir_modes.insert(image.to_path_buf(), wanted);
     Ok(())
 }
 
@@ -586,6 +625,35 @@ fn safe_join(dest: &Path, rel: &Path) -> Option<PathBuf> {
 // search permission, as `canonicalize` did. Returns the directory and its path in the image;
 // `None` means absent, not a directory, or a symlink loop.
 fn open_dir_in_root(root: &Path, rel: &Path) -> Result<Option<(OwnedFd, PathBuf)>> {
+    walk_in_root(root, rel, Walk::Lookup)
+}
+
+// The same walk for extraction: a missing directory is made, as tar made it, and what the
+// whiteout walk answers with `None` fails instead. A symlink whose `..` would climb above the
+// image root fails too, so a link that leaves the image is refused as tar refused it.
+fn make_dir_in_root(root: &Path, rel: &Path) -> Result<(OwnedFd, PathBuf)> {
+    walk_in_root(root, rel, Walk::Make)?.with_context(|| {
+        format!(
+            "{} is not a directory in the image",
+            shown(rel.display(), SHOWN_MAX)
+        )
+    })
+}
+
+// How `walk_in_root` treats what it meets. `Lookup` answers `None` for an absent part, a part
+// that is not a directory or a symlink loop, and keeps a `..` above the root at the root, as a
+// whiteout is read. `Strict` refuses that `..` and a loop instead, for an extracted path.
+// `Make` is `Strict` that also makes a missing directory.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Walk {
+    Lookup,
+    Strict,
+    Make,
+}
+
+fn walk_in_root(root: &Path, rel: &Path, mode: Walk) -> Result<Option<(OwnedFd, PathBuf)>> {
+    let make = mode == Walk::Make;
+    let strict = mode != Walk::Lookup;
     use rustix::fs::{FileType, Mode, OFlags};
     use rustix::io::Errno;
     // The loader's limit on symlinks in one path (MAXSYMLINKS).
@@ -615,13 +683,25 @@ fn open_dir_in_root(root: &Path, rel: &Path) -> Result<Option<(OwnedFd, PathBuf)
             continue;
         }
         if name == ".." {
-            chain.pop();
+            if chain.pop().is_none() && strict {
+                bail!(
+                    "refusing to extract through a symlink that leaves the target: {}",
+                    shown(rel.display(), SHOWN_MAX)
+                );
+            }
             continue;
         }
         let last = pending.is_empty() && rest.as_path().as_os_str().is_empty();
         let cur = chain.last().map_or(root_fd.as_fd(), |(fd, _)| fd.as_fd());
         let fd = match open_path(cur, &name) {
             Ok(fd) => fd,
+            Err(Errno::NOENT) if make => {
+                match rustix::fs::mkdirat(cur, &name, Mode::from_raw_mode(0o777)) {
+                    Ok(()) | Err(Errno::EXIST) => {}
+                    Err(e) => return Err(e).with_context(opening),
+                }
+                open_path(cur, &name).with_context(opening)?
+            }
             Err(Errno::NOENT) => return Ok(None),
             Err(e) => return Err(e).with_context(opening),
         };
@@ -630,6 +710,12 @@ fn open_dir_in_root(root: &Path, rel: &Path) -> Result<Option<(OwnedFd, PathBuf)
             FileType::Directory => chain.push((fd, name)),
             FileType::Symlink => {
                 links += 1;
+                if links > MAX_LINKS && strict {
+                    bail!(
+                        "too many levels of symlinks in the image resolving {}",
+                        shown(rel.display(), SHOWN_MAX)
+                    );
+                }
                 if links > MAX_LINKS {
                     return Ok(None);
                 }
@@ -961,10 +1047,6 @@ mod tests {
             &mut applied,
         )
         .unwrap();
-        // `..` is folded the way the extractor resolves it (tar's builder refuses to write one).
-        assert_eq!(image_path(Path::new("usr/../etc/su")), Path::new("/etc/su"));
-        assert_eq!(image_path(Path::new("./a/../../b")), Path::new("/b"));
-
         // A bare marker names the root, and an opaque marker on a missing directory has
         // nothing to clear: the extractor deletes nothing, so the record keeps both paths.
         apply_layer(
@@ -1163,6 +1245,129 @@ mod tests {
         apply_layer(&tar_of(&[("d", b"file")]), &dest, &mut applied).unwrap();
         assert!(applied.setid.is_empty(), "{:?}", applied.setid);
         assert!(applied.dir_modes.is_empty(), "{:?}", applied.dir_modes);
+    }
+
+    #[test]
+    fn a_file_under_an_absolute_symlink_lands_inside_the_image() {
+        // Debian's `var/run -> /run`: the runtime reads it with the image as `/`.
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let first = tar_of_links(&[("var/run", tar::EntryType::Symlink, "/run")]);
+        apply_layer(&first, &dest, &mut Default::default()).unwrap();
+        let second = tar_of(&[("var/run/app.pid", b"1")]);
+        apply_layer(&second, &dest, &mut Default::default()).unwrap();
+        assert_eq!(std::fs::read(dest.join("run/app.pid")).unwrap(), b"1");
+        let link = std::fs::symlink_metadata(dest.join("var/run")).unwrap();
+        assert!(link.file_type().is_symlink());
+    }
+
+    #[test]
+    fn an_absolute_symlink_to_a_host_path_stays_inside_the_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let outside = tmp.path().join("victim");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, dest.join("etc")).unwrap();
+        apply_layer(
+            &tar_of(&[("etc/planted", b"p")]),
+            &dest,
+            &mut Default::default(),
+        )
+        .unwrap();
+        assert!(!outside.join("planted").exists());
+        let inside = dest
+            .join(outside.strip_prefix("/").unwrap())
+            .join("planted");
+        assert!(inside.is_file(), "{}", inside.display());
+    }
+
+    #[test]
+    fn a_symlink_that_climbs_above_the_root_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(dest.join("a")).unwrap();
+        std::os::unix::fs::symlink("../..", dest.join("a/up")).unwrap();
+        let err =
+            apply_layer(&tar_of(&[("a/up/x", b"x")]), &dest, &mut Default::default()).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("symlink that leaves the target"),
+            "{err:#}"
+        );
+        assert!(!tmp.path().join("x").exists());
+    }
+
+    #[test]
+    fn a_hard_link_reaches_its_target_through_an_image_symlink() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let first = tar_of_links(&[("var/run", tar::EntryType::Symlink, "/run")]);
+        apply_layer(&first, &dest, &mut Default::default()).unwrap();
+        apply_layer(&tar_of(&[("run/a", b"a")]), &dest, &mut Default::default()).unwrap();
+        let link = tar_of_links(&[("b", tar::EntryType::Link, "var/run/a")]);
+        apply_layer(&link, &dest, &mut Default::default()).unwrap();
+        let (a, b) = (
+            std::fs::metadata(dest.join("run/a")).unwrap(),
+            std::fs::metadata(dest.join("b")).unwrap(),
+        );
+        assert_eq!(a.ino(), b.ino());
+    }
+
+    #[test]
+    fn a_hard_link_through_a_symlink_above_the_root_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(dest.join("a")).unwrap();
+        std::fs::write(dest.join("secret"), b"s").unwrap();
+        std::os::unix::fs::symlink("../..", dest.join("a/up")).unwrap();
+        let link = tar_of_links(&[("b", tar::EntryType::Link, "a/up/secret")]);
+        let err = apply_layer(&link, &dest, &mut Default::default()).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("symlink that leaves the target"),
+            "{err:#}"
+        );
+        assert!(!dest.join("b").exists());
+    }
+
+    #[test]
+    fn a_symlink_loop_on_the_way_is_named_as_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::os::unix::fs::symlink("l2", dest.join("l1")).unwrap();
+        std::os::unix::fs::symlink("l1", dest.join("l2")).unwrap();
+        let err =
+            apply_layer(&tar_of(&[("l1/x", b"x")]), &dest, &mut Default::default()).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("too many levels of symlinks"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn a_hard_link_above_the_root_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(tmp.path().join("secret"), b"s").unwrap();
+        // A raw header: tar's builder refuses a `..` link name itself.
+        let mut h = tar::Header::new_gnu();
+        h.set_path("b").unwrap();
+        h.set_entry_type(tar::EntryType::Link);
+        let target = b"../secret";
+        h.as_gnu_mut().unwrap().linkname[..target.len()].copy_from_slice(target);
+        h.set_size(0);
+        h.set_mode(0o644);
+        h.set_cksum();
+        let mut ar = tar::Builder::new(Vec::new());
+        ar.append(&h, &b""[..]).unwrap();
+        let layer = ar.into_inner().unwrap();
+        let err = apply_layer(&layer, &dest, &mut Default::default()).unwrap_err();
+        assert!(format!("{err:#}").contains("outside the target"), "{err:#}");
+        assert!(!dest.join("b").exists());
     }
 
     #[test]
