@@ -316,10 +316,27 @@ fn run_tool_within(
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            bail!(
+            let mut msg = format!(
                 "{tool} did not finish within {}, so scratchsmith stopped it",
                 limit_text(limit)
             );
+            // What the tool printed before it stalled is the best clue to why. The killed tool
+            // closed its end of the pipe, but a child of its own may still hold it, so wait
+            // only briefly for the drain.
+            let give_up = Instant::now() + Duration::from_secs(1);
+            while !stderr.is_finished() && Instant::now() < give_up {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if stderr.is_finished() {
+                let said = stderr.join().unwrap_or_default();
+                let said = String::from_utf8_lossy(&said);
+                let lines: Vec<&str> = said.trim().lines().collect();
+                let tail = lines[lines.len().saturating_sub(TIMEOUT_TAIL_LINES)..].join("\n");
+                if !tail.is_empty() {
+                    msg = format!("{msg}; its last messages:\n{tail}");
+                }
+            }
+            bail!(msg);
         }
         std::thread::sleep(Duration::from_millis(50));
     };
@@ -333,6 +350,9 @@ fn run_tool_within(
     }
     Ok(stdout)
 }
+
+// How much of a stopped tool's stderr goes into the error.
+const TIMEOUT_TAIL_LINES: usize = 10;
 
 fn limit_text(limit: Duration) -> String {
     let secs = limit.as_secs();
@@ -488,6 +508,52 @@ mod tests {
         assert_eq!(
             err,
             "sleep did not finish within 1 second, so scratchsmith stopped it"
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_stopped_tool_s_last_messages_are_in_the_error() {
+        // `exec` so the stalled process is the one that is killed, and it holds the only copy
+        // of the stderr pipe. 12 lines, so the first two fall outside the tail.
+        let script =
+            "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do echo line $i >&2; done; exec sleep 30";
+        let err = run_tool_within(
+            "sh",
+            &["-c".into(), script.into()],
+            "hint",
+            Io::Captured,
+            Duration::from_secs(1),
+        )
+        .unwrap_err()
+        .to_string();
+        let tail: Vec<String> = (3..=12).map(|i| format!("line {i}")).collect();
+        assert_eq!(
+            err,
+            format!(
+                "sh did not finish within 1 second, so scratchsmith stopped it; its last \
+                 messages:\n{}",
+                tail.join("\n")
+            )
+        );
+    }
+
+    #[test]
+    fn a_child_holding_the_pipe_does_not_hold_up_the_error() {
+        // Without `exec`, `sleep` is a child of the killed shell and keeps stderr open.
+        let started = Instant::now();
+        let err = run_tool_within(
+            "sh",
+            &["-c".into(), "echo early >&2; sleep 30; true".into()],
+            "hint",
+            Io::Captured,
+            Duration::from_secs(1),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.starts_with("sh did not finish within 1 second"),
+            "{err}"
         );
         assert!(started.elapsed() < Duration::from_secs(10));
     }

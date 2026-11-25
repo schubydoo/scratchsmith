@@ -86,7 +86,7 @@ exits with an error passes, unless the code is 126 or 127, which shells use for 
 that could not run. A binary still running after 15 seconds counts as started, and its
 container is removed.
 
-Each tool that scratchsmith runs has a time limit: syft 15 minutes, grype 30 minutes, and cosign
+syft, grype and cosign each have a time limit: syft 15 minutes, grype 30 minutes, and cosign
 10 minutes. A run past its limit is stopped, and the pack fails with an error that names the tool
 and the limit. grype's limit leaves room for its first run, which downloads its vulnerability
 database.
