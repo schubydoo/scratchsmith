@@ -61,14 +61,19 @@ fn syft_args(rootfs: &Path, format: SbomFormat, out: &Path) -> Vec<String> {
     ]
 }
 
+const COSIGN_HINT: &str = "install cosign: https://github.com/sigstore/cosign";
+
+/// Check that cosign runs. `--sign` calls it before the push, since a signing that fails
+/// after the push leaves a public image that is not signed.
+pub fn check_cosign() -> Result<()> {
+    run_tool("cosign", &["version".into()], COSIGN_HINT)
+        .context("--sign needs cosign, so nothing was pushed")
+}
+
 /// Keyless-sign an image (by registry reference) with cosign. Signs a pushed image by
 /// digest, so `pack --push --sign` drives it.
 pub fn cosign_sign(image_ref: &str) -> Result<()> {
-    run_tool(
-        "cosign",
-        &cosign_sign_args(image_ref),
-        "install cosign: https://github.com/sigstore/cosign",
-    )
+    run_tool("cosign", &cosign_sign_args(image_ref), COSIGN_HINT)
 }
 
 fn cosign_sign_args(image_ref: &str) -> Vec<String> {
@@ -80,7 +85,7 @@ pub fn cosign_attest(image_ref: &str, sbom: &Path, predicate_type: &str) -> Resu
     run_tool(
         "cosign",
         &cosign_attest_args(image_ref, sbom, predicate_type),
-        "install cosign: https://github.com/sigstore/cosign",
+        COSIGN_HINT,
     )
 }
 

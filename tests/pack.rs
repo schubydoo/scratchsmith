@@ -1210,6 +1210,137 @@ fn signing_path(dir: &Path) -> std::ffi::OsString {
     )
 }
 
+// A mock registry for repository `app` that accepts any blob and manifest, so a push
+// succeeds with no Docker daemon. A manifest PUT answers with its own digest.
+fn mock_registry() -> (tokio::runtime::Runtime, wiremock::MockServer) {
+    use sha2::Digest;
+    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::{Mock, ResponseTemplate};
+    // wiremock serves from a thread of its own, so the CLI child process reaches it while
+    // this runtime sits idle.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let server = rt.block_on(async {
+        let server = wiremock::MockServer::start().await;
+        let upload = |status| ResponseTemplate::new(status).insert_header("Location", "/upload");
+        for (verb, at, status) in [
+            ("POST", "/v2/app/blobs/uploads/", 202),
+            ("PATCH", "/upload", 202),
+            ("PUT", "/upload", 201),
+        ] {
+            Mock::given(method(verb))
+                .and(path(at))
+                .respond_with(upload(status))
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("PUT"))
+            .and(path_regex("^/v2/app/manifests/"))
+            .respond_with(|req: &wiremock::Request| {
+                let hex: String = sha2::Sha256::digest(&req.body)
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                let digest = format!("sha256:{hex}");
+                ResponseTemplate::new(201)
+                    .insert_header("Location", format!("/v2/app/manifests/{digest}").as_str())
+            })
+            .mount(&server)
+            .await;
+        server
+    });
+    (rt, server)
+}
+
+fn received(rt: &tokio::runtime::Runtime, server: &wiremock::MockServer) -> usize {
+    rt.block_on(server.received_requests()).unwrap().len()
+}
+
+#[test]
+fn a_missing_cosign_fails_sign_before_anything_is_pushed() {
+    // TASK-232. A PATH with no cosign, and a registry that records every request.
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let (rt, server) = mock_registry();
+    let host = server.address().to_string();
+    let tmp = tempfile::tempdir().unwrap();
+    let empty = tmp.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    let pack = [
+        "pack",
+        "--push",
+        &format!("{host}/app:1"),
+        "--sign",
+        bin.to_str().unwrap(),
+    ];
+    let index = [
+        "index",
+        "--sign",
+        &format!("{host}/app:multi"),
+        &format!("{host}/app:1"),
+    ];
+    for args in [&pack[..], &index[..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(args)
+            .env("PATH", &empty)
+            .env("HOME", tmp.path())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains("--sign needs cosign, so nothing was pushed")
+                && stderr.contains("cosign not found"),
+            "{args:?}: {stderr}"
+        );
+        assert_eq!(received(&rt, &server), 0, "{args:?} reached the registry");
+    }
+}
+
+#[test]
+fn a_signing_that_fails_after_the_push_says_the_image_is_not_signed() {
+    // TASK-232. cosign answers `version`, then fails to sign the pushed image.
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let (rt, server) = mock_registry();
+    let host = server.address().to_string();
+    let tmp = tempfile::tempdir().unwrap();
+    let tools = fake_tools(
+        tmp.path(),
+        &[(
+            "cosign",
+            r#"[ "$1" = version ] && exit 0; echo "no OIDC token" >&2; exit 1"#,
+        )],
+    );
+    let reference = format!("{host}/app:1");
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["pack", "--packages", "none", "--push"])
+        .arg(&reference)
+        .arg("--sign")
+        .arg(bin)
+        .env("PATH", tools)
+        .env("HOME", tmp.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(&format!("{reference} was pushed, but it is not signed"))
+            && stderr.contains("cosign failed: no OIDC token"),
+        "{stderr}"
+    );
+    assert!(
+        received(&rt, &server) > 0,
+        "the push never reached the registry"
+    );
+}
+
 // The digest the registry serves for `repo:tag`, read with a plain HTTP HEAD, so the test
 // runs the image the push stored and not whatever the daemon holds under that tag.
 fn registry_digest(port: u16, repo: &str, tag: &str) -> String {
@@ -1351,7 +1482,7 @@ fn push_to_local_registry_is_pullable_and_runnable() {
     assert_eq!(
         std::fs::read_to_string(&log).unwrap(),
         format!(
-            "sign --yes {by_digest}\nattest --yes --type cyclonedx --predicate {} {by_digest}\n",
+            "version\nsign --yes {by_digest}\nattest --yes --type cyclonedx --predicate {} {by_digest}\n",
             sbom.display()
         )
     );
@@ -1539,7 +1670,7 @@ fn index_assembles_a_pushed_image_into_an_index() {
     assert_eq!(report["signed"], by_digest.as_str(), "{report}");
     assert_eq!(
         std::fs::read_to_string(&log).unwrap(),
-        format!("sign --yes {by_digest}\n")
+        format!("version\nsign --yes {by_digest}\n")
     );
 
     // Passing an index as a source is rejected — the pushed `:multi` is an index, so feeding

@@ -7,7 +7,7 @@ use crate::report::{PackReport, Timings};
 use crate::resolver::{self, Sysroot};
 use crate::stager::{self, AddFile, NssSelection, RuntimeExtras, SizeReport, StagedTree};
 use crate::supplychain::{self, SbomRequest, ScanRequest, ScanSource, ScanSummary};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -929,13 +929,18 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackRep
         bail!(crate::cli::UsageError("--smoke needs a running image, so it isn't supported with --push; pull the pushed image and run it separately, or drop --smoke".into()));
     }
     let mut s = stage_for_image(binary, opts)?;
+    // After staging, so a bad binary or option is reported first; before the push, which
+    // would make the image public.
+    if opts.sign {
+        supplychain::check_cosign()?;
+    }
     // The push returns the pushed image's digest when the registry reports one; a plain push
     // never fails on a missing or mismatched digest — only signing, which needs it, does.
     let (digest_ref, ms) = timed(|| crate::registry::push_to_registry(&s.tree, reference, &s.cfg))?;
     s.clock.timings.deliver_ms = Some(ms);
     let signed = if opts.sign {
-        let dref = digest_ref.for_signing("image")?;
-        let (signed, ms) = timed(|| sign_pushed(&dref, opts))?;
+        let (signed, ms) = timed(|| sign_pushed(&digest_ref.for_signing()?, opts))
+            .with_context(|| format!("{reference} was pushed, but it is not signed"))?;
         s.clock.timings.sign_ms = Some(ms);
         Some(signed)
     } else {

@@ -60,6 +60,11 @@ the SBOM as a signed attestation:
 scratchsmith pack --push ghcr.io/you/app:latest --sbom --sign ./app
 ```
 
+`--sign` checks that cosign runs before anything is pushed. It signs the digest of the manifest
+that scratchsmith sent, also when the registry's answer names no digest, and refuses one that
+names another digest. If signing fails after the push, the error says that the image was pushed
+but is not signed. `index --sign` works the same way.
+
 ## Supply-chain output, smoke-run, and size gates
 
 ```sh
