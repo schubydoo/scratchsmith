@@ -525,8 +525,22 @@ impl SmokeOutcome {
         matches!(self.code, Some(126) | Some(127))
             || self.stderr.contains("error while loading shared libraries")
             || self.stderr.contains("cannot open shared object file")
-            || self.stderr.contains("no such file or directory")
+            || self.stderr.lines().any(exec_not_found)
     }
+}
+
+// The runtime's own line for an entrypoint it could not exec, such as runc's
+// `exec /app: no such file or directory` or crun's `exec container process `/app`: No such
+// file or directory`. A missing PT_INTERP fails this way. The phrase alone is not enough: an
+// app that fails to open one of its own files prints it too.
+fn exec_not_found(line: &str) -> bool {
+    let line = line.to_ascii_lowercase();
+    line.find("no such file or directory").is_some_and(|at| {
+        let before = &line[..at];
+        ["exec ", "exec:", "exec container process"]
+            .iter()
+            .any(|word| before.starts_with(word) || before.contains(&format!(" {word}")))
+    })
 }
 
 /// Run the packed image once (`<runtime> run --rm <tag> <args>`) under a timeout, so a
@@ -538,16 +552,79 @@ pub fn smoke_run(
     args: &[&str],
     timeout_secs: u32,
 ) -> Result<SmokeOutcome> {
-    let out = Command::new("timeout")
-        .arg(timeout_secs.to_string())
-        .args([runtime.binary(), "run", "--rm", tag])
-        .args(args)
-        .output()
-        .with_context(|| format!("running {} run for the smoke test", runtime.binary()))?;
+    // A name, so the container can be removed at the limit. Signalling the CLI is not enough:
+    // it forwards SIGTERM to the container, and a PID 1 with no handler ignores it, so the
+    // CLI waits for good.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let name = format!("scratchsmith-smoke-{}-{nanos}", std::process::id());
+    let mut cmd = Command::new(runtime.binary());
+    cmd.args(["run", "--rm", "--name", &name, tag]).args(args);
+    let remove = || {
+        let _ = Command::new(runtime.binary())
+            .args(["rm", "-f", &name])
+            .output();
+    };
+    let limit = std::time::Duration::from_secs(timeout_secs.into());
+    run_bounded(cmd, limit, SMOKE_GRACE, remove)
+        .with_context(|| format!("running {} run for the smoke test", runtime.binary()))
+}
+
+// How long the CLI gets to exit once its container is removed, before it is killed.
+const SMOKE_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+// Run `cmd` to completion or until `limit`. At the limit, call `stop` and give the process
+// `grace` to exit, then kill it. A run stopped at the limit has no exit code.
+fn run_bounded(
+    mut cmd: Command,
+    limit: std::time::Duration,
+    grace: std::time::Duration,
+    stop: impl FnOnce(),
+) -> Result<SmokeOutcome> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // Drain both pipes on threads, so a chatty process cannot fill one and stall.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            String::from_utf8_lossy(&bytes).into_owned()
+        })
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as _));
+    let wait_until = |child: &mut std::process::Child, deadline: std::time::Instant| loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(Some(status)),
+            Ok(None) if std::time::Instant::now() >= deadline => return Ok(None),
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(e) => return Err(e),
+        }
+    };
+    let start = std::time::Instant::now();
+    let status = match wait_until(&mut child, start + limit)? {
+        Some(status) => status.code(),
+        None => {
+            stop();
+            if wait_until(&mut child, std::time::Instant::now() + grace)?.is_none() {
+                let _ = child.kill();
+                child.wait()?;
+            }
+            None
+        }
+    };
     Ok(SmokeOutcome {
-        code: out.status.code().filter(|&c| c != 124), // 124 = timeout killed it
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        code: status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
     })
 }
 
@@ -962,6 +1039,62 @@ mod tests {
             outcome(Some(1), "error while loading shared libraries: libz.so.1").loader_failed()
         );
         assert!(outcome(Some(126), "").loader_failed());
+    }
+
+    #[test]
+    fn a_runtime_that_cannot_exec_the_entrypoint_is_a_loader_failure() {
+        // A missing PT_INTERP: runc, crun (podman) and an older Docker daemon.
+        for line in [
+            "exec /app: no such file or directory",
+            "Error: crun: exec container process `/app`: No such file or directory: OCI runtime \
+             attempted to invoke a command that was not found",
+            "docker: Error response from daemon: failed to create task for container: \
+             unable to start container process: exec: \"/app\": stat /app: no such file or \
+             directory: unknown.",
+        ] {
+            assert!(outcome(Some(1), line).loader_failed(), "{line}");
+        }
+    }
+
+    #[test]
+    fn an_app_that_prints_the_phrase_is_not_a_loader_failure() {
+        // TASK-211: the app started and failed to open one of its own files.
+        for line in [
+            "open /data/config.yml: no such file or directory",
+            "error: /usr/libexec/helper: no such file or directory",
+            "executor: cache dir: No such file or directory",
+        ] {
+            assert!(!outcome(Some(1), line).loader_failed(), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_bounded_run_returns_the_exit_code_and_output() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo out; echo err >&2; exit 3"]);
+        let limit = std::time::Duration::from_secs(10);
+        let got = run_bounded(cmd, limit, limit, || panic!("not at the limit")).unwrap();
+        assert_eq!(got.code, Some(3));
+        assert_eq!(
+            (got.stdout.as_str(), got.stderr.as_str()),
+            ("out\n", "err\n")
+        );
+    }
+
+    #[test]
+    fn a_bounded_run_that_ignores_sigterm_ends_at_the_limit() {
+        // A PID 1 with no handler ignores SIGTERM. `stop` stands in for `rm -f` and does
+        // nothing here, so the grace runs out and the process is killed.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "trap '' TERM; exec sleep 30"]);
+        let short = std::time::Duration::from_millis(200);
+        let stopped = std::cell::Cell::new(false);
+        let start = std::time::Instant::now();
+        let got = run_bounded(cmd, short, short, || stopped.set(true)).unwrap();
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        assert!(stopped.get());
+        assert_eq!(got.code, None);
+        assert!(!got.loader_failed());
     }
 
     #[test]
