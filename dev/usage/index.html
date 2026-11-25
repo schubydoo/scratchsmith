@@ -1596,6 +1596,11 @@ before it writes any file from that layer.</p>
 image cannot then plant a setuid program owned by the user who unpacks it. <code>unpack</code> prints one
 warning line on standard error for each path in the final image that had one of those bits.
 The <code>stripped_setid</code> field of <code>--format json</code> lists the same paths.</p>
+<p><code>unpack</code> applies the mode of each directory after the last layer, so a directory without owner
+write permission, such as <code>/root</code> in a Fedora image, unpacks for a user who is not root. Until
+then such a directory stays open to its owner, so a failed unpack leaves a tree that its owner
+can remove. A finished tree keeps the image's modes, so it may need <code>chmod -R u+w</code> before
+<code>rm -rf</code>.</p>
 <h2 id="multi-arch-images">Multi-arch images<a class="headerlink" href="#multi-arch-images" title="Permanent link">&para;</a></h2>
 <p>Scratchsmith resolves against the host's libraries, so it packs for the architecture it runs on.
 To publish a multi-arch image, run <code>pack --push</code> on each architecture (a CI matrix). Then combine
