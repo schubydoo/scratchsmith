@@ -10,6 +10,7 @@ use oci_client::manifest::{OciImageIndex, OciImageManifest, OciManifest};
 use oci_client::secrets::RegistryAuth;
 use oci_client::{Client, Reference};
 use sha2::{Digest, Sha256};
+use std::time::Duration;
 
 /// Push the assembled image straight to a registry — **no Docker daemon**. The config and
 /// layer blobs and the manifest go up over HTTPS; oci-client 0.18 uploads every blob, with
@@ -633,6 +634,22 @@ fn registry_scheme(registry: &str) -> &'static str {
     }
 }
 
+// How long a connect to a registry or token host may take. oci-client and reqwest set none by
+// default, so a host that never answers blocked `--push` and `index` with no output.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+// How long the token host may go quiet while it answers. Only the token exchange gets a read
+// timeout: reqwest counts upload time against it, and oci-client can send a whole layer in one
+// request, so on the registry client it would cut off a slow upload.
+const TOKEN_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+// The plain client for the identity-token exchange, with its limits.
+fn token_client(connect: Duration, read: Duration) -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .connect_timeout(connect)
+        .read_timeout(read)
+}
+
 /// The two HTTP clients a registry command uses: oci-client for the registry protocol, and a
 /// plain one for the identity-token exchange that oci-client cannot do.
 struct Clients {
@@ -660,9 +677,10 @@ fn registry_clients(endpoint: &str) -> Result<Clients> {
         Ok(Clients {
             registry: Client::try_from(ClientConfig {
                 protocol: registry_protocol(endpoint),
+                connect_timeout: Some(CONNECT_TIMEOUT),
                 ..Default::default()
             })?,
-            http: reqwest::Client::builder().build()?,
+            http: token_client(CONNECT_TIMEOUT, TOKEN_READ_TIMEOUT).build()?,
         })
     };
     let system = match build() {
@@ -1422,6 +1440,78 @@ mod tests {
         ))
         .expect_err("an unreachable registry must error");
         assert!(format!("{err:#}").contains("probing"));
+    }
+
+    // TASK-200. A listener whose accept queue is full: the kernel drops the next SYN, so a
+    // connect to it never completes. It never accepts, so a connect that did would get no
+    // answer either. The returned streams hold the queue full.
+    fn stalled_listener() -> (std::net::TcpListener, Vec<std::net::TcpStream>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut held = Vec::new();
+        for _ in 0..4096 {
+            match std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)) {
+                Ok(stream) => held.push(stream),
+                Err(_) => return (listener, held),
+            }
+        }
+        panic!(
+            "the accept queue never filled after {} connects",
+            held.len()
+        );
+    }
+
+    #[test]
+    fn a_connect_that_never_completes_fails_and_names_the_endpoint() {
+        let (listener, _held) = stalled_listener();
+        let endpoint = listener.local_addr().unwrap().to_string();
+        // A read limit far past the connect limit, so only the connect limit can end it fast.
+        let http = token_client(Duration::from_secs(1), Duration::from_secs(120))
+            .build()
+            .unwrap();
+        let started = std::time::Instant::now();
+        let err = block_on(exchange_identity_token(&http, &endpoint, "owner/img", "t"))
+            .expect_err("a stalled connect must error");
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(
+            format!("{err:#}").contains(&format!("probing http://{endpoint}/v2/")),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn a_token_host_that_stalls_after_connect_fails_within_the_limit() {
+        // Accepts, then says nothing.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap().to_string();
+        let quiet = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_secs(5));
+            drop(stream);
+        });
+        let http = token_client(Duration::from_secs(30), Duration::from_secs(1))
+            .build()
+            .unwrap();
+        let started = std::time::Instant::now();
+        let err = block_on(exchange_identity_token(&http, &endpoint, "owner/img", "t"))
+            .expect_err("a stalled token host must error");
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(format!("{err:#}").contains("probing"), "{err:#}");
+        quiet.join().unwrap();
+    }
+
+    #[test]
+    fn the_registry_limits_are_the_ones_the_task_set() {
+        assert_eq!(CONNECT_TIMEOUT, Duration::from_secs(30));
+        assert_eq!(TOKEN_READ_TIMEOUT, Duration::from_secs(60));
     }
 
     fn child(arch: &str, os: &str, digest: &str) -> Child {
