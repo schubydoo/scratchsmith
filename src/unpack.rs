@@ -237,11 +237,13 @@ struct Applied {
 // `path`, and a range walk touches only them. A `retain` over the whole record per whiteout
 // would let a hostile layer make this quadratic.
 fn forget_under(applied: &mut Applied, path: &Path, keep_self: bool) {
-    let under = |p: &&PathBuf| p.starts_with(path) && !(keep_self && p.as_path() == path);
+    let under = |p: &&PathBuf| p.starts_with(path);
+    let gone_too = |p: &&PathBuf| !(keep_self && p.as_path() == path);
     let gone: Vec<PathBuf> = applied
         .setid
         .range(path.to_path_buf()..)
         .take_while(under)
+        .filter(gone_too)
         .cloned()
         .collect();
     for p in gone {
@@ -252,6 +254,7 @@ fn forget_under(applied: &mut Applied, path: &Path, keep_self: bool) {
         .range(path.to_path_buf()..)
         .map(|(p, _)| p)
         .take_while(under)
+        .filter(gone_too)
         .cloned()
         .collect();
     for p in gone {
@@ -846,6 +849,50 @@ mod tests {
         )
         .unwrap();
         assert_eq!(names(&applied.setid), ["/opt/a-b/sgid", "/var/mail"]);
+    }
+
+    #[test]
+    fn an_opaque_whiteout_drops_the_records_below_a_recorded_directory() {
+        use tar::EntryType::{Directory, Regular};
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let mut applied = Applied::default();
+        apply_layer(
+            &tar_with_modes(&[
+                ("var/mail/", Directory, 0o2775),
+                ("var/mail/spool", Regular, 0o2755),
+                ("lib64/", Directory, 0o555),
+                ("lib64/sub/", Directory, 0o555),
+            ]),
+            &dest,
+            &mut applied,
+        )
+        .unwrap();
+        apply_layer(
+            &tar_with_modes(&[
+                ("var/mail/.wh..wh..opq", Regular, 0o644),
+                ("lib64/.wh..wh..opq", Regular, 0o644),
+            ]),
+            &dest,
+            &mut applied,
+        )
+        .unwrap();
+        let names: Vec<_> = applied
+            .setid
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        assert_eq!(names, ["/var/mail"]);
+        let held: Vec<_> = applied
+            .dir_modes
+            .keys()
+            .map(|p| p.display().to_string())
+            .collect();
+        assert_eq!(held, ["/lib64"]);
+        restore_dir_modes(&std::fs::canonicalize(&dest).unwrap(), &applied.dir_modes).unwrap();
+        assert_eq!(mode_of(&dest.join("lib64")), 0o555);
+        open_up(&[dest.join("lib64")]);
     }
 
     #[test]
