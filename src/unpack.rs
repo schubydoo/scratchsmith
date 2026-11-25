@@ -1284,6 +1284,44 @@ mod tests {
     }
 
     #[test]
+    fn a_replacement_under_a_host_symlink_removes_nothing_outside_the_target() {
+        // TASK-196 AC 3: the old entry is removed through the parent opened inside the image,
+        // never by its host path, which would follow `etc` out of the target.
+        use tar::EntryType::{Link, Symlink};
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let outside = tmp.path().join("victim");
+        let inside = dest.join(outside.strip_prefix("/").unwrap());
+        // The same three paths outside the target and where the image's `etc` leads.
+        for root in [&outside, &inside] {
+            std::fs::create_dir_all(root.join("linked-dir")).unwrap();
+            std::fs::create_dir_all(root.join("filed-dir")).unwrap();
+            std::fs::write(root.join("linked-dir/keep"), b"k").unwrap();
+            std::fs::write(root.join("filed-dir/keep"), b"k").unwrap();
+            std::fs::write(root.join("hard"), b"old").unwrap();
+        }
+        std::fs::write(dest.join("src"), b"new").unwrap();
+        std::os::unix::fs::symlink(&outside, dest.join("etc")).unwrap();
+        let mut applied = Applied::default();
+        let links = tar_of_links(&[
+            ("etc/hard", Link, "src"),
+            ("etc/linked-dir", Symlink, "/usr"),
+        ]);
+        apply_layer(&links, &dest, &mut applied).unwrap();
+        apply_layer(&tar_of(&[("etc/filed-dir", b"f")]), &dest, &mut applied).unwrap();
+
+        assert_eq!(std::fs::read(outside.join("hard")).unwrap(), b"old");
+        assert!(outside.join("linked-dir/keep").is_file());
+        assert!(outside.join("filed-dir/keep").is_file());
+        assert_eq!(std::fs::read(inside.join("hard")).unwrap(), b"new");
+        let linked = std::fs::symlink_metadata(inside.join("linked-dir")).unwrap();
+        assert!(linked.file_type().is_symlink());
+        let filed = std::fs::symlink_metadata(inside.join("filed-dir")).unwrap();
+        assert!(filed.is_file());
+    }
+
+    #[test]
     fn a_symlink_that_climbs_above_the_root_is_refused() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("out");
