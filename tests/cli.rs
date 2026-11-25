@@ -2910,12 +2910,11 @@ echo '{"matches":[]}'"#,
 }
 
 #[test]
-fn a_docker_hub_reference_asks_the_credential_store_for_docker_io() {
-    // TASK-202 spike: record the server key that a credential store receives for a Docker
-    // Hub reference. `docker login` stores the Hub login under https://index.docker.io/v1/,
-    // and the pass, secretservice, osxkeychain and wincred helpers match on that string or
-    // its host, so a lookup under `docker.io` does not find it. This pins today's key; a fix
-    // changes the expected value here.
+fn a_docker_hub_reference_asks_the_credential_store_for_the_docker_login_key() {
+    // TASK-249 (spike: TASK-202): the server key a credential store receives first for a
+    // Docker Hub reference. `docker login` stores the Hub login under
+    // https://index.docker.io/v1/, and the pass, secretservice, osxkeychain and wincred
+    // helpers match on that string or its host, so a lookup under `docker.io` missed it.
     //
     // Hermetic: the fake helper fails with a message that is not "not found", so the command
     // stops at the lookup, before any network call.
@@ -2952,7 +2951,7 @@ fn a_docker_hub_reference_asks_the_credential_store_for_docker_io() {
         );
         assert_eq!(
             std::fs::read_to_string(&seen).unwrap().trim(),
-            "docker.io",
+            "https://index.docker.io/v1/",
             "{target}: the key the helper received"
         );
     }
