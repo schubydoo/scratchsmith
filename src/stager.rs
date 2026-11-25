@@ -2,7 +2,7 @@
 //! at the paths the runtime expects, recreate soname symlinks, and regenerate the
 //! loader cache. Consumes the [`Resolution`] produced by [`crate::resolver`].
 
-use crate::resolver::Resolution;
+use crate::resolver::{Resolution, ResolvedLib};
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -828,9 +828,7 @@ pub fn strip_and_measure_with(
     // loader is labelled above.
     for lib in &resolution.libs {
         // The loader reached again by its real path is the same file, already counted above.
-        if tree.loader.is_some()
-            && resolution.interpreter.as_ref().map(|i| &i.source) == Some(&lib.path)
-        {
+        if tree.loader.is_some() && is_loader_alias(resolution, lib) {
             continue;
         }
         let staged = staged_path(dest, &lib.path, false)?;
@@ -990,13 +988,8 @@ fn stage_files(
     for lib in &resolution.libs {
         // On a merged-/usr host the loader has two names: PT_INTERP (`/lib64/...`) and the
         // real path libc's DT_NEEDED resolves to. One host file stays one file in the image.
-        let loader_alias = resolution
-            .interpreter
-            .as_ref()
-            .zip(loader.as_ref())
-            .filter(|(interp, _)| interp.source == lib.path);
-        match loader_alias {
-            Some((_, loader)) => link_to_loader(dest, &lib.path, loader)?,
+        match loader.as_ref().filter(|_| is_loader_alias(resolution, lib)) {
+            Some(loader) => link_to_loader(dest, &lib.path, loader)?,
             None => copy_into(&lib.path, dest, &lib.path)?,
         }
         if lib.path.file_name() != Some(OsStr::new(&lib.soname)) {
@@ -1198,6 +1191,15 @@ fn write_into(dest: &Path, image: &Path, body: &[u8]) -> Result<()> {
     tmp.persist(&target)
         .with_context(|| format!("replacing {}", target.display()))?;
     Ok(())
+}
+
+// Whether `lib` is the loader itself, found again by its real path (libc's DT_NEEDED on a
+// merged-/usr host). `stage_files` links it and the size report skips it; both ask here.
+fn is_loader_alias(resolution: &Resolution, lib: &ResolvedLib) -> bool {
+    resolution
+        .interpreter
+        .as_ref()
+        .is_some_and(|interp| interp.source == lib.path)
 }
 
 // Stage `image_path` as a relative link to the staged loader, unless it is the loader's own
