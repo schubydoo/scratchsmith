@@ -34,10 +34,7 @@ pub fn push_to_registry(
     // `registry()` is the Docker-config key (e.g. `docker.io`); `resolve_registry()` is the
     // real endpoint we talk HTTP to (e.g. `registry-1.docker.io`). Look creds up by the
     // former, exchange/probe against the latter.
-    let plan = plan_credential(credential_or_anonymous(
-        docker_credential::get_credential(reference.registry()),
-        reference.registry(),
-    )?);
+    let plan = plan_credential(lookup_credential(reference.registry())?);
     let endpoint = reference.resolve_registry().to_string();
     let repository = reference.repository().to_string();
     let Clients {
@@ -178,10 +175,7 @@ pub fn push_index(target: &str, sources: &[String]) -> Result<IndexOutcome> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let plan = plan_credential(credential_or_anonymous(
-        docker_credential::get_credential(target_ref.registry()),
-        target_ref.registry(),
-    )?);
+    let plan = plan_credential(lookup_credential(target_ref.registry())?);
     let endpoint = target_ref.resolve_registry().to_string();
     let repository = target_ref.repository().to_string();
     let Clients {
@@ -493,6 +487,44 @@ fn credential_or_anonymous(
             )
         }),
     }
+}
+
+/// The key `docker login` stores a Docker Hub login under.
+const DOCKER_HUB_LOGIN_KEY: &str = "https://index.docker.io/v1/";
+
+// The registry names a Docker Hub reference can carry (oci-client reports `docker.io`).
+fn is_docker_hub(registry: &str) -> bool {
+    matches!(
+        registry,
+        "docker.io" | "index.docker.io" | "registry-1.docker.io"
+    )
+}
+
+// The stored credential for `registry`, or `None` to go anonymous.
+fn lookup_credential(registry: &str) -> Result<Option<docker_credential::DockerCredential>> {
+    lookup_credential_with(registry, docker_credential::get_credential)
+}
+
+// Docker CLI keeps the Hub login under `https://index.docker.io/v1/`, and the pass,
+// secretservice, osxkeychain and wincred helpers match that string or its host exactly, so a
+// helper asked for `docker.io` misses it (TASK-202). Ask for the CLI's key first. `docker.io`
+// stays as the fallback, which still finds an `auths` or `credHelpers` entry keyed that way.
+// A broken helper on the first ask is fatal, as on any other.
+fn lookup_credential_with(
+    registry: &str,
+    get: impl Fn(
+        &str,
+    ) -> std::result::Result<
+        docker_credential::DockerCredential,
+        docker_credential::CredentialRetrievalError,
+    >,
+) -> Result<Option<docker_credential::DockerCredential>> {
+    if is_docker_hub(registry) {
+        if let Some(cred) = credential_or_anonymous(get(DOCKER_HUB_LOGIN_KEY), registry)? {
+            return Ok(Some(cred));
+        }
+    }
+    credential_or_anonymous(get(registry), registry)
 }
 
 fn plan_credential(cred: Option<docker_credential::DockerCredential>) -> CredentialPlan {
@@ -918,6 +950,85 @@ mod tests {
             assert!(
                 msg.contains("ghcr.io"),
                 "the error must name the registry, got: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_docker_hub_lookup_asks_for_the_docker_login_key_first() {
+        use docker_credential::CredentialRetrievalError as E;
+        use docker_credential::DockerCredential::UsernamePassword;
+        use std::cell::RefCell;
+        let not_found = || E::HelperFailure {
+            helper: "docker-credential-pass".into(),
+            stdout: "credentials not found in native keychain".into(),
+            stderr: String::new(),
+        };
+        // A fake store that holds one login, under `stored`.
+        let run = |registry: &str, stored: &str| {
+            let asked = RefCell::new(Vec::new());
+            let got = lookup_credential_with(registry, |server| {
+                asked.borrow_mut().push(server.to_string());
+                if server == stored {
+                    Ok(UsernamePassword("u".into(), "p".into()))
+                } else {
+                    Err(not_found())
+                }
+            });
+            (
+                got.map(|c| c.is_some()).map_err(|e| format!("{e:#}")),
+                asked.into_inner(),
+            )
+        };
+
+        // The login `docker login` wrote is found, and docker.io is never asked.
+        for hub in ["docker.io", "index.docker.io", "registry-1.docker.io"] {
+            assert_eq!(
+                run(hub, DOCKER_HUB_LOGIN_KEY),
+                (Ok(true), vec![DOCKER_HUB_LOGIN_KEY.to_string()]),
+                "{hub}"
+            );
+        }
+        // A login kept under docker.io is still found, on the second ask.
+        assert_eq!(
+            run("docker.io", "docker.io"),
+            (
+                Ok(true),
+                vec![DOCKER_HUB_LOGIN_KEY.to_string(), "docker.io".to_string()]
+            )
+        );
+        // No login anywhere stays anonymous.
+        assert_eq!(run("docker.io", "nowhere").0, Ok(false));
+        // Any other registry is asked by its own name, once.
+        assert_eq!(
+            run("ghcr.io", "ghcr.io"),
+            (Ok(true), vec!["ghcr.io".to_string()])
+        );
+
+        // A broken helper on the first ask fails the lookup; docker.io is not tried after it.
+        let asked = RefCell::new(Vec::new());
+        let err = lookup_credential_with("docker.io", |server| {
+            asked.borrow_mut().push(server.to_string());
+            Err(E::HelperCommunicationError)
+        })
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("docker.io"), "{err:#}");
+        assert_eq!(asked.into_inner(), vec![DOCKER_HUB_LOGIN_KEY.to_string()]);
+    }
+
+    #[test]
+    fn a_docker_hub_lookup_still_reads_auths_under_either_key() {
+        // No helper: the `auths` map answers. Docker CLI writes the URL key, other tools write
+        // docker.io; both must be found for a Hub reference.
+        for key in [DOCKER_HUB_LOGIN_KEY, "docker.io", "index.docker.io"] {
+            let config = format!(r#"{{"auths":{{"{key}":{{"auth":"dTpw"}}}}}}"#);
+            let got = lookup_credential_with("docker.io", |server| {
+                docker_credential::get_credential_from_reader(config.as_bytes(), server)
+            })
+            .unwrap();
+            assert!(
+                matches!(got, Some(docker_credential::DockerCredential::UsernamePassword(ref u, ref p)) if u == "u" && p == "p"),
+                "{key}: {got:?}"
             );
         }
     }
