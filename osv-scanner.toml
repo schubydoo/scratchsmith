@@ -1,0 +1,6 @@
+# OSV-Scanner config, read by OpenSSF Scorecard's Vulnerabilities check. It covers only the
+# Cargo.lock in this folder; fuzz/ has its own copy. cargo-deny keeps the same ignore in deny.toml.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+reason = "chrono is unmaintained (informational, no code flaw), pulled in only by oci-client 0.18.0. oci-client 0.19.0, not yet released, drops chrono for jiff; remove this with the deny.toml ignore when we bump (TASK-227)."
