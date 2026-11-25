@@ -435,6 +435,12 @@ image cannot then plant a setuid program owned by the user who unpacks it. `unpa
 warning line on standard error for each path in the final image that had one of those bits.
 The `stripped_setid` field of `--format json` lists the same paths.
 
+`unpack` applies the mode of each directory after the last layer, so a directory without owner
+write permission, such as `/root` in a Fedora image, unpacks for a user who is not root. Until
+then such a directory stays open to its owner, so a failed unpack leaves a tree that its owner
+can remove. A finished tree keeps the image's modes, so it may need `chmod -R u+w` before
+`rm -rf`.
+
 ## Multi-arch images
 
 Scratchsmith resolves against the host's libraries, so it packs for the architecture it runs on.
