@@ -89,6 +89,8 @@ struct Lib {
     dir: &'static str,
     // None: the program needs it. Some(j): library j needs it.
     parent: Option<usize>,
+    // A second needer: Some(0) is the program, Some(j + 1) is library j.
+    also: Option<usize>,
 }
 
 impl Lib {
@@ -201,6 +203,7 @@ fn generate(rng: &mut Rng, root: &Path) -> Layout {
             } else {
                 Some(rng.below(index))
             },
+            also: None,
         });
     }
     let objects = count + 1;
@@ -237,7 +240,38 @@ fn generate(rng: &mut Rng, root: &Path) -> Layout {
             paths.insert(at, "/opt/ssdiff-none".to_string());
         }
     }
+    // Drawn last, so every earlier seed keeps its base layout. The second needer gets no
+    // search-path entry: ld.so reaches the library only because a parent loaded it first.
+    for (i, lib) in layout.libs.iter_mut().enumerate().skip(1) {
+        if rng.chance(30) {
+            let pick = rng.below(i + 1);
+            if pick != lib.parent.map_or(0, |p| p + 1) {
+                lib.also = Some(pick);
+            }
+        }
+    }
     layout
+}
+
+// Does `object` (0 the program, j + 1 library j) name `lib` in its DT_NEEDED?
+fn needs(lib: &Lib, object: usize) -> bool {
+    lib.parent.map_or(0, |p| p + 1) == object || lib.also == Some(object)
+}
+
+// What `object`'s function returns: its own value plus each child's, once per needer.
+fn total(layout: &Layout, object: usize) -> u64 {
+    let own = if object == 0 {
+        0
+    } else {
+        layout.libs[object - 1].value()
+    };
+    let children: u64 = layout
+        .libs
+        .iter()
+        .filter(|l| needs(l, object))
+        .map(|l| total(layout, l.index + 1))
+        .sum();
+    own + children
 }
 
 fn cc(args: &[String]) {
@@ -255,11 +289,7 @@ fn s(p: &Path) -> String {
 
 // The C source of one object: its own value plus the values of what it needs.
 fn source(layout: &Layout, object: usize) -> String {
-    let children: Vec<&Lib> = layout
-        .libs
-        .iter()
-        .filter(|l| l.parent.map_or(0, |p| p + 1) == object)
-        .collect();
+    let children: Vec<&Lib> = layout.libs.iter().filter(|l| needs(l, object)).collect();
     let mut src = String::new();
     for c in &children {
         writeln!(src, "extern int f{}(void);", c.index).unwrap();
@@ -269,7 +299,7 @@ fn source(layout: &Layout, object: usize) -> String {
         .map(|c| format!(" + f{}()", c.index))
         .collect();
     if object == 0 {
-        let expect: u64 = layout.libs.iter().map(|l| l.value()).sum();
+        let expect = total(layout, 0);
         writeln!(
             src,
             "int main(void){{ return (0{sum}) == {expect} ? 0 : 3; }}"
@@ -287,7 +317,7 @@ fn source(layout: &Layout, object: usize) -> String {
 fn link_args(layout: &Layout, object: usize, root: &Path) -> Vec<String> {
     let mut args = Vec::new();
     for c in &layout.libs {
-        if c.parent.map_or(0, |p| p + 1) != object {
+        if !needs(c, object) {
             continue;
         }
         let dir = match c.soname {

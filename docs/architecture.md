@@ -4,7 +4,9 @@
 
 1. **Resolve**: emulate the `ld.so` search order from the ELF itself (RPATH is transitive,
    RUNPATH is not, `$ORIGIN` is per-object). An object that has RUNPATH searches no RPATH,
-   neither its own nor one it inherits. Each RPATH or RUNPATH string is a `:` list, and
+   neither its own nor one it inherits. A name that an object loaded earlier already carries,
+   as the name it was needed by or as its `DT_SONAME`, resolves to that object with no search,
+   as `ld.so` does. Each RPATH or RUNPATH string is a `:` list, and
    its entries are searched in order. An empty entry means the directory the program starts in.
    A build cannot know that directory, so Scratchsmith does not search an empty entry. If the
    split entries miss, a string that holds `:` is also tried whole as one directory, before the
