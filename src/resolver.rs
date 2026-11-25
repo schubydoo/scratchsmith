@@ -230,6 +230,10 @@ pub struct Resolution {
     /// line each. The image still loads the library through its ld.so.cache, so nothing here
     /// changes what resolves or stages. `pack` prints them with `print_notes`.
     pub notes: Vec<String>,
+    /// A staged library of another ELF class or machine than the binary, which ld.so will not
+    /// load, one line each. It is the only copy found, or the binary names it by path. `pack`
+    /// prints them with `print_notes`, and stages the library as it did before.
+    pub arch_warnings: Vec<String>,
 }
 
 impl Resolution {
@@ -255,6 +259,9 @@ impl Resolution {
     pub fn print_notes(&self) {
         for n in &self.notes {
             eprintln!("note: {n}");
+        }
+        for w in &self.arch_warnings {
+            eprintln!("warning: {w}");
         }
     }
 }
@@ -485,7 +492,7 @@ pub fn resolve_with(
     // from the real path for the binary.
     queue.push_back((
         root_path.clone(),
-        root_path,
+        root_path.clone(),
         root_info.clone(),
         (
             Vec::<PathBuf>::new(),
@@ -626,9 +633,34 @@ pub fn resolve_with(
             let declared_bare = i < declared && !soname.contains('/');
             let already = declared_bare.then(|| loaded.get(soname).cloned()).flatten();
             let matched = already.is_some();
-            let gap = (!matched)
-                .then(|| gap_hit(soname, &search, &search_gaps, &sysroot.default_dirs))
-                .flatten();
+            // ld.so skips a file of another class or machine and keeps searching (glibc's
+            // open_verify), so a 32-bit copy early on the path does not hide the right one.
+            // When every copy is of another arch, the first stays the pick, as before, and a
+            // warning says the image cannot load it: refusing would fail a pack that passes.
+            let mut skipped = Vec::new();
+            let fits = |path: &Path| arch_fits(source, path, &root_info);
+            let found = already
+                .or_else(|| {
+                    find_fitting(soname, &search, obj_dir, &sysroot.root, &fits, &mut skipped)
+                })
+                .or_else(|| in_literals(&literals, &mut not_cached))
+                .or_else(|| {
+                    find_fitting(
+                        soname,
+                        &sysroot.default_dirs,
+                        obj_dir,
+                        &sysroot.root,
+                        &fits,
+                        &mut skipped,
+                    )
+                })
+                .or_else(|| skipped.first().cloned());
+            // The gap note is about the copy that was picked, so a wrong-arch copy skipped in a
+            // gap entry does not raise one.
+            let gap = found
+                .as_ref()
+                .filter(|_| !matched)
+                .and_then(|hit| gap_hit(soname, hit, &search, &search_gaps, &sysroot.default_dirs));
             if let Some((gap, hit)) = gap {
                 // The note says the image's cache loads it, so check that ldconfig caches it.
                 let lib = (soname.clone(), cache_miss(soname, &hit, source));
@@ -638,10 +670,32 @@ pub fn resolve_with(
                     None => gaps.push((gap.clone(), vec![lib])),
                 }
             }
-            let found = already
-                .or_else(|| find_lib(soname, &search, obj_dir, &sysroot.root))
-                .or_else(|| in_literals(&literals, &mut not_cached))
-                .or_else(|| find_lib(soname, &sysroot.default_dirs, obj_dir, &sysroot.root));
+            if let Some(path) = found.as_ref().filter(|path| !matched && !fits(path)) {
+                let how = if soname.contains('/') {
+                    "named by path"
+                } else {
+                    "the only copy found"
+                };
+                // An --include loads later through dlopen, so the image still starts.
+                let effect = if i < declared {
+                    "the image cannot start"
+                } else {
+                    "the program cannot open it"
+                };
+                push_unique(
+                    &mut resolution.arch_warnings,
+                    format!(
+                        "`{}` resolved to {}, {how}, which is a {} library. {} is {}, so the \
+                         loader will not load it and {effect}. Put a {4} copy on the search \
+                         path.",
+                        soname.escape_debug(),
+                        printable(path),
+                        arch_of(source, path),
+                        printable(&root_path),
+                        arch_label(root_info.is_64, root_info.machine),
+                    ),
+                );
+            }
             let Some(found) = found else {
                 for hint in not_cached {
                     push_unique(&mut resolution.hints, hint);
@@ -919,12 +973,13 @@ fn holds_unknown_token(entry: &str) -> bool {
     })
 }
 
-// The entry a bare `soname` resolves through, when ld.so would not search it there, and the
-// file it found. A slash soname skips the search list. A hit counts only when neither an entry
+// The entry a bare `soname` resolved through to `found`, when ld.so would not search it there,
+// and that file. A slash soname skips the search list. A hit counts only when neither an entry
 // that ld.so does search nor a default directory names the same directory, because then ld.so
 // finds the same file.
 fn gap_hit<'a>(
     soname: &str,
+    found: &Path,
     search: &[PathBuf],
     gaps: &'a [Option<Gap>],
     default_dirs: &[PathBuf],
@@ -932,7 +987,7 @@ fn gap_hit<'a>(
     if soname.contains('/') {
         return None;
     }
-    let at = search.iter().position(|dir| dir.join(soname).exists())?;
+    let at = search.iter().position(|dir| dir.join(soname) == found)?;
     let gap = gaps[at].as_ref()?;
     let dir = &search[at];
     let searched = search
@@ -1273,6 +1328,60 @@ fn find_lib(soname: &str, search: &[PathBuf], origin_dir: &Path, root: &Path) ->
         .iter()
         .map(|dir| dir.join(soname))
         .find(|candidate| candidate.exists())
+}
+
+// As `find_lib`, but a bare soname skips a file that `fits` refuses and keeps searching, and
+// records it in `skipped`. A name with a `/` is the one file it names, as ld.so takes it.
+fn find_fitting(
+    soname: &str,
+    search: &[PathBuf],
+    origin_dir: &Path,
+    root: &Path,
+    fits: &dyn Fn(&Path) -> bool,
+    skipped: &mut Vec<PathBuf>,
+) -> Option<PathBuf> {
+    if soname.contains('/') {
+        return find_lib(soname, search, origin_dir, root);
+    }
+    for candidate in search.iter().map(|dir| dir.join(soname)) {
+        if !candidate.exists() {
+            continue;
+        }
+        if fits(&candidate) {
+            return Some(candidate);
+        }
+        skipped.push(candidate);
+    }
+    None
+}
+
+// True unless `path` is an ELF of another class or machine than `binary`. A file that is not
+// an ELF, or cannot be read, fits here, and the checks after the pick report it as before. A
+// path that is not a regular file is never opened: a FIFO with no writer blocks the open.
+fn arch_fits(source: &dyn LinkInfoSource, path: &Path, binary: &ElfInfo) -> bool {
+    if !std::fs::metadata(path).is_ok_and(|meta| meta.is_file()) {
+        return true;
+    }
+    match source.read(path) {
+        Ok(Some(info)) => info.is_64 == binary.is_64 && info.machine == binary.machine,
+        _ => true,
+    }
+}
+
+// Only called on a path that `arch_fits` read and refused, so it is a regular file.
+fn arch_of(source: &dyn LinkInfoSource, path: &Path) -> String {
+    match source.read(path) {
+        Ok(Some(info)) => arch_label(info.is_64, info.machine),
+        _ => "different".into(),
+    }
+}
+
+fn arch_label(is_64: bool, machine: u16) -> String {
+    format!(
+        "{}-bit {}",
+        if is_64 { 64 } else { 32 },
+        goblin::elf::header::machine_to_str(machine)
+    )
 }
 
 // Reroot an absolute path inside the sysroot. Paths already under the root (e.g.
@@ -3547,6 +3656,158 @@ mod tests {
             ),
             "{}",
             res.notes[0]
+        );
+    }
+
+    // An exe with RPATH `$ORIGIN/lib:$ORIGIN/lib64` that needs libx.so.1, and a copy of it in
+    // each of `dirs` with the given class. Returns the exe and the resolution.
+    fn resolve_with_copies(
+        root: &Path,
+        needed: &str,
+        copies: &[(&str, bool)],
+    ) -> (PathBuf, Resolution) {
+        resolve_with_copies_on(root, "$ORIGIN/lib:$ORIGIN/lib64", &[needed], &[], copies)
+    }
+
+    // As `resolve_with_copies`, with the exe's RPATH string, its needed list and the
+    // `--include` names given.
+    fn resolve_with_copies_on(
+        root: &Path,
+        rpath: &str,
+        needed: &[&str],
+        includes: &[String],
+        copies: &[(&str, bool)],
+    ) -> (PathBuf, Resolution) {
+        let loader = root.join("lib64/ld-linux-x86-64.so.2");
+        let exe = root.join("a/exe");
+        touch(&loader);
+        touch(&exe);
+        let mut infos = HashMap::new();
+        infos.insert(
+            canonical(&exe),
+            elf(needed, &[rpath], &[], Some("/lib64/ld-linux-x86-64.so.2")),
+        );
+        for (dir, is_64) in copies {
+            let lib = root.join("a").join(dir).join("libx.so.1");
+            touch(&lib);
+            let mut info = elf(&[], &[], &[], None);
+            info.is_64 = *is_64;
+            if !is_64 {
+                info.machine = goblin::elf::header::EM_386;
+            }
+            infos.insert(canonical(&lib), info);
+        }
+        let res = resolve_with(&exe, &Sysroot::new(root), includes, &MapSource { infos }).unwrap();
+        (exe, res)
+    }
+
+    #[test]
+    fn a_library_of_another_class_is_skipped_and_the_search_goes_on() {
+        // TASK-213. ld.so skips a 32-bit copy in `lib` and loads the 64-bit one in `lib64`.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (_, res) = resolve_with_copies(root, "libx.so.1", &[("lib", false), ("lib64", true)]);
+        let lib = res.libs.iter().find(|l| l.soname == "libx.so.1").unwrap();
+        assert_eq!(lib.path, canonical(&root.join("a/lib64/libx.so.1")));
+        assert!(
+            res.missing.is_empty() && res.arch_warnings.is_empty(),
+            "{res:?}"
+        );
+    }
+
+    #[test]
+    fn a_library_of_another_class_that_is_the_only_copy_stages_with_a_warning() {
+        // TASK-213, decision: no refusal. The pick is the one copy, as before, and a warning
+        // names it and says the image cannot load it.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (exe, res) = resolve_with_copies(root, "libx.so.1", &[("lib", false)]);
+        let lib = res.libs.iter().find(|l| l.soname == "libx.so.1").unwrap();
+        assert_eq!(lib.path, canonical(&root.join("a/lib/libx.so.1")));
+        assert!(res.missing.is_empty(), "{res:?}");
+        let [warning] = &res.arch_warnings[..] else {
+            panic!("one warning: {:?}", res.arch_warnings);
+        };
+        for part in [
+            "`libx.so.1` resolved to",
+            "a/lib/libx.so.1, the only copy found, which is a 32-bit 386 library",
+            &format!("{} is 64-bit X86_64", canonical(&exe).display()),
+            "Put a 64-bit X86_64 copy on the search path",
+        ] {
+            assert!(warning.contains(part), "{part:?} in {warning}");
+        }
+    }
+
+    #[test]
+    fn a_wrong_arch_copy_skipped_in_a_gap_entry_raises_no_gap_note() {
+        // Review nit on PR 551. `lib` is relative, a gap entry. Its 32-bit copy is skipped, so
+        // the pick is the 64-bit one in `$ORIGIN/lib64`, which ld.so searches: no note.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (_, res) = resolve_with_copies_on(
+            root,
+            "lib:$ORIGIN/lib64",
+            &["libx.so.1"],
+            &[],
+            &[("lib", false), ("lib64", true)],
+        );
+        let lib = res.libs.iter().find(|l| l.soname == "libx.so.1").unwrap();
+        assert_eq!(lib.path, canonical(&root.join("a/lib64/libx.so.1")));
+        assert!(res.notes.is_empty(), "{:?}", res.notes);
+        // With only the 32-bit copy, the pick is in the gap entry, so the note stays.
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, res) = resolve_with_copies_on(
+            tmp.path(),
+            "lib:$ORIGIN/lib64",
+            &["libx.so.1"],
+            &[],
+            &[("lib", false)],
+        );
+        assert!(
+            res.notes.iter().any(|n| n.contains("RPATH entry `lib`")),
+            "{:?}",
+            res.notes
+        );
+    }
+
+    #[test]
+    fn a_wrong_arch_include_warns_that_the_program_cannot_open_it() {
+        // Review nit on PR 551. An --include loads later through dlopen, so the image starts.
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, res) = resolve_with_copies_on(
+            tmp.path(),
+            "$ORIGIN/lib",
+            &[],
+            &["libx.so.1".to_string()],
+            &[("lib", false)],
+        );
+        let [warning] = &res.arch_warnings[..] else {
+            panic!("one warning: {:?}", res.arch_warnings);
+        };
+        assert!(
+            warning.contains("will not load it and the program cannot open it"),
+            "{warning}"
+        );
+    }
+
+    #[test]
+    fn a_library_of_another_class_named_by_path_stages_with_a_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let path = root.join("a/lib/libx.so.1");
+        let (_, res) = resolve_with_copies(
+            root,
+            path.to_str().unwrap(),
+            &[("lib", false), ("lib64", true)],
+        );
+        assert!(
+            res.libs.iter().any(|l| l.path == canonical(&path)),
+            "{res:?}"
+        );
+        assert!(
+            res.arch_warnings.len() == 1 && res.arch_warnings[0].contains("named by path"),
+            "{:?}",
+            res.arch_warnings
         );
     }
 
