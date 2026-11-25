@@ -668,8 +668,11 @@ fn walk_in_root(root: &Path, rel: &Path, mode: Walk) -> Result<Option<(OwnedFd, 
         )
     };
     let root_fd = open_path(rustix::fs::CWD, root.as_os_str()).with_context(opening)?;
-    // The directories opened below the root, so `..` steps back without a path.
-    let mut chain: Vec<(OwnedFd, OsString)> = Vec::new();
+    // The directories walked below the root, by name and identity. Only the deepest is held
+    // open, so a deep tree does not run out of file descriptors: `..` opens the parent through
+    // the current directory and checks that it is the one walked through.
+    let mut chain: Vec<(OsString, DirId)> = Vec::new();
+    let mut cur: Option<OwnedFd> = None;
     // `rel` is read one part at a time, so a hostile entry name costs nothing past the first
     // part that is absent. Only the parts a symlink's text adds are queued.
     let mut rest = rel.iter();
@@ -683,31 +686,40 @@ fn walk_in_root(root: &Path, rel: &Path, mode: Walk) -> Result<Option<(OwnedFd, 
             continue;
         }
         if name == ".." {
-            if chain.pop().is_none() && strict {
-                bail!(
-                    "refusing to extract through a symlink that leaves the target: {}",
-                    shown(rel.display(), SHOWN_MAX)
-                );
+            if chain.pop().is_none() {
+                if strict {
+                    bail!(
+                        "refusing to extract through a symlink that leaves the target: {}",
+                        shown(rel.display(), SHOWN_MAX)
+                    );
+                }
+            } else if let (Some(below), Some((_, want))) = (cur.take(), chain.last()) {
+                let up = open_path(below.as_fd(), OsStr::new("..")).with_context(opening)?;
+                check_id(&up, *want, &image_of(&chain))?;
+                cur = Some(up);
             }
             continue;
         }
         let last = pending.is_empty() && rest.as_path().as_os_str().is_empty();
-        let cur = chain.last().map_or(root_fd.as_fd(), |(fd, _)| fd.as_fd());
-        let fd = match open_path(cur, &name) {
+        let at = cur.as_ref().map_or(root_fd.as_fd(), |fd| fd.as_fd());
+        let fd = match open_path(at, &name) {
             Ok(fd) => fd,
             Err(Errno::NOENT) if make => {
-                match rustix::fs::mkdirat(cur, &name, Mode::from_raw_mode(0o777)) {
+                match rustix::fs::mkdirat(at, &name, Mode::from_raw_mode(0o777)) {
                     Ok(()) | Err(Errno::EXIST) => {}
                     Err(e) => return Err(e).with_context(opening),
                 }
-                open_path(cur, &name).with_context(opening)?
+                open_path(at, &name).with_context(opening)?
             }
             Err(Errno::NOENT) => return Ok(None),
             Err(e) => return Err(e).with_context(opening),
         };
         let stat = rustix::fs::fstat(&fd).with_context(opening)?;
         match FileType::from_raw_mode(stat.st_mode) {
-            FileType::Directory => chain.push((fd, name)),
+            FileType::Directory => {
+                chain.push((name, DirId::of(&stat)));
+                cur = Some(fd);
+            }
             FileType::Symlink => {
                 links += 1;
                 if links > MAX_LINKS && strict {
@@ -724,6 +736,7 @@ fn walk_in_root(root: &Path, rel: &Path, mode: Walk) -> Result<Option<(OwnedFd, 
                 let target = PathBuf::from(OsString::from_vec(target.into_bytes()));
                 if target.is_absolute() {
                     chain.clear();
+                    cur = None;
                 }
                 for part in target.iter().rev() {
                     pending.push_front(part.to_os_string());
@@ -734,11 +747,39 @@ fn walk_in_root(root: &Path, rel: &Path, mode: Walk) -> Result<Option<(OwnedFd, 
             _ => return Ok(None),
         }
     }
-    let image = std::iter::once(OsStr::new("/"))
-        .chain(chain.iter().map(|(_, name)| name.as_os_str()))
-        .collect();
-    let dir = chain.pop().map_or(root_fd, |(fd, _)| fd);
-    Ok(Some((dir, image)))
+    Ok(Some((cur.unwrap_or(root_fd), image_of(&chain))))
+}
+
+// The image path of a walked chain of directories.
+fn image_of(chain: &[(OsString, DirId)]) -> PathBuf {
+    std::iter::once(OsStr::new("/"))
+        .chain(chain.iter().map(|(name, _)| name.as_os_str()))
+        .collect()
+}
+
+// A directory's identity, so a step back up through `..` can check where it landed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct DirId(u64, u64);
+
+impl DirId {
+    fn of(stat: &rustix::fs::Stat) -> Self {
+        #[allow(clippy::useless_conversion)] // the field types differ between targets
+        DirId(u64::from(stat.st_dev), u64::from(stat.st_ino))
+    }
+}
+
+// `..` reached a directory other than the one walked through: something moved a directory of
+// the target while unpack ran. Stop rather than act on a place nobody chose.
+fn check_id(fd: &OwnedFd, want: DirId, shown_path: &Path) -> Result<()> {
+    let stat = rustix::fs::fstat(fd)
+        .with_context(|| format!("stat {}", shown(shown_path.display(), SHOWN_MAX)))?;
+    if DirId::of(&stat) != want {
+        bail!(
+            "{} moved while unpacking, so unpack stopped",
+            shown(shown_path.display(), SHOWN_MAX)
+        );
+    }
+    Ok(())
 }
 
 fn open_dir(at: impl AsFd, name: &OsStr) -> rustix::io::Result<OwnedFd> {
@@ -775,9 +816,73 @@ fn remove_at(dir: &OwnedFd, name: &OsStr, shown_dir: &Path) -> Result<()> {
     }
 }
 
-// Remove everything inside `dir`, but not `dir` itself. `dir` may be an O_PATH handle, so the
-// listing reopens it for reading, relative to the handle.
+// Remove everything inside `dir`, but not `dir` itself. `dir` may be an O_PATH handle, so each
+// listing reopens its directory for reading, relative to the handle.
+//
+// Depth first, without recursion, holding one directory below `dir` open at a time: a step
+// back up opens `..` and checks that it is the directory it left. A deep tree so runs out of
+// neither file descriptors nor stack.
 fn clear_dir(dir: &OwnedFd, shown_dir: &Path) -> Result<()> {
+    use rustix::fs::AtFlags;
+    // A directory being cleared: its name in its parent, its identity, and the directories in
+    // it still to clear.
+    struct Level {
+        name: OsString,
+        id: DirId,
+        subdirs: Vec<OsString>,
+    }
+    let mut shown_path = shown_dir.to_path_buf();
+    let mut top = remove_files_in(dir, &shown_path)?;
+    let mut levels: Vec<Level> = Vec::new();
+    let mut cur: Option<OwnedFd> = None;
+    loop {
+        let next = match levels.last_mut() {
+            Some(level) => level.subdirs.pop(),
+            None => top.pop(),
+        };
+        let at = cur.as_ref().unwrap_or(dir);
+        if let Some(name) = next {
+            shown_path.push(&name);
+            let removing = || format!("removing {}", shown(shown_path.display(), SHOWN_MAX));
+            let fd = match open_dir(at, &name) {
+                Ok(fd) => fd,
+                // Gone already, as `remove_at` allows.
+                Err(rustix::io::Errno::NOENT) => {
+                    shown_path.pop();
+                    continue;
+                }
+                Err(e) => return Err(e).with_context(removing),
+            };
+            let id = DirId::of(&rustix::fs::fstat(&fd).with_context(removing)?);
+            let subdirs = remove_files_in(&fd, &shown_path)?;
+            levels.push(Level { name, id, subdirs });
+            cur = Some(fd);
+            continue;
+        }
+        // Everything in the deepest directory is gone: step up and remove it.
+        let Some(done) = levels.pop() else {
+            return Ok(());
+        };
+        let removing = || format!("removing {}", shown(shown_path.display(), SHOWN_MAX));
+        // Back at `dir`, which is held, there is nothing to open or check.
+        cur = match (cur.take(), levels.last()) {
+            (Some(below), Some(parent)) => {
+                let up = open_dir(&below, OsStr::new("..")).with_context(removing)?;
+                check_id(&up, parent.id, shown_path.parent().unwrap_or(shown_dir))?;
+                Some(up)
+            }
+            _ => None,
+        };
+        let at = cur.as_ref().unwrap_or(dir);
+        rustix::fs::unlinkat(at, &done.name, AtFlags::REMOVEDIR).with_context(removing)?;
+        shown_path.pop();
+    }
+}
+
+// Remove every entry in `dir` that is not a directory, and return the names of those that are.
+// The listing is read whole before anything is removed, so the removals cannot disturb it.
+fn remove_files_in(dir: &OwnedFd, shown_dir: &Path) -> Result<Vec<OsString>> {
+    use rustix::fs::{AtFlags, FileType};
     let reading = || format!("reading {}", shown(shown_dir.display(), SHOWN_MAX));
     let mut names = Vec::new();
     let readable = open_dir(dir, OsStr::new(".")).with_context(reading)?;
@@ -788,10 +893,25 @@ fn clear_dir(dir: &OwnedFd, shown_dir: &Path) -> Result<()> {
             names.push(OsString::from_vec(name.to_vec()));
         }
     }
+    let mut subdirs = Vec::new();
     for name in names {
-        remove_at(dir, &name, shown_dir)?;
+        let shown_path = shown_dir.join(&name);
+        let stat = match rustix::fs::statat(dir, &name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => stat,
+            Err(rustix::io::Errno::NOENT) => continue,
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("stat {}", shown(shown_path.display(), SHOWN_MAX)))
+            }
+        };
+        if FileType::from_raw_mode(stat.st_mode) == FileType::Directory {
+            subdirs.push(name);
+        } else {
+            rustix::fs::unlinkat(dir, &name, AtFlags::empty())
+                .with_context(|| format!("removing {}", shown(shown_path.display(), SHOWN_MAX)))?;
+        }
     }
-    Ok(())
+    Ok(subdirs)
 }
 
 fn blob<'a>(blobs: &'a HashMap<String, Vec<u8>>, digest: &str) -> Result<&'a Vec<u8>> {
@@ -1091,6 +1211,111 @@ mod tests {
         assert_eq!(std::fs::read(dest.join("bin/app")).unwrap(), b"hi");
         assert!(dest.join("etc/conf").exists());
         assert_eq!(n, 2);
+    }
+
+    // Run the calling test again in a child that may hold only `limit` file descriptors, and
+    // return true there. The limit is per process, so lowering it here would starve the
+    // tests that run alongside.
+    fn in_child_with_fd_limit(test: &str, limit: u32) -> bool {
+        const CHILD: &str = "SCRATCHSMITH_FD_LIMIT_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            return true;
+        }
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("ulimit -n {limit} && exec \"$0\" \"$@\""))
+            .arg(std::env::current_exe().unwrap())
+            .args([&format!("unpack::tests::{test}"), "--exact", "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout) + String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{text}");
+        assert!(
+            text.contains("1 passed"),
+            "the child must run the test: {text}"
+        );
+        false
+    }
+
+    #[test]
+    fn a_deep_tree_holds_no_file_descriptor_per_level() {
+        // TASK-239. The walk held one descriptor per directory, and removing a tree one more,
+        // so a tree deeper than the limit failed with "Too many open files". 64 descriptors and
+        // 300 levels: the old walk failed at about 60.
+        if !in_child_with_fd_limit("a_deep_tree_holds_no_file_descriptor_per_level", 64) {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir(&dest).unwrap();
+        let deep = "d/".repeat(300);
+        let mut applied = Applied::default();
+        // A file at the bottom, and a symlink there whose `..` steps back up through the chain.
+        let mut ar = tar::Builder::new(Vec::new());
+        for (name, body) in [
+            (format!("{deep}f"), &b"f"[..]),
+            (format!("{deep}x/g"), b"g"),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            ar.append_data(&mut header, name, body).unwrap();
+        }
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_mode(0o777);
+        ar.append_link(&mut header, format!("{deep}up"), "../d/x")
+            .unwrap();
+        let mut header = tar::Header::new_gnu();
+        header.set_size(0);
+        header.set_mode(0o644);
+        ar.append_data(&mut header, format!("{deep}up/h"), &b""[..])
+            .unwrap();
+        apply_layer(&ar.into_inner().unwrap(), &dest, &mut applied).unwrap();
+        assert!(dest.join(format!("{deep}f")).is_file());
+        assert!(
+            dest.join(format!("{deep}x/h")).is_file(),
+            "`up/h` lands under `x`"
+        );
+
+        // A whiteout at the bottom, then an opaque one in the middle, then the whole tree.
+        apply_layer(
+            &tar_of(&[(&format!("{deep}.wh.f"), b"")]),
+            &dest,
+            &mut applied,
+        )
+        .unwrap();
+        assert!(!dest.join(format!("{deep}f")).exists());
+        let half = "d/".repeat(150);
+        apply_layer(
+            &tar_of(&[(&format!("{half}.wh..wh..opq"), b"")]),
+            &dest,
+            &mut applied,
+        )
+        .unwrap();
+        assert!(dest.join(&half).is_dir());
+        assert_eq!(std::fs::read_dir(dest.join(&half)).unwrap().count(), 0);
+        apply_layer(&tar_of(&[("d/.wh.d", b"")]), &dest, &mut applied).unwrap();
+        apply_layer(&tar_of(&[(".wh.d", b"")]), &dest, &mut applied).unwrap();
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn check_id_refuses_a_different_directory() {
+        // The check that each step back up through `..` runs, in `walk_in_root` and in
+        // `clear_dir`. Moving a directory in the middle of a walk would need a race, so this
+        // tests the check itself and not the call sites.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("a")).unwrap();
+        std::fs::create_dir(tmp.path().join("b")).unwrap();
+        let a = open_dir(rustix::fs::CWD, tmp.path().join("a").as_os_str()).unwrap();
+        let b = open_dir(rustix::fs::CWD, tmp.path().join("b").as_os_str()).unwrap();
+        let b_id = DirId::of(&rustix::fs::fstat(&b).unwrap());
+        check_id(&b, b_id, Path::new("/b")).unwrap();
+        let err = check_id(&a, b_id, Path::new("/b")).unwrap_err();
+        assert!(err.to_string().contains("moved while unpacking"), "{err}");
     }
 
     #[test]
