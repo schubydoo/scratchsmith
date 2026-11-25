@@ -758,8 +758,15 @@
 <ol>
 <li><strong>Resolve</strong>: emulate the <code>ld.so</code> search order from the ELF itself (RPATH is transitive,
    RUNPATH is not, <code>$ORIGIN</code> is per-object). An object that has RUNPATH searches no RPATH,
-   neither its own nor one it inherits. Each RPATH or RUNPATH string is a <code>:</code> list, and
-   its entries are searched in order. An empty entry means the directory the program starts in.
+   neither its own nor one it inherits. A name that an object loaded earlier already carries,
+   as the name it was needed by or as its <code>DT_SONAME</code>, resolves to that object with no search,
+   as <code>ld.so</code> does. A library found through a symlink expands <code>$ORIGIN</code> to the directory that
+   holds the symlink, as <code>ld.so</code> does, and stages from its real file. Each RPATH or RUNPATH
+   string is a <code>:</code> list, and its entries are searched in order. A file of another ELF class or
+   machine than the binary, such as a 32-bit copy in <code>lib</code> ahead of the 64-bit one in <code>lib64</code>,
+   is skipped and the search goes on, as <code>ld.so</code> skips it. When every copy is of another arch,
+   or the binary names the file by path, that file still stages, and a warning says the image
+   cannot load it. An empty entry means the directory the program starts in.
    A build cannot know that directory, so Scratchsmith does not search an empty entry. If the
    split entries miss, a string that holds <code>:</code> is also tried whole as one directory, before the
    default directories. The loader finds a <code>DT_NEEDED</code> library there only through the image's

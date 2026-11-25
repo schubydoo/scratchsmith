@@ -1145,7 +1145,7 @@
 <h2 id="quick-start">Quick start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
 <p>Pack a dynamic binary into a scratch image and run it:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>scratchsmith/app:packed<span class="w"> </span>--version<span class="w">   </span><span class="c1"># image is named scratchsmith/&lt;name&gt;:packed</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>scratchsmith/app:packed<span class="w"> </span>--version<span class="w">   </span><span class="c1"># image is named scratchsmith/&lt;name&gt;:packed (characters a tag cannot hold become -)</span>
 </code></pre></div>
 <p>The default sink loads into Docker. To load with <strong>podman</strong> or <strong>nerdctl</strong> instead (and run
 <code>--smoke</code> with it), pass <code>--runtime</code>:</p>
@@ -1180,6 +1180,14 @@ configuration, so <code>docker login</code> once (for GitHub's <code>ghcr.io</co
 the SBOM as a signed attestation:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:latest<span class="w"> </span>--sbom<span class="w"> </span>--sign<span class="w"> </span>./app
 </code></pre></div>
+<p><code>--sign</code> checks that cosign runs before anything is pushed. It signs the digest of the manifest
+that scratchsmith sent, also when the registry's answer names no digest, and refuses one that
+names another digest. If signing fails after the push, the error says that the image was pushed
+but is not signed. <code>index --sign</code> works the same way.</p>
+<p>cosign signs and attests with your terminal's standard input and standard error. Outside CI,
+keyless signing prints a login URL there and can ask for a code, and you answer it as you would
+when you run cosign yourself. cosign's standard output stays captured, so <code>--format json</code> stays
+parseable. A failed cosign run is reported with its exit status, and its own messages are above.</p>
 <h2 id="supply-chain-output-smoke-run-and-size-gates">Supply-chain output, smoke-run, and size gates<a class="headerlink" href="#supply-chain-output-smoke-run-and-size-gates" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--strip<span class="w"> </span>--smoke<span class="w"> </span>./app<span class="w">        </span><span class="c1"># SBOM + stripped + auto smoke-run</span>
 <a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--sbom-format<span class="w"> </span>spdx-json<span class="w"> </span>--sbom-file<span class="w"> </span>bom.spdx.json<span class="w"> </span>./app<span class="w">   </span><span class="c1"># SPDX SBOM, custom path</span>
@@ -1187,6 +1195,20 @@ the SBOM as a signed attestation:</p>
 <a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--strip<span class="w"> </span>--max-size<span class="w"> </span>8MB<span class="w"> </span>./app<span class="w">        </span><span class="c1"># fail the build if the staged image exceeds 8 MB</span>
 <a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>scratchsmith<span class="w"> </span>lint<span class="w"> </span>--fail-on<span class="w"> </span>no-pie<span class="w"> </span>--fail-on<span class="w"> </span>no-relro<span class="w"> </span>./app<span class="w">   </span><span class="c1"># hardening gate for CI</span>
 </code></pre></div>
+<p><code>--smoke</code> runs the image once and fails the pack only when the binary could not start: a
+missing library or loader, or an entrypoint the runtime could not exec. An app that starts and
+exits with an error passes, unless the code is 126 or 127, which shells use for a command
+that could not run. A binary still running after 15 seconds counts as started, and its
+container is removed.</p>
+<p>syft, grype and cosign each have a time limit: syft 15 minutes, grype 30 minutes, and cosign
+10 minutes. A run past its limit is stopped, and the pack fails with an error that names the tool
+and the limit. grype's limit leaves room for its first run, which downloads its vulnerability
+database.</p>
+<p><code>--push</code> and <code>index</code> give up on a registry or token host that does not accept the connection
+within 30 seconds, and the error names the endpoint. The identity-token exchange also fails
+after 60 seconds of silence from the token host. Talking to the registry itself has no read
+limit, so a slow upload of a large layer is not cut off, and a registry that accepts the
+connection and then sends nothing still keeps the command waiting.</p>
 <p>The report names the loader the image carries, because the binary's <code>PT_INTERP</code> chooses that
 path and not scratchsmith. <code>--format json</code> carries it as <code>interpreter</code>, so a job can assert it
 without unpacking the image. An ELF that carries no <code>PT_INTERP</code> reports null, which is the
@@ -1588,14 +1610,27 @@ escaped too.</p>
 </code></pre></div>
 <p><code>unpack</code> reads an OCI-layout archive (what <code>pack --oci-archive</code> writes, or a skopeo/buildah
 export), applies each layer in order, and honors whiteouts. Combine it with <code>diff</code> to
-compare two images: unpack both, then run <code>scratchsmith diff old new</code>.</p>
+compare two images: unpack both, then run <code>scratchsmith diff old new</code>. When a later layer holds
+an entry for a path that exists, <code>unpack</code> replaces that path, as a container runtime does. A
+directory over a directory keeps its contents. A symlink inside the image resolves against the
+target directory as the image's <code>/</code>, so a file under Debian's <code>var/run -&gt; /run</code> lands in
+<code>run/</code>. <code>unpack</code> refuses, and exits <code>1</code>, an entry or hard link that would leave the target.
+When the archive's index lists more than one manifest, <code>unpack</code> applies only the first, and
+prints a warning on standard error that names its digest, and its platform when the index gives
+one.</p>
 <p><code>unpack</code> reads every gzip member of a layer, as Docker does. It refuses a layer that is cut
 short, has data after its end, or holds a sparse entry or a malformed PAX record, and exits <code>1</code>
-before it writes any file from that layer.</p>
+before it writes any file from that layer. A layer may hold at most 2 GiB once decompressed, and
+all layers together at most 16 GiB. A layer that the manifest lists twice counts twice.</p>
 <p><code>unpack</code> clears the setuid and setgid bits on every file and directory it writes. An untrusted
 image cannot then plant a setuid program owned by the user who unpacks it. <code>unpack</code> prints one
 warning line on standard error for each path in the final image that had one of those bits.
 The <code>stripped_setid</code> field of <code>--format json</code> lists the same paths.</p>
+<p><code>unpack</code> applies the mode of each directory after the last layer, so a directory without owner
+write permission, such as <code>/root</code> in a Fedora image, unpacks for a user who is not root. Until
+then such a directory stays open to its owner, so a failed unpack leaves a tree that its owner
+can remove. A finished tree keeps the image's modes, so it may need <code>chmod -R u+w</code> before
+<code>rm -rf</code>.</p>
 <h2 id="multi-arch-images">Multi-arch images<a class="headerlink" href="#multi-arch-images" title="Permanent link">&para;</a></h2>
 <p>Scratchsmith resolves against the host's libraries, so it packs for the architecture it runs on.
 To publish a multi-arch image, run <code>pack --push</code> on each architecture (a CI matrix). Then combine

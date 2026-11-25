@@ -606,6 +606,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#an-image-whose-layers-decompress-past-16-gib-in-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An image whose layers decompress past 16 GiB in all
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -990,6 +1001,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#an-image-whose-layers-decompress-past-16-gib-in-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An image whose layers decompress past 16 GiB in all
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1181,6 +1203,13 @@ entry anyway.</p>
 <p>Now <code>unpack</code> refuses a layer with a malformed PAX record, and exits <code>1</code>. It refuses the layer
 before it writes any file from it, and the error names the entry. Docker's tar reader refuses
 such a record too, so no working image has one.</p>
+<h3 id="an-image-whose-layers-decompress-past-16-gib-in-all">An image whose layers decompress past 16 GiB in all<a class="headerlink" href="#an-image-whose-layers-decompress-past-16-gib-in-all" title="Permanent link">&para;</a></h3>
+<p>Each layer stops at 2 GiB once decompressed, but a manifest can list the same layer many
+times. Through 2.0.1, one small gzip layer listed N times decompressed N times, and <code>unpack</code>
+wrote up to N times 2 GiB to the target.</p>
+<p>Now <code>unpack</code> refuses an image whose layers hold more than 16 GiB in all once decompressed, and
+exits <code>1</code>. A layer listed twice counts twice, and an uncompressed layer counts at its own size.
+The error names the limit. The layers before the one that crosses it are already applied.</p>
 <h2 id="tolerances-ending-in-20">Tolerances ending in 2.0<a class="headerlink" href="#tolerances-ending-in-20" title="Permanent link">&para;</a></h2>
 <p>No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list
 <a href="#removed-in-200">Removed in 2.0.0</a> names each one.</p>
