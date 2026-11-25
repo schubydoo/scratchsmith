@@ -203,8 +203,8 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
     }
     clock.timings.resolve_ms = millis(clock.started);
     let staging = Instant::now();
-    let tree = stager::stage(binary, &resolution, dest, opts.symlinks)?;
-    let default_includes = stager::stage_default_includes(&resolution, dest, &opts.nss)?;
+    let (tree, default_includes) =
+        stager::stage_with_includes(binary, &resolution, dest, opts.symlinks, &opts.nss)?;
     warnings.extend(default_includes.warnings);
     // Gate on the library policy over everything staged (resolved libs, the loader, and the
     // NSS modules), so a denied library cannot slip in via the default-includes.

@@ -653,8 +653,24 @@ pub fn stage(
     symlinks: SymlinkMode,
 ) -> Result<StagedTree> {
     let tree = stage_files(binary, resolution, dest, symlinks)?;
-    generate_ld_cache(dest, resolution)?;
+    generate_ld_cache(dest, resolution, &[])?;
     Ok(tree)
+}
+
+/// [`stage`] plus [`stage_default_includes`], with the cache built last, so it lists the NSS
+/// modules too. glibc loads them by name, so a module in a directory that only the binary's
+/// RUNPATH reaches is found through the cache alone.
+pub fn stage_with_includes(
+    binary: &Path,
+    resolution: &Resolution,
+    dest: &Path,
+    symlinks: SymlinkMode,
+    nss: &NssSelection,
+) -> Result<(StagedTree, IncludeReport)> {
+    let tree = stage_files(binary, resolution, dest, symlinks)?;
+    let includes = stage_default_includes(resolution, dest, nss)?;
+    generate_ld_cache(dest, resolution, &includes.staged)?;
+    Ok((tree, includes))
 }
 
 /// Add the runtime files glibc loads outside the dependency graph so that DNS and
@@ -1069,11 +1085,17 @@ fn image_dir(dest: &Path, dir: &Path, create: bool) -> Result<PathBuf> {
 
 // Regenerate /etc/ld.so.cache inside the staged root. A fresh root has no
 // ld.so.conf, so write one listing every dir we staged into, then let ldconfig
-// (which knows the glibc cache format) build the cache against that root.
-fn generate_ld_cache(dest: &Path, resolution: &Resolution) -> Result<()> {
+// (which knows the glibc cache format) build the cache against that root. `extra` is any
+// other file staged at its host path, such as an NSS module; its directory is listed too.
+fn generate_ld_cache(dest: &Path, resolution: &Resolution, extra: &[PathBuf]) -> Result<()> {
     let mut dirs = BTreeSet::new();
-    for lib in &resolution.libs {
-        if let Some(dir) = lib.path.parent() {
+    let libs = resolution.libs.iter().map(|lib| &lib.path);
+    let shared = extra.iter().filter(|p| {
+        p.file_name()
+            .is_some_and(|n| n.to_string_lossy().contains(".so"))
+    });
+    for path in libs.chain(shared) {
+        if let Some(dir) = path.parent() {
             dirs.insert(dir.to_path_buf());
         }
     }
@@ -1992,7 +2014,7 @@ mod tests {
         std::os::unix::fs::symlink(outside.join("passwd"), etc.join("passwd")).unwrap();
 
         stage_default_includes(&res, &dest, &NssSelection::default()).unwrap();
-        generate_ld_cache(&dest, &res).ok();
+        generate_ld_cache(&dest, &res, &[]).ok();
 
         assert!(etc.join("nsswitch.conf").is_file());
         assert!(etc.join("ld.so.conf").is_file());
