@@ -6,6 +6,7 @@
 //! SBOM runs against the staged rootfs and is usable on its own.
 
 use anyhow::{bail, Context, Result};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -53,11 +54,11 @@ pub fn generate_sbom(rootfs: &Path, format: SbomFormat, out: &Path) -> Result<()
     )
 }
 
-fn syft_args(rootfs: &Path, format: SbomFormat, out: &Path) -> Vec<String> {
+fn syft_args(rootfs: &Path, format: SbomFormat, out: &Path) -> Vec<OsString> {
     vec![
-        format!("dir:{}", rootfs.display()),
+        prefixed("dir:", rootfs),
         "-o".into(),
-        format!("{}={}", format.syft_name(), out.display()),
+        prefixed(&format!("{}=", format.syft_name()), out),
     ]
 }
 
@@ -70,13 +71,21 @@ pub fn check_cosign() -> Result<()> {
         .context("--sign needs cosign, so nothing was pushed")
 }
 
+// `prefix` then `path`, byte for byte. A path's `display()` replaces a byte that is not UTF-8,
+// so the tool would read or write a different file.
+fn prefixed(prefix: &str, path: &Path) -> OsString {
+    let mut arg = OsString::from(prefix);
+    arg.push(path);
+    arg
+}
+
 /// Keyless-sign an image (by registry reference) with cosign. Signs a pushed image by
 /// digest, so `pack --push --sign` drives it.
 pub fn cosign_sign(image_ref: &str) -> Result<()> {
     run_tool("cosign", &cosign_sign_args(image_ref), COSIGN_HINT)
 }
 
-fn cosign_sign_args(image_ref: &str) -> Vec<String> {
+fn cosign_sign_args(image_ref: &str) -> Vec<OsString> {
     vec!["sign".into(), "--yes".into(), image_ref.into()]
 }
 
@@ -89,14 +98,14 @@ pub fn cosign_attest(image_ref: &str, sbom: &Path, predicate_type: &str) -> Resu
     )
 }
 
-fn cosign_attest_args(image_ref: &str, sbom: &Path, predicate_type: &str) -> Vec<String> {
+fn cosign_attest_args(image_ref: &str, sbom: &Path, predicate_type: &str) -> Vec<OsString> {
     vec![
         "attest".into(),
         "--yes".into(),
         "--type".into(),
         predicate_type.into(),
         "--predicate".into(),
-        sbom.display().to_string(),
+        sbom.into(),
         image_ref.into(),
     ]
 }
@@ -180,10 +189,10 @@ pub fn run_grype(source: &ScanSource) -> Result<ScanSummary> {
     parse_grype(&out)
 }
 
-fn grype_args(source: &ScanSource) -> Vec<String> {
+fn grype_args(source: &ScanSource) -> Vec<OsString> {
     let src = match source {
-        ScanSource::Sbom(p) => format!("sbom:{}", p.display()),
-        ScanSource::Rootfs(p) => format!("dir:{}", p.display()),
+        ScanSource::Sbom(p) => prefixed("sbom:", p),
+        ScanSource::Rootfs(p) => prefixed("dir:", p),
     };
     vec![src, "-o".into(), "json".into()]
 }
@@ -220,12 +229,12 @@ fn parse_grype(json: &[u8]) -> Result<ScanSummary> {
 
 // Run an external tool, turning a not-found into a clear install hint and a non-zero
 // exit into a reported failure — never a silent skip.
-fn run_tool(tool: &str, args: &[String], hint: &str) -> Result<()> {
+fn run_tool(tool: &str, args: &[OsString], hint: &str) -> Result<()> {
     run_tool_capture(tool, args, hint).map(|_| ())
 }
 
 // As `run_tool`, but returns captured stdout (for tools whose output we parse).
-fn run_tool_capture(tool: &str, args: &[String], hint: &str) -> Result<Vec<u8>> {
+fn run_tool_capture(tool: &str, args: &[OsString], hint: &str) -> Result<Vec<u8>> {
     let output = match Command::new(tool).args(args).output() {
         Ok(o) => o,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -255,11 +264,7 @@ mod tests {
         );
         assert_eq!(
             args,
-            vec![
-                "dir:/tmp/rootfs".to_string(),
-                "-o".into(),
-                "cyclonedx-json=/tmp/sbom.json".into(),
-            ]
+            ["dir:/tmp/rootfs", "-o", "cyclonedx-json=/tmp/sbom.json"].map(OsString::from)
         );
     }
 
@@ -273,11 +278,7 @@ mod tests {
     fn cosign_sign_args_are_well_formed() {
         assert_eq!(
             cosign_sign_args("ghcr.io/you/app@sha256:abc"),
-            vec![
-                "sign".to_string(),
-                "--yes".into(),
-                "ghcr.io/you/app@sha256:abc".into()
-            ]
+            ["sign", "--yes", "ghcr.io/you/app@sha256:abc"].map(OsString::from)
         );
     }
 
@@ -294,9 +295,9 @@ mod tests {
     fn cosign_attest_args_are_well_formed() {
         let args = cosign_attest_args("reg/img@sha256:abc", Path::new("/s.json"), "cyclonedx");
         assert_eq!(args[0], "attest");
-        assert!(args.contains(&"--type".to_string()));
-        assert!(args.contains(&"cyclonedx".to_string()));
-        assert!(args.contains(&"reg/img@sha256:abc".to_string()));
+        assert!(args.iter().any(|a| a == "--type"));
+        assert!(args.iter().any(|a| a == "cyclonedx"));
+        assert!(args.iter().any(|a| a == "reg/img@sha256:abc"));
     }
 
     #[test]
@@ -315,11 +316,7 @@ mod tests {
     fn grype_args_pick_the_source_prefix() {
         assert_eq!(
             grype_args(&ScanSource::Sbom(PathBuf::from("/tmp/sbom.json"))),
-            vec![
-                "sbom:/tmp/sbom.json".to_string(),
-                "-o".into(),
-                "json".into()
-            ]
+            ["sbom:/tmp/sbom.json", "-o", "json"].map(OsString::from)
         );
         assert_eq!(
             grype_args(&ScanSource::Rootfs(PathBuf::from("/tmp/rootfs")))[0],

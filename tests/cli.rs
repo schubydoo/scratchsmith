@@ -2777,3 +2777,58 @@ fn an_sbom_path_or_format_without_sbom_is_named_in_the_report() {
         "{report}"
     );
 }
+
+#[test]
+fn an_sbom_and_scan_into_a_non_utf8_directory_use_the_exact_path() {
+    // TASK-221. The tool arguments were built with `display()`, which turns a byte that is not
+    // UTF-8 into U+FFFD, so syft wrote the SBOM to another file and grype read nothing.
+    use std::os::unix::ffi::OsStrExt;
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join(std::ffi::OsStr::from_bytes(b"out-\xff"));
+    std::fs::create_dir(&dir).unwrap();
+    // grype fails unless the SBOM it is given is there, under the name it was given.
+    let tools = fake_tools(
+        tmp.path(),
+        &[
+            ("syft", FAKE_SYFT),
+            (
+                "grype",
+                r#"case "$1" in sbom:*) test -f "${1#sbom:}" || exit 3;; esac
+echo '{"matches":[]}'"#,
+            ),
+        ],
+    );
+    let sbom = dir.join("sbom.json");
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args([
+            "pack",
+            "--no-build",
+            "--packages",
+            "none",
+            "--sbom",
+            "--scan",
+        ])
+        .arg("--sbom-file")
+        .arg(&sbom)
+        .arg("-o")
+        .arg(dir.join("rootfs"))
+        .arg(bin)
+        .env("PATH", &tools)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        sbom.is_file(),
+        "the SBOM must be at the path given: {stderr}"
+    );
+    let names: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names.len(), 2, "nothing else is written: {names:?}");
+}
