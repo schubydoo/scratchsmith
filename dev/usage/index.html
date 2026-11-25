@@ -1604,7 +1604,8 @@ target directory as the image's <code>/</code>, so a file under Debian's <code>v
 <code>run/</code>. <code>unpack</code> refuses, and exits <code>1</code>, an entry or hard link that would leave the target.</p>
 <p><code>unpack</code> reads every gzip member of a layer, as Docker does. It refuses a layer that is cut
 short, has data after its end, or holds a sparse entry or a malformed PAX record, and exits <code>1</code>
-before it writes any file from that layer.</p>
+before it writes any file from that layer. A layer may hold at most 2 GiB once decompressed, and
+all layers together at most 16 GiB. A layer that the manifest lists twice counts twice.</p>
 <p><code>unpack</code> clears the setuid and setgid bits on every file and directory it writes. An untrusted
 image cannot then plant a setuid program owned by the user who unpacks it. <code>unpack</code> prints one
 warning line on standard error for each path in the final image that had one of those bits.
