@@ -254,6 +254,21 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path, applied: &mut Applied) -> Result<u
     // as it was. Then honor its whiteouts: `.wh.<name>` deletes `<name>`; `.wh..wh..opq` clears
     // the directory.
     for path in scan_layer(tar_bytes)? {
+        // Read the marker's path as an entry's: a leading `/` or `.` part drops, so
+        // `/etc/.wh.secret` deletes what `/etc/secret` extracted. A marker with a `..` part is
+        // still skipped, as before. Docker cleans the path first, so this can differ; whether
+        // to refuse it, as an entry with `..` is refused, is a separate decision.
+        let Some(path) = path
+            .components()
+            .filter(|c| !matches!(c, Component::RootDir | Component::CurDir))
+            .map(|c| match c {
+                Component::Normal(n) => Some(n),
+                _ => None,
+            })
+            .collect::<Option<PathBuf>>()
+        else {
+            continue;
+        };
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
@@ -1211,6 +1226,58 @@ mod tests {
         assert_eq!(std::fs::read(dest.join("bin/app")).unwrap(), b"hi");
         assert!(dest.join("etc/conf").exists());
         assert_eq!(n, 2);
+    }
+
+    // As `tar_of`, but each name goes into the header as written, so a test can give the
+    // absolute and `..` names that the tar builder refuses. Names stay under 100 bytes.
+    fn tar_of_raw_names(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut ar = tar::Builder::new(Vec::new());
+        for (name, body) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.as_old_mut().name[..name.len()].copy_from_slice(name.as_bytes());
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            ar.append(&header, &body[..]).unwrap();
+        }
+        ar.into_inner().unwrap()
+    }
+
+    #[test]
+    fn an_absolute_whiteout_deletes_as_its_relative_form_does() {
+        // TASK-238. An absolute file path was extracted, but the same absolute marker path was
+        // ignored, so `/etc/.wh.secret` left `etc/secret` in the image.
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir(&dest).unwrap();
+        let mut applied = Applied::default();
+        apply_layer(
+            &tar_of_raw_names(&[("/etc/secret", b"s"), ("/etc/keep", b"k"), ("./x/y", b"y")]),
+            &dest,
+            &mut applied,
+        )
+        .unwrap();
+        assert!(dest.join("etc/secret").is_file());
+        apply_layer(
+            &tar_of_raw_names(&[("/etc/.wh.secret", b""), ("./x/.wh..wh..opq", b"")]),
+            &dest,
+            &mut applied,
+        )
+        .unwrap();
+        assert!(
+            !dest.join("etc/secret").exists(),
+            "the absolute marker deletes"
+        );
+        assert!(dest.join("etc/keep").is_file(), "only the named file goes");
+        assert_eq!(std::fs::read_dir(dest.join("x")).unwrap().count(), 0);
+        // A marker with a `..` part is still skipped, as before this change.
+        apply_layer(
+            &tar_of_raw_names(&[("etc/../etc/.wh.keep", b"")]),
+            &dest,
+            &mut applied,
+        )
+        .unwrap();
+        assert!(dest.join("etc/keep").is_file());
     }
 
     // Run the calling test again in a child that may hold only `limit` file descriptors, and
