@@ -7,7 +7,8 @@ version = 2
 yanked = "deny"
 ignore = [
     # chrono is unmaintained (not a vulnerability). oci-client 0.18.0 needs it as a
-    # required dep and no release drops it. Remove once oci-client moves off chrono.
+    # required dep and no release drops it. Remove once oci-client moves off chrono,
+    # together with the same ignore in osv-scanner.toml and fuzz/osv-scanner.toml.
     { id = "RUSTSEC-2026-0543", reason = "unmaintained, transitive via oci-client, no alternative" },
 ]
 

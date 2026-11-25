@@ -1,0 +1,6 @@
+# OSV-Scanner reads only the config next to each lockfile, so fuzz/Cargo.lock needs its own copy
+# of ../osv-scanner.toml. Keep the two in step.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+reason = "chrono is unmaintained (informational, no code flaw), pulled in only by oci-client 0.18.0. oci-client 0.19.0, not yet released, drops chrono for jiff; remove this with the deny.toml ignore when we bump (TASK-227)."
