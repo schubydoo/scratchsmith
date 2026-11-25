@@ -606,8 +606,13 @@ fn dispatch(cli: Cli) -> Result<()> {
             sign,
             format,
         } => {
+            if sign {
+                crate::supplychain::check_cosign()?;
+            }
             let outcome = crate::registry::push_index(&target, &sources)?;
-            let report = index_report(target, outcome, sign)?;
+            let pushed = target.clone();
+            let report = index_report(target, outcome, sign)
+                .with_context(|| format!("the index {pushed} was pushed, but it is not signed"))?;
             match format {
                 Format::Text => println!("{}", report.to_text()),
                 Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
@@ -704,7 +709,7 @@ fn index_report(
     let mut warnings = Vec::new();
     let signed = if sign {
         // cosign signs a registry image by digest; the push must have returned one.
-        let dref = outcome.digest_ref.for_signing("index")?;
+        let dref = outcome.digest_ref.for_signing()?;
         crate::supplychain::cosign_sign(&dref)?;
         Some(dref)
     } else {
@@ -749,7 +754,7 @@ mod tests {
 
         for quiet in [
             PushedDigest::Confirmed("r@sha256:x".into()),
-            PushedDigest::Unreported,
+            PushedDigest::Unreported("r@sha256:x".into()),
         ] {
             let report = index_report("r:1".into(), outcome(quiet), false).unwrap();
             assert!(report.warnings.is_empty());

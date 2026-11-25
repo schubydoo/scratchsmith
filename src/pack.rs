@@ -7,7 +7,7 @@ use crate::report::{PackReport, Timings};
 use crate::resolver::{self, Sysroot};
 use crate::stager::{self, AddFile, NssSelection, RuntimeExtras, SizeReport, StagedTree};
 use crate::supplychain::{self, SbomRequest, ScanRequest, ScanSource, ScanSummary};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -929,13 +929,17 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackRep
         bail!(crate::cli::UsageError("--smoke needs a running image, so it isn't supported with --push; pull the pushed image and run it separately, or drop --smoke".into()));
     }
     let mut s = stage_for_image(binary, opts)?;
+    // After staging, so a bad binary or option is reported first; before the push, which
+    // would make the image public.
+    if opts.sign {
+        supplychain::check_cosign()?;
+    }
     // The push returns the pushed image's digest when the registry reports one; a plain push
     // never fails on a missing or mismatched digest — only signing, which needs it, does.
     let (digest_ref, ms) = timed(|| crate::registry::push_to_registry(&s.tree, reference, &s.cfg))?;
     s.clock.timings.deliver_ms = Some(ms);
     let signed = if opts.sign {
-        let dref = digest_ref.for_signing("image")?;
-        let (signed, ms) = timed(|| sign_pushed(&dref, opts))?;
+        let (signed, ms) = timed(|| sign_pushed(reference, digest_ref, opts))?;
         s.clock.timings.sign_ms = Some(ms);
         Some(signed)
     } else {
@@ -966,13 +970,23 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackRep
 
 // cosign-sign the pushed image by digest, and — if an SBOM was generated — attach it as a
 // signed attestation. Signing by digest (not tag) pins the exact image just pushed. Returns
-// the signed digest reference for the report.
-fn sign_pushed(digest_ref: &str, opts: &PackOptions) -> Result<String> {
-    supplychain::cosign_sign(digest_ref)?;
+// the signed digest reference for the report. The image is public by now, so each failure says
+// how far signing got.
+fn sign_pushed(
+    reference: &str,
+    digest: crate::registry::PushedDigest,
+    opts: &PackOptions,
+) -> Result<String> {
+    let not_signed = || format!("{reference} was pushed, but it is not signed");
+    let digest_ref = digest.for_signing().with_context(not_signed)?;
+    supplychain::cosign_sign(&digest_ref).with_context(not_signed)?;
     if let Some(req) = &opts.sbom {
-        supplychain::cosign_attest(digest_ref, &req.path, req.format.cosign_predicate_type())?;
+        supplychain::cosign_attest(&digest_ref, &req.path, req.format.cosign_predicate_type())
+            .with_context(|| {
+                format!("{reference} was pushed and signed, but its SBOM attestation failed")
+            })?;
     }
-    Ok(digest_ref.to_string())
+    Ok(digest_ref)
 }
 
 // Wrap the entrypoint so tini is pid 1: [tini, --, <original entrypoint...>].
