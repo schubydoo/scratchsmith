@@ -2908,3 +2908,52 @@ echo '{"matches":[]}'"#,
         .collect();
     assert_eq!(names.len(), 2, "nothing else is written: {names:?}");
 }
+
+#[test]
+fn a_docker_hub_reference_asks_the_credential_store_for_docker_io() {
+    // TASK-202 spike: record the server key that a credential store receives for a Docker
+    // Hub reference. `docker login` stores the Hub login under https://index.docker.io/v1/,
+    // and the pass, secretservice, osxkeychain and wincred helpers match on that string or
+    // its host, so a lookup under `docker.io` does not find it. This pins today's key; a fix
+    // changes the expected value here.
+    //
+    // Hermetic: the fake helper fails with a message that is not "not found", so the command
+    // stops at the lookup, before any network call.
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("docker");
+    std::fs::create_dir(&config).unwrap();
+    std::fs::write(config.join("config.json"), r#"{"credsStore":"rec"}"#).unwrap();
+    let seen = tmp.path().join("seen");
+    let helper = format!(
+        r#"[ "$1" = get ] && cat >> "{}" && echo >> "{}"; echo "spike: stop here" >&2; exit 1"#,
+        seen.display(),
+        seen.display()
+    );
+    let path = fake_tools(tmp.path(), &[("docker-credential-rec", &helper)]);
+
+    for target in [
+        "app:1",
+        "docker.io/library/app:1",
+        "index.docker.io/library/app:1",
+    ] {
+        std::fs::write(&seen, "").unwrap();
+        let source = format!("{target}-amd64");
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["index", target, &source])
+            .env("DOCKER_CONFIG", &config)
+            .env("PATH", &path)
+            .output()
+            .expect("failed to run scratchsmith binary");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{target}: {stderr}");
+        assert!(
+            stderr.contains("looking up the credential for docker.io"),
+            "{target}: {stderr}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&seen).unwrap().trim(),
+            "docker.io",
+            "{target}: the key the helper received"
+        );
+    }
+}
