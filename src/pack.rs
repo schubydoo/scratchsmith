@@ -1258,7 +1258,7 @@ mod tests {
             ("c++filt", "c--filt"),
             ("my app", "my-app"),
             (".hidden", "hidden"),
-            ("café", "caf"),
+            ("naïve", "na-ve"),
             ("Ünïcode-tool", "n-code-tool"),
             ("a._b", "a-b"),
             ("a___b", "a-b"),
