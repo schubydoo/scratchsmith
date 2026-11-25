@@ -976,6 +976,42 @@ fn smoke_run_passes_for_a_plain_binary() {
 }
 
 #[test]
+fn a_smoke_run_of_a_pid_1_that_ignores_sigterm_ends_at_the_limit() {
+    // TASK-211. `sleep` as PID 1 has no SIGTERM handler, so it ignores the signal the CLI
+    // forwards. The smoke run must still end near its limit and leave no container.
+    if !docker_available() {
+        skip_required("no Docker daemon");
+        return;
+    }
+    let _g = docker_lock();
+    let sleep = Path::new("/usr/bin/sleep");
+    if !sleep.exists() {
+        skip_required("sleep not present");
+        return;
+    }
+    let tag = scratchsmith::pack::run(sleep, &PackOptions::default())
+        .expect("pack sleep")
+        .tag
+        .unwrap();
+    let start = std::time::Instant::now();
+    let outcome = smoke_run(Runtime::Docker, &tag, &["600"], 3).expect("smoke run");
+    let took = start.elapsed();
+    let left = Command::new("docker")
+        .args(["ps", "-aq", "--filter", &format!("ancestor={tag}")])
+        .output()
+        .unwrap();
+    let left = String::from_utf8_lossy(&left.stdout).trim().to_string();
+    if !left.is_empty() {
+        let _ = Command::new("docker").args(["rm", "-f", &left]).output();
+    }
+    rmi(&tag);
+    assert!(took < std::time::Duration::from_secs(30), "took {took:?}");
+    assert_eq!(outcome.code, None, "{outcome:?}");
+    assert!(!outcome.loader_failed(), "{outcome:?}");
+    assert!(left.is_empty(), "a container was left: {left}");
+}
+
+#[test]
 fn smoke_run_proves_nss_lookups_work_in_image() {
     if !docker_available() {
         skip_required("no Docker daemon");
