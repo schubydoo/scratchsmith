@@ -59,6 +59,20 @@ fn run_within(archive: &Path, dest: &Path, total: u64) -> Result<UnpackReport> {
     )?;
     let manifest: serde_json::Value =
         serde_json::from_slice(blob(&blobs, manifest_digest)?).context("parsing image manifest")?;
+    let mut warnings = Vec::new();
+    // Only the first manifest is applied. With more, say which, so an audit of a multi-platform
+    // image does not pass for every platform. The digest named a verified blob, so it is hex.
+    if let Some(n) = index["manifests"]
+        .as_array()
+        .map(Vec::len)
+        .filter(|&n| n > 1)
+    {
+        warnings.push(format!(
+            "the archive's index lists {n} manifests; unpack applied only the first, \
+             sha256:{manifest_digest}{}",
+            platform_of(&index["manifests"][0])
+        ));
+    }
     // A multi-arch index (what `scratchsmith index` composes) has `manifests`, not `layers`.
     let Some(layers) = manifest["layers"].as_array() else {
         if manifest.get("manifests").is_some() {
@@ -111,7 +125,23 @@ fn run_within(archive: &Path, dest: &Path, total: u64) -> Result<UnpackReport> {
             .iter()
             .map(|p: &PathBuf| p.display().to_string())
             .collect(),
+        warnings,
     })
+}
+
+// ` for os/arch[/variant]` from a descriptor's `platform`, quoted as archive text, or nothing
+// when the descriptor names no platform.
+fn platform_of(descriptor: &serde_json::Value) -> String {
+    let p = &descriptor["platform"];
+    let parts: Vec<&str> = ["os", "architecture", "variant"]
+        .iter()
+        .filter_map(|key| p[key].as_str())
+        .collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" for {}", shown(parts.join("/"), SHOWN_MAX))
+    }
 }
 
 // Read every blob and index.json out of the OCI-layout tarball, verifying each blob's bytes
@@ -2194,6 +2224,48 @@ mod tests {
         let mut all = vec![manifest.as_slice()];
         all.extend_from_slice(blobs);
         oci_archive(dir, &index, &all)
+    }
+
+    #[test]
+    fn an_index_of_several_manifests_warns_and_names_the_one_applied() {
+        // TASK-240. Only the first manifest is applied, so say which.
+        let tmp = tempfile::tempdir().unwrap();
+        let layer = tar_of(&[("a", b"x")]);
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "layers": [{
+                "mediaType": TAR,
+                "digest": format!("sha256:{}", hex(Sha256::digest(&layer))),
+            }],
+        }))
+        .unwrap();
+        let digest = hex(Sha256::digest(&manifest));
+        let index = serde_json::json!({ "manifests": [
+            { "digest": format!("sha256:{digest}"),
+              "platform": { "os": "linux", "architecture": "arm64", "variant": "v8" } },
+            { "digest": format!("sha256:{digest}"),
+              "platform": { "os": "linux", "architecture": "amd64" } },
+        ]});
+        let archive = oci_archive(tmp.path(), &index, &[&manifest, &layer]);
+        let report = run(&archive, &tmp.path().join("out")).unwrap();
+        let [warning] = &report.warnings[..] else {
+            panic!("one warning: {:?}", report.warnings);
+        };
+        assert_eq!(
+            warning,
+            &format!(
+                "the archive's index lists 2 manifests; unpack applied only the first, \
+                 sha256:{digest} for \"linux/arm64/v8\""
+            )
+        );
+
+        // One manifest, as `pack --oci-archive` writes: no warning. No platform: no `for`.
+        let one = serde_json::json!({ "manifests": [{ "digest": format!("sha256:{digest}") }] });
+        let archive = oci_archive(tmp.path(), &one, &[&manifest, &layer]);
+        assert!(run(&archive, &tmp.path().join("one"))
+            .unwrap()
+            .warnings
+            .is_empty());
+        assert_eq!(platform_of(&one["manifests"][0]), "");
     }
 
     #[test]

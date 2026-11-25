@@ -402,6 +402,9 @@ pub struct UnpackReport {
     pub files: usize,
     /// Image paths that carried a setuid or setgid bit, which `unpack` cleared on disk.
     pub stripped_setid: Vec<String>,
+    /// Lines for stderr, such as an index with more than one manifest. Not in the JSON.
+    #[serde(skip)]
+    pub warnings: Vec<String>,
 }
 
 impl UnpackReport {
@@ -1195,6 +1198,7 @@ mod tests {
             layers: 2,
             files: 17,
             stripped_setid: vec!["/usr/bin/su".into()],
+            warnings: vec!["not in the JSON".into()],
         };
         let json = serde_json::to_value(&report).unwrap();
         let mut keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();

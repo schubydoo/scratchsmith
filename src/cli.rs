@@ -704,6 +704,9 @@ fn dispatch(cli: Cli) -> Result<()> {
             format,
         } => {
             let report = crate::unpack::run(&archive, &output)?;
+            for warning in &report.warnings {
+                eprintln!("warning: {warning}");
+            }
             // stderr, so the JSON on stdout stays parseable. The path is archive text.
             for path in &report.stripped_setid {
                 eprintln!(

@@ -440,6 +440,8 @@ an entry for a path that exists, `unpack` replaces that path, as a container run
 directory over a directory keeps its contents. A symlink inside the image resolves against the
 target directory as the image's `/`, so a file under Debian's `var/run -> /run` lands in
 `run/`. `unpack` refuses, and exits `1`, an entry or hard link that would leave the target.
+When the archive's index lists more than one manifest, `unpack` applies only the first, and
+prints a warning on standard error that names its digest and platform.
 
 `unpack` reads every gzip member of a layer, as Docker does. It refuses a layer that is cut
 short, has data after its end, or holds a sparse entry or a malformed PAX record, and exits `1`

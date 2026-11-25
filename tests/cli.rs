@@ -806,6 +806,82 @@ fn unpack_round_trips_an_oci_archive() {
 }
 
 #[test]
+fn unpack_warns_on_stderr_when_the_index_lists_several_manifests() {
+    // TASK-240. The warning goes to stderr, so `--format json` on stdout stays as it was.
+    use sha2::{Digest, Sha256};
+    fn tar_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut ar = tar::Builder::new(Vec::new());
+        for (name, body) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            ar.append_data(&mut header, name, *body).unwrap();
+        }
+        ar.into_inner().unwrap()
+    }
+    let hex = |b: &[u8]| {
+        Sha256::digest(b)
+            .iter()
+            .map(|x| format!("{x:02x}"))
+            .collect::<String>()
+    };
+    let layer = tar_of(&[("a", b"x")]);
+    let manifest = serde_json::to_vec(&serde_json::json!({
+        "layers": [{
+            "mediaType": "application/vnd.oci.image.layer.v1.tar",
+            "digest": format!("sha256:{}", hex(&layer)),
+        }],
+    }))
+    .unwrap();
+    let digest = hex(&manifest);
+    let index = serde_json::to_vec(&serde_json::json!({ "manifests": [
+        { "digest": format!("sha256:{digest}"),
+          "platform": { "os": "linux", "architecture": "amd64" } },
+        { "digest": format!("sha256:{digest}"),
+          "platform": { "os": "linux", "architecture": "arm64" } },
+    ]}))
+    .unwrap();
+    let names = [
+        format!("blobs/sha256/{digest}"),
+        format!("blobs/sha256/{}", hex(&layer)),
+    ];
+    let tmp = tempfile::tempdir().unwrap();
+    let archive = tmp.path().join("multi.oci.tar");
+    std::fs::write(
+        &archive,
+        tar_of(&[
+            ("index.json", &index),
+            (&names[0], &manifest),
+            (&names[1], &layer),
+        ]),
+    )
+    .unwrap();
+    let out = run(&[
+        "unpack",
+        "--format",
+        "json",
+        archive.to_str().unwrap(),
+        tmp.path().join("out").to_str().unwrap(),
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "warning: the archive's index lists 2 manifests; unpack applied only the first, \
+             sha256:{digest} for \"linux/amd64\""
+        )),
+        "{stderr}"
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["layers"], 1);
+    assert!(report.get("warnings").is_none(), "{report}");
+}
+
+#[test]
 fn pack_oci_archive_writes_the_file() {
     // Exercises the `--oci-archive` sink through the CLI (daemonless — no Docker needed).
     let Some(bin) = small_fixture() else {
