@@ -12,7 +12,7 @@
 //! when ldconfig caches it under the NEEDED name. An `--include` file there counts as in 1.x.
 
 use anyhow::{bail, Context, Result};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 /// How a binary is linked — decides whether it needs dependency staging at all.
@@ -410,6 +410,8 @@ pub fn resolve_with(
 
     let mut resolution = Resolution::default();
 
+    // The loader answers to its PT_INTERP string and its DT_SONAME.
+    let mut loader_names: Vec<(String, PathBuf)> = Vec::new();
     // The loader is named by PT_INTERP, not DT_NEEDED, so resolve it separately.
     // Keep the verbatim PT_INTERP path (where it must live) alongside the real file.
     if let Some(interp) = &root_info.interpreter {
@@ -437,7 +439,7 @@ pub fn resolve_with(
                     escape_for_display(interp)
                 )
             })?;
-            if let Some(info) = parsed {
+            if let Some(info) = &parsed {
                 if info.e_type != goblin::elf::header::ET_DYN
                     && info.e_type != goblin::elf::header::ET_EXEC
                 {
@@ -450,6 +452,10 @@ pub fn resolve_with(
                         printable(&canonical(&loader))
                     );
                 }
+            }
+            loader_names.push((interp.clone(), canonical(&loader)));
+            if let Some(name) = parsed.and_then(|info| info.soname) {
+                loader_names.push((name, canonical(&loader)));
             }
             resolution.interpreter = Some(ResolvedInterp {
                 image_path: PathBuf::from(interp),
@@ -465,9 +471,15 @@ pub fn resolve_with(
     // the split entries and the whole-string fallbacks (see `literal_dirs`).
     let mut visited = HashSet::new();
     visited.insert(root_path.clone());
+    // Each name a loaded object answers to, with its real file. The first object loaded wins.
+    let mut loaded: HashMap<String, PathBuf> = HashMap::new();
+    for (name, real) in &loader_names {
+        loaded.entry(name.clone()).or_insert_with(|| real.clone());
+    }
     let mut queue = VecDeque::new();
-    // The last field counts the leading `needed` entries the ELF itself declared. Only the
-    // binary carries more: its --include entries.
+    // The fourth field counts the leading `needed` entries the ELF itself declared. Only the
+    // binary carries more: its --include entries. The last is false for an object reached only
+    // through an --include, which is dlopen'd later and so is not loaded at program start.
     queue.push_back((
         root_path,
         root_info.clone(),
@@ -478,6 +490,7 @@ pub fn resolve_with(
             Vec::<Option<CpuEntry>>::new(),
         ),
         declared_needed,
+        true,
     ));
     // Each entry that ld.so does not search, with the sonames found only through it, in the
     // order they were found, and why ldconfig would not cache one. One note per entry
@@ -491,6 +504,7 @@ pub fn resolve_with(
         obj,
         (inherited_rpaths, inherited_literals, inherited_gaps, inherited_cpu),
         declared,
+        at_start,
     )) = queue.pop_front()
     {
         let obj_dir = obj_path.parent().unwrap_or(Path::new("/"));
@@ -597,7 +611,11 @@ pub fn resolve_with(
                     None => gaps.push((gap.clone(), vec![lib])),
                 }
             }
-            let found = find_lib(soname, &search, obj_dir, &sysroot.root)
+            // ld.so uses an object that is already loaded under this name and does not search.
+            let declared_bare = i < declared && !soname.contains('/');
+            let already = declared_bare.then(|| loaded.get(soname).cloned()).flatten();
+            let found = already
+                .or_else(|| find_lib(soname, &search, obj_dir, &sysroot.root))
                 .or_else(|| in_literals(&literals, &mut not_cached))
                 .or_else(|| find_lib(soname, &sysroot.default_dirs, obj_dir, &sysroot.root));
             let Some(found) = found else {
@@ -638,6 +656,10 @@ pub fn resolve_with(
                 continue;
             };
             let real = canonical(&found);
+            let loads_at_start = at_start && i < declared;
+            if loads_at_start {
+                loaded.entry(soname.clone()).or_insert_with(|| real.clone());
+            }
             let reach = CpuReach {
                 search: &search,
                 cpu: &search_cpu,
@@ -704,6 +726,9 @@ pub fn resolve_with(
                     )
                 }
                 Some(child) => {
+                    if let (true, Some(name)) = (loads_at_start, &child.soname) {
+                        loaded.entry(name.clone()).or_insert_with(|| real.clone());
+                    }
                     let declared = child.needed.len();
                     queue.push_back((
                         real,
@@ -715,6 +740,7 @@ pub fn resolve_with(
                             child_cpu.clone(),
                         ),
                         declared,
+                        loads_at_start,
                     ));
                 }
                 // The name came out of an ELF: a path, or a bare name found through a search
@@ -3541,6 +3567,159 @@ mod tests {
             edges_to_c, 2,
             "both a and b must keep an edge to c, got {edges_to_c}"
         );
+    }
+
+    // exe (RUNPATH $ORIGIN/../lib) -> {libbar, libfoo}; libbar -> libfoo, with no search path.
+    fn app_layout(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let exe = root.join("app/bin/exe");
+        let bar = root.join("app/lib/libbar.so.1");
+        let foo = root.join("app/lib/libfoo.so.1");
+        for p in [&exe, &bar, &foo, &root.join("lib64/ld-linux-x86-64.so.2")] {
+            touch(p);
+        }
+        (exe, bar, foo)
+    }
+
+    #[test]
+    fn a_soname_already_loaded_resolves_without_a_search() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (exe, bar, foo) = app_layout(root);
+        let mut infos = HashMap::new();
+        infos.insert(
+            canonical(&exe),
+            elf(
+                &["libbar.so.1", "libfoo.so.1"],
+                &[],
+                &["$ORIGIN/../lib"],
+                Some("/lib64/ld-linux-x86-64.so.2"),
+            ),
+        );
+        infos.insert(canonical(&bar), elf(&["libfoo.so.1"], &[], &[], None));
+        infos.insert(canonical(&foo), elf(&[], &[], &[], None));
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert!(res.missing.is_empty(), "{:?}", res.missing);
+        let count = res
+            .libs
+            .iter()
+            .filter(|l| l.soname == "libfoo.so.1")
+            .count();
+        assert_eq!(count, 1, "{:?}", res.libs);
+        let to_foo = res
+            .edges
+            .iter()
+            .filter(|e| e.to.as_deref() == Some(canonical(&foo).as_path()))
+            .count();
+        assert_eq!(to_foo, 2, "{:?}", res.edges);
+    }
+
+    #[test]
+    fn a_loaded_object_matches_by_its_dt_soname() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/bin/exe");
+        let bar = root.join("app/lib/libbar.so.1");
+        let foo = root.join("app/lib/libfoo.so");
+        for p in [&exe, &bar, &foo] {
+            touch(p);
+        }
+        let mut infos = HashMap::new();
+        infos.insert(
+            canonical(&exe),
+            elf(
+                &["libfoo.so", "libbar.so.1"],
+                &[],
+                &["$ORIGIN/../lib"],
+                None,
+            ),
+        );
+        infos.insert(canonical(&bar), elf(&["libfoo.so.1"], &[], &[], None));
+        infos.insert(
+            canonical(&foo),
+            ElfInfo {
+                soname: Some("libfoo.so.1".into()),
+                ..elf(&[], &[], &[], None)
+            },
+        );
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert!(res.missing.is_empty(), "{:?}", res.missing);
+        let edge = res
+            .edges
+            .iter()
+            .find(|e| e.from == canonical(&bar) && e.soname == "libfoo.so.1")
+            .unwrap();
+        assert_eq!(edge.to.as_deref(), Some(canonical(&foo).as_path()));
+    }
+
+    #[test]
+    fn the_loader_matches_by_its_soname_and_no_host_copy_is_staged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/bin/exe");
+        let loader = root.join("opt/glibc/lib/ld-linux-x86-64.so.2");
+        let libdir = root.join("usr/lib/x86_64-linux-gnu");
+        let (libc, host_loader) = (
+            libdir.join("libc.so.6"),
+            libdir.join("ld-linux-x86-64.so.2"),
+        );
+        for p in [&exe, &loader, &libc, &host_loader] {
+            touch(p);
+        }
+        let mut infos = HashMap::new();
+        infos.insert(
+            canonical(&exe),
+            elf(
+                &["libc.so.6"],
+                &[],
+                &[],
+                Some("/opt/glibc/lib/ld-linux-x86-64.so.2"),
+            ),
+        );
+        infos.insert(
+            canonical(&loader),
+            ElfInfo {
+                soname: Some("ld-linux-x86-64.so.2".into()),
+                ..elf(&[], &[], &[], None)
+            },
+        );
+        infos.insert(
+            canonical(&libc),
+            elf(&["ld-linux-x86-64.so.2"], &[], &[], None),
+        );
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert!(res.missing.is_empty(), "{:?}", res.missing);
+        let edge = res
+            .edges
+            .iter()
+            .find(|e| e.from == canonical(&libc))
+            .unwrap();
+        assert_eq!(edge.to.as_deref(), Some(canonical(&loader).as_path()));
+        assert!(
+            !res.libs.iter().any(|l| l.path == canonical(&host_loader)),
+            "{:?}",
+            res.libs
+        );
+    }
+
+    #[test]
+    fn an_include_does_not_count_as_loaded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("app/bin/exe");
+        let bar = root.join("app/lib/libbar.so.1");
+        let plug = root.join("app/lib/libplug.so");
+        for p in [&exe, &bar, &plug] {
+            touch(p);
+        }
+        let mut infos = HashMap::new();
+        infos.insert(
+            canonical(&exe),
+            elf(&["libbar.so.1"], &[], &["$ORIGIN/../lib"], None),
+        );
+        infos.insert(canonical(&bar), elf(&["libplug.so"], &[], &[], None));
+        let includes = ["libplug.so".to_string()];
+        let res = resolve_with(&exe, &Sysroot::new(root), &includes, &MapSource { infos }).unwrap();
+        assert!(res.missing.contains(&"libplug.so".to_string()), "{:?}", res);
     }
 
     #[test]

@@ -759,6 +759,101 @@ fn an_include_in_a_colon_directory_stages_as_in_1x() {
 }
 
 #[test]
+fn a_library_needed_by_two_objects_packs_when_only_the_program_has_runpath() {
+    // app (RUNPATH $ORIGIN/../lib) needs libbar and libfoo; libbar needs libfoo and has no
+    // search path. ld.so finds libfoo already loaded for libbar, so the host runs app.
+    if !cc_available() {
+        skip_required("no C compiler");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    for sub in ["c1/bin", "c1/lib"] {
+        std::fs::create_dir_all(dir.join(sub)).unwrap();
+    }
+    std::fs::write(dir.join("foo.c"), "int foo(void){return 1;}").unwrap();
+    std::fs::write(
+        dir.join("bar.c"),
+        "int foo(void); int bar(void){return foo();}",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("main.c"),
+        "int bar(void); int foo(void); int main(void){return bar()+foo()-2;}",
+    )
+    .unwrap();
+    let p = |name: &str| dir.join(name).to_str().unwrap().to_string();
+    let libdir = format!("-L{}", p("c1/lib"));
+    cc(&[
+        "-shared",
+        "-fPIC",
+        "-Wl,-soname,libfoo.so.1",
+        "-o",
+        &p("c1/lib/libfoo.so.1"),
+        &p("foo.c"),
+    ]);
+    cc(&[
+        "-shared",
+        "-fPIC",
+        "-Wl,-soname,libbar.so.1",
+        "-o",
+        &p("c1/lib/libbar.so.1"),
+        &p("bar.c"),
+        &libdir,
+        "-l:libfoo.so.1",
+    ]);
+    cc(&[
+        "-o",
+        &p("c1/bin/app"),
+        &p("main.c"),
+        &libdir,
+        "-l:libbar.so.1",
+        "-l:libfoo.so.1",
+        "-Wl,--enable-new-dtags",
+        "-Wl,-rpath,$ORIGIN/../lib",
+    ]);
+
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let rootfs = dir.join("rootfs");
+    let pack = Command::new(bin)
+        .args([
+            "pack",
+            "-n",
+            "-o",
+            rootfs.to_str().unwrap(),
+            &p("c1/bin/app"),
+        ])
+        .output()
+        .expect("run pack");
+    assert!(
+        pack.status.success(),
+        "pack: {}",
+        String::from_utf8_lossy(&pack.stderr)
+    );
+    let graph = Command::new(bin)
+        .args(["graph", &p("c1/bin/app")])
+        .output()
+        .expect("run graph");
+    assert!(
+        graph.status.success(),
+        "graph: {}",
+        String::from_utf8_lossy(&graph.stderr)
+    );
+    // One libfoo in the whole image, in the staged lib directory.
+    let foos: Vec<PathBuf> = walkdir::WalkDir::new(&rootfs)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name() == "libfoo.so.1")
+        .map(|e| e.path().to_path_buf())
+        .collect();
+    let lib = dir.join("c1/lib").canonicalize().unwrap();
+    let staged = rootfs
+        .join(lib.strip_prefix("/").unwrap())
+        .join("libfoo.so.1");
+    assert_eq!(foos, vec![staged]);
+}
+
+#[test]
 fn a_truncated_program_interpreter_gives_graph_and_pack_the_same_error() {
     // libc.so.6 lists the host loader as DT_NEEDED, not this copy, so only PT_INTERP reaches it.
     if !cc_available() {
