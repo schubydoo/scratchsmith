@@ -4,7 +4,8 @@
 
 use scratchsmith::resolver::{resolve, Sysroot};
 use scratchsmith::stager::{
-    stage, stage_default_includes, strip_and_measure, NssSelection, SymlinkMode,
+    stage, stage_default_includes, stage_with_includes, strip_and_measure, NssSelection,
+    SymlinkMode,
 };
 use std::path::Path;
 
@@ -68,6 +69,42 @@ fn default_includes_add_nss_and_passwd_from_host() {
         "libnss_dns.so.2 was not staged (warnings: {:?})",
         report.warnings
     );
+}
+
+#[test]
+fn the_cache_lists_the_nss_modules() {
+    // TASK-242: the cache is built after the NSS modules are staged, so it lists them.
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let resolution = resolve(bin, &Sysroot::new("/")).expect("resolution");
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = tmp.path().join("rootfs");
+    let (_, report) = stage_with_includes(
+        bin,
+        &resolution,
+        &dest,
+        SymlinkMode::CopyAll,
+        &NssSelection::default(),
+    )
+    .expect("staging");
+    assert!(
+        report.staged.iter().any(|p| p.ends_with("libnss_dns.so.2")),
+        "no NSS module staged: {:?}",
+        report.warnings
+    );
+    let cache = dest.join("etc/ld.so.cache");
+    let listed = ["ldconfig", "/usr/sbin/ldconfig", "/sbin/ldconfig"]
+        .iter()
+        .find_map(|prog| {
+            std::process::Command::new(prog)
+                .arg("-C")
+                .arg(&cache)
+                .arg("-p")
+                .output()
+                .ok()
+        })
+        .expect("ldconfig");
+    let listed = String::from_utf8_lossy(&listed.stdout);
+    assert!(listed.contains("libnss_dns.so.2"), "{listed}");
 }
 
 #[test]

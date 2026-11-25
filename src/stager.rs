@@ -657,6 +657,23 @@ pub fn stage(
     Ok(tree)
 }
 
+/// [`stage`] plus [`stage_default_includes`], with the cache built last. The NSS modules sit
+/// beside libc, a directory the cache already scans, so building it after they are copied is
+/// what lists them. glibc loads them by name, so a module in a directory that only the
+/// binary's RUNPATH reaches is found through the cache alone.
+pub fn stage_with_includes(
+    binary: &Path,
+    resolution: &Resolution,
+    dest: &Path,
+    symlinks: SymlinkMode,
+    nss: &NssSelection,
+) -> Result<(StagedTree, IncludeReport)> {
+    let tree = stage_files(binary, resolution, dest, symlinks)?;
+    let includes = stage_default_includes(resolution, dest, nss)?;
+    generate_ld_cache(dest, resolution)?;
+    Ok((tree, includes))
+}
+
 /// Add the runtime files glibc loads outside the dependency graph so that DNS and
 /// user lookups work: a minimal nsswitch.conf, the NSS modules (version-matched to
 /// the staged libc), and — when `files` is staged — a minimal passwd/group. `nss`
