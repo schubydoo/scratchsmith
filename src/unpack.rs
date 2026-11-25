@@ -304,22 +304,13 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path, applied: &mut Applied) -> Result<u
     // Pass 1: read the whole layer before changing anything, so a refused layer leaves `dest`
     // as it was. Then honor its whiteouts: `.wh.<name>` deletes `<name>`; `.wh..wh..opq` clears
     // the directory.
-    for path in scan_layer(tar_bytes)? {
-        // Read the marker's path as an entry's: a leading `/` or `.` part drops, so
-        // `/etc/.wh.secret` deletes what `/etc/secret` extracted. A marker with a `..` part is
-        // still skipped, as before. Docker cleans the path first, so this can differ; whether
-        // to refuse it, as an entry with `..` is refused, is a separate decision.
-        let Some(path) = path
-            .components()
-            .filter(|c| !matches!(c, Component::RootDir | Component::CurDir))
-            .map(|c| match c {
-                Component::Normal(n) => Some(n),
-                _ => None,
-            })
-            .collect::<Option<PathBuf>>()
-        else {
-            continue;
-        };
+    // Every marker path is cleaned before any is applied, so a refused one leaves `dest` as it
+    // was.
+    let markers = scan_layer(tar_bytes)?
+        .iter()
+        .map(|p| clean_marker_path(p))
+        .collect::<Result<Vec<_>>>()?;
+    for path in markers {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
@@ -405,6 +396,25 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path, applied: &mut Applied) -> Result<u
         count += 1;
     }
     Ok(count)
+}
+
+// A whiteout marker's path, cleaned inside the image root as Docker cleans it: a leading `/`
+// and `.` parts drop, and `..` takes back the part before it, so `etc/../etc/.wh.keep` deletes
+// `etc/keep` (TASK-250). A `..` above the root is refused, not clamped to it, since no honest
+// layer writes one.
+fn clean_marker_path(path: &Path) -> Result<PathBuf> {
+    let mut clean = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::Normal(n) => clean.push(n),
+            Component::ParentDir if !clean.pop() => bail!(
+                "refusing a whiteout that leaves the image root: {}",
+                shown(path.display(), SHOWN_MAX)
+            ),
+            _ => {}
+        }
+    }
+    Ok(clean)
 }
 
 // Read one layer's tar end to end, refusing what the extraction would get wrong, and return
@@ -1327,14 +1337,65 @@ mod tests {
         );
         assert!(dest.join("etc/keep").is_file(), "only the named file goes");
         assert_eq!(std::fs::read_dir(dest.join("x")).unwrap().count(), 0);
-        // A marker with a `..` part is still skipped, as before this change.
+    }
+
+    #[test]
+    fn a_whiteout_with_a_dotdot_part_deletes_what_its_clean_path_names() {
+        // TASK-250. `etc/../etc/.wh.keep` was skipped, so `etc/keep` stayed in the image.
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir(&dest).unwrap();
+        let mut applied = Applied::default();
         apply_layer(
-            &tar_of_raw_names(&[("etc/../etc/.wh.keep", b"")]),
+            &tar_of_raw_names(&[("etc/keep", b"k"), ("etc/other", b"o"), ("top", b"t")]),
             &dest,
             &mut applied,
         )
         .unwrap();
-        assert!(dest.join("etc/keep").is_file());
+        apply_layer(
+            &tar_of_raw_names(&[("etc/../etc/.wh.keep", b""), ("/a/b/../../.wh.top", b"")]),
+            &dest,
+            &mut applied,
+        )
+        .unwrap();
+        assert!(
+            !dest.join("etc/keep").exists(),
+            "the cleaned marker deletes"
+        );
+        assert!(
+            !dest.join("top").exists(),
+            "a marker cleaned to the root deletes"
+        );
+        assert!(dest.join("etc/other").is_file(), "only the named file goes");
+    }
+
+    #[test]
+    fn a_whiteout_that_climbs_above_the_root_refuses_the_layer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir(&dest).unwrap();
+        let mut applied = Applied::default();
+        apply_layer(
+            &tar_of_raw_names(&[("etc/keep", b"k"), ("etc/gone", b"g")]),
+            &dest,
+            &mut applied,
+        )
+        .unwrap();
+        for marker in ["../.wh.x", "etc/../../.wh.keep", "/../etc/.wh.keep"] {
+            // The earlier marker in the same layer is not applied either.
+            let err = apply_layer(
+                &tar_of_raw_names(&[("etc/.wh.gone", b""), (marker, b"")]),
+                &dest,
+                &mut applied,
+            )
+            .expect_err(marker);
+            assert!(
+                format!("{err:#}").contains("leaves the image root"),
+                "{marker}: {err:#}"
+            );
+            assert!(dest.join("etc/gone").is_file(), "{marker}");
+            assert!(dest.join("etc/keep").is_file(), "{marker}");
+        }
     }
 
     // Run the calling test again in a child that may hold only `limit` file descriptors, and
