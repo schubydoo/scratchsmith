@@ -628,6 +628,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#an-oci-archive-with-two-indexjson-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An OCI archive with two index.json files
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1034,6 +1045,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#an-oci-archive-with-two-indexjson-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An OCI archive with two index.json files
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1242,6 +1264,14 @@ stops at <code>/</code>, so <code>/../etc/.wh.keep</code> deletes <code>etc/keep
 above the root, such as <code>../.wh.x</code>, makes <code>unpack</code> refuse the layer and exit <code>1</code>. It refuses
 the layer before it writes or deletes any file for it. Docker refuses that marker too, so no
 working image has one.</p>
+<h3 id="an-oci-archive-with-two-indexjson-files">An OCI archive with two <code>index.json</code> files<a class="headerlink" href="#an-oci-archive-with-two-indexjson-files" title="Permanent link">&para;</a></h3>
+<p>An OCI archive holds one <code>index.json</code>, which names the image. A tar file can still hold two
+entries with that name, or <code>index.json</code> and <code>./index.json</code>. Through 2.0.2, <code>unpack</code> kept the
+last one and said nothing. Another tool that keeps the first would show a different image from
+the same archive.</p>
+<p>Now <code>unpack</code> refuses the archive and exits <code>1</code>. The error names the second entry as it is
+stored. It refuses before it reads that entry. No OCI layout writer puts two <code>index.json</code>
+files in one archive, so no working image has one.</p>
 <h2 id="tolerances-ending-in-20">Tolerances ending in 2.0<a class="headerlink" href="#tolerances-ending-in-20" title="Permanent link">&para;</a></h2>
 <p>No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list
 <a href="#removed-in-200">Removed in 2.0.0</a> names each one.</p>
