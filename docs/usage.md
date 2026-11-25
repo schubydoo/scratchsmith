@@ -97,6 +97,11 @@ after 60 seconds of silence from the token host. Talking to the registry itself 
 limit, so a slow upload of a large layer is not cut off, and a registry that accepts the
 connection and then sends nothing still keeps the command waiting.
 
+A login stored as an identity token (`identitytoken` in the Docker config) is exchanged for an
+access token at the realm the registry names. scratchsmith sends it only to an `https` realm,
+or to a loopback `http` realm for a local registry, and follows no redirect from that realm. A
+failed exchange shows at most the first 1 KiB of the token host's answer, escaped.
+
 The report names the loader the image carries, because the binary's `PT_INTERP` chooses that
 path and not scratchsmith. `--format json` carries it as `interpreter`, so a job can assert it
 without unpacking the image. An ELF that carries no `PT_INTERP` reports null, which is the
