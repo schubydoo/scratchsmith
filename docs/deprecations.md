@@ -149,6 +149,17 @@ above the root, such as `../.wh.x`, makes `unpack` refuse the layer and exit `1`
 the layer before it writes or deletes any file for it. Docker refuses that marker too, so no
 working image has one.
 
+### An OCI archive with two `index.json` files
+
+An OCI archive holds one `index.json`, which names the image. A tar file can still hold two
+entries with that name, or `index.json` and `./index.json`. Through 2.0.2, `unpack` kept the
+last one and said nothing. Another tool that keeps the first would show a different image from
+the same archive.
+
+Now `unpack` refuses the archive and exits `1`. The error names the second entry as it is
+stored. It refuses before it reads that entry. No OCI layout writer puts two `index.json`
+files in one archive, so no working image has one.
+
 ## Tolerances ending in 2.0
 
 No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list

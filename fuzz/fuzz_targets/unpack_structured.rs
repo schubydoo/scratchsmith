@@ -3,13 +3,14 @@
 //! `unpack` target rarely forms a valid archive, so it only exercises the outer tar/gzip/JSON
 //! parse. This harness assembles a real OCI-layout archive from arbitrary layers — regular
 //! files, directories, symlinks (whose targets may escape), whiteouts (`.wh.` and opaque),
-//! GNU sparse entries (in a layer, and rarely a sparse `index.json` in the archive), gzip
-//! layers split into two members, bytes after a layer's end marker, chosen media types, an
-//! optional digest tamper, and an optional image-index manifest — so the fuzzer reaches the
-//! layer application, whiteout deletion, path-containment, digest verification, and media
-//! dispatch that the raw target cannot. It asserts no panic, and that no error it returns can
-//! break a line of output. A run that succeeds must have extracted every entry it was given,
-//! and must have been given no sparse entry and no bytes after a layer's end.
+//! GNU sparse entries (in a layer, and rarely a sparse `index.json` in the archive), rarely a
+//! second `index.json`, gzip layers split into two members, bytes after a layer's end marker,
+//! chosen media types, an optional digest tamper, and an optional image-index manifest — so
+//! the fuzzer reaches the layer application, whiteout deletion, path-containment, digest
+//! verification, and media dispatch that the raw target cannot. It asserts no panic, and that
+//! no error it returns can break a line of output. A run that succeeds must have extracted
+//! every entry it was given, and must have been given no sparse entry, no bytes after a
+//! layer's end and no second `index.json`.
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
@@ -28,10 +29,13 @@ struct Spec {
     // Rare on purpose (like `tamper`): drop the first layer's `digest` field so unpack's
     // "layer descriptor has no digest" error path runs, without starving the happy path.
     drop_first_digest: u8,
-    // Rare on purpose (like `tamper`): a second, GNU sparse `index.json`, which `read_archive`
-    // must refuse before reading, because tar fills its hole with zeros of any claimed size.
-    // A sparse blob name would not reach that refusal: a non-regular blob entry is skipped.
+    // Rare on purpose (like `tamper`): a GNU sparse `index.json` ahead of the real one, which
+    // `read_archive` must refuse before reading, because tar fills its hole with zeros of any
+    // claimed size. A sparse blob name would not reach that refusal: a non-regular blob entry is skipped.
     sparse_index: u8,
+    // Rare on purpose (like `tamper`): a second, regular index.json, stored as `index.json` or
+    // `./index.json`, which `read_archive` must refuse rather than keep the last one.
+    second_index: u8,
     // A platform for the applied manifest and a second descriptor after it, so unpack warns
     // about the one it skips. The warning quotes this text, so it must stay on one line.
     platform: Option<String>,
@@ -147,6 +151,15 @@ fn put_file(ar: &mut tar::Builder<Vec<u8>>, name: &str, data: &[u8]) {
     let mut h = header(data.len() as u64, tar::EntryType::Regular);
     h.set_cksum();
     let _ = ar.append_data(&mut h, name, data);
+}
+
+// As `put_file`, but the name goes into the header as written: the tar builder drops a
+// leading `./`, which some layout writers store.
+fn put_raw_name(ar: &mut tar::Builder<Vec<u8>>, name: &str, data: &[u8]) {
+    let mut h = header(data.len() as u64, tar::EntryType::Regular);
+    h.as_old_mut().name[..name.len()].copy_from_slice(name.as_bytes());
+    h.set_cksum();
+    let _ = ar.append(&h, data);
 }
 
 // Build one layer's uncompressed tar from its entries. Best-effort: a rejected entry is
@@ -350,20 +363,24 @@ fn build_archive(spec: &Spec) -> (Vec<u8>, Expect) {
 
     let mut ar = tar::Builder::new(Vec::new());
     put_file(&mut ar, "oci-layout", br#"{"imageLayoutVersion":"1.0.0"}"#);
-    put_file(
-        &mut ar,
-        "index.json",
-        &serde_json::to_vec(&index).unwrap_or_default(),
-    );
+    // Before the real `index.json`, so the loop reaches this one first and its sparse refusal
+    // runs, not the second-index refusal. A non-zero residue, for the reason
+    // `drop_first_digest` gives. The claimed size is 64 GiB.
+    if spec.sparse_index % 32 == 5 {
+        let _ = append_sparse(&mut ar, "index.json", &[], 0, 64 << 30);
+    }
+    let index_bytes = serde_json::to_vec(&index).unwrap_or_default();
+    put_file(&mut ar, "index.json", &index_bytes);
+    match spec.second_index % 32 {
+        9 => put_file(&mut ar, "index.json", &index_bytes),
+        10 => put_raw_name(&mut ar, "./index.json", &index_bytes),
+        _ => {}
+    }
+    expect.refused |= matches!(spec.second_index % 32, 9 | 10);
     if spec.include_dir_entry {
         let mut h = header(0, tar::EntryType::Directory);
         h.set_cksum();
         let _ = ar.append_data(&mut h, "blobs/sha256/", &b""[..]);
-    }
-    // After the real `index.json`, so the loop reaches this one. A non-zero residue, for the
-    // reason `drop_first_digest` gives. The claimed size is 64 GiB.
-    if spec.sparse_index % 32 == 5 {
-        let _ = append_sparse(&mut ar, "index.json", &[], 0, 64 << 30);
     }
     for (name, data) in &blobs {
         put_file(&mut ar, &format!("blobs/sha256/{name}"), data);
@@ -399,7 +416,7 @@ fuzz_target!(|spec: Spec| {
         Ok(report) => {
             assert!(
                 !expect.refused,
-                "unpack accepted a sparse entry or bytes after a layer's end"
+                "unpack accepted a sparse entry, bytes after a layer's end or a second index.json"
             );
             assert_eq!(
                 report.files, expect.extracted,

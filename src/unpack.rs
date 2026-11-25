@@ -161,8 +161,9 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
         let mut e = entry.map_err(escape_tar_err)?;
         let stored = e.path()?.to_string_lossy().into_owned();
         // `tar -cf img.tar .` inside a layout directory stores `./index.json`; the name is the
-        // same file, so match it without the prefix. Errors still quote the stored name.
-        let path = stored.strip_prefix("./").unwrap_or(&stored);
+        // same file, so match it without the prefix. Every leading `./` drops, so `././index.json`
+        // cannot hide a second index from the check below. Errors still quote the stored name.
+        let path = strip_dot_slashes(&stored);
         // The `blobs/` and `blobs/sha256/` directory entries carry a trailing slash and
         // an empty body (a skopeo/buildah export tars the layout directory), so only
         // digest-verify real blob files — not the directory entry itself.
@@ -171,6 +172,15 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
             .filter(|d| !d.is_empty() && e.header().entry_type().is_file());
         if digest.is_none() && path != "index.json" {
             continue; // unused, so never read
+        }
+        // Two index.json entries (or `index.json` and `./index.json`) can name two images. Keeping
+        // the last one silently could unpack an image other tools never show. Refuse before
+        // reading the second.
+        if digest.is_none() && index_bytes.is_some() {
+            bail!(
+                "refusing a second index.json ({}) in the OCI archive: it is not clear which image to unpack",
+                crate::resolver::escape_for_display(&stored)
+            );
         }
         // tar fills a GNU sparse entry's holes with zeros on read, so a few header bytes can
         // claim any size. No OCI layout writer emits one.
@@ -196,6 +206,14 @@ fn read_archive(archive: &Path) -> Result<(HashMap<String, Vec<u8>>, serde_json:
     )
     .context("parsing index.json")?;
     Ok((blobs, index))
+}
+
+// A name without its leading `./` parts, and the extra `/` after each, as a path clean reads it.
+fn strip_dot_slashes(mut name: &str) -> &str {
+    while let Some(rest) = name.strip_prefix("./") {
+        name = rest.trim_start_matches('/');
+    }
+    name
 }
 
 // The entries read can never hold more bytes than the archive file itself. A pipe reports no
@@ -2098,6 +2116,49 @@ mod tests {
         std::fs::write(&path, ar.into_inner().unwrap()).unwrap();
         let err = read_archive(&path).unwrap_err();
         assert!(err.to_string().contains("GNU sparse entry"), "{err}");
+    }
+
+    #[test]
+    fn read_archive_refuses_a_second_index_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("two.tar");
+        std::fs::write(
+            &path,
+            tar_of(&[("index.json", b"{}"), ("index.json", b"{\"a\":1}")]),
+        )
+        .unwrap();
+        let err = read_archive(&path).unwrap_err();
+        assert!(err.to_string().contains("second index.json"), "{err}");
+    }
+
+    #[test]
+    fn read_archive_refuses_index_json_and_its_dot_slash_twin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("twin.tar");
+        std::fs::write(
+            &path,
+            tar_of_raw_names(&[("index.json", b"{}"), ("./index.json", b"{}")]),
+        )
+        .unwrap();
+        let err = read_archive(&path).unwrap_err();
+        // The error quotes the name as stored, so the reader can find the entry.
+        assert!(
+            err.to_string().contains("second index.json (./index.json)"),
+            "{err}"
+        );
+        // More `./` parts name the same file too, and cannot skip the check.
+        for twin in ["././index.json", ".//index.json"] {
+            std::fs::write(
+                &path,
+                tar_of_raw_names(&[("index.json", b"{}"), (twin, b"{}")]),
+            )
+            .unwrap();
+            let err = read_archive(&path).unwrap_err();
+            assert!(
+                err.to_string().contains("second index.json"),
+                "{twin}: {err}"
+            );
+        }
     }
 
     #[test]
