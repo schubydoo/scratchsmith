@@ -1588,7 +1588,9 @@ escaped too.</p>
 </code></pre></div>
 <p><code>unpack</code> reads an OCI-layout archive (what <code>pack --oci-archive</code> writes, or a skopeo/buildah
 export), applies each layer in order, and honors whiteouts. Combine it with <code>diff</code> to
-compare two images: unpack both, then run <code>scratchsmith diff old new</code>.</p>
+compare two images: unpack both, then run <code>scratchsmith diff old new</code>. When a later layer holds
+an entry for a path that exists, <code>unpack</code> replaces that path, as a container runtime does. A
+directory over a directory keeps its contents.</p>
 <p><code>unpack</code> reads every gzip member of a layer, as Docker does. It refuses a layer that is cut
 short, has data after its end, or holds a sparse entry or a malformed PAX record, and exits <code>1</code>
 before it writes any file from that layer.</p>
