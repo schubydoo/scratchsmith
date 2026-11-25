@@ -1198,6 +1198,7 @@ mod tests {
             edges: vec![],
             hints: vec![],
             notes: vec![],
+            arch_warnings: vec![],
         }
     }
 

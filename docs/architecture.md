@@ -8,8 +8,11 @@
    as the name it was needed by or as its `DT_SONAME`, resolves to that object with no search,
    as `ld.so` does. A library found through a symlink expands `$ORIGIN` to the directory that
    holds the symlink, as `ld.so` does, and stages from its real file. Each RPATH or RUNPATH
-   string is a `:` list, and
-   its entries are searched in order. An empty entry means the directory the program starts in.
+   string is a `:` list, and its entries are searched in order. A file of another ELF class or
+   machine than the binary, such as a 32-bit copy in `lib` ahead of the 64-bit one in `lib64`,
+   is skipped and the search goes on, as `ld.so` skips it. When every copy is of another arch,
+   or the binary names the file by path, that file still stages, and a warning says the image
+   cannot load it. An empty entry means the directory the program starts in.
    A build cannot know that directory, so Scratchsmith does not search an empty entry. If the
    split entries miss, a string that holds `:` is also tried whole as one directory, before the
    default directories. The loader finds a `DT_NEEDED` library there only through the image's
