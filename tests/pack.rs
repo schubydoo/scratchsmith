@@ -1151,37 +1151,45 @@ fn rootfs_sink_stages_without_an_image() {
 
 #[test]
 fn root_user_warns_but_still_packs() {
-    // `--user 0` prints a warning (the non-root default is recommended) but must not
-    // fail. Run via the CLI so we can assert the warning on stderr (it's an eprintln!,
-    // not a report field); the daemonless OCI-archive sink needs no Docker.
+    // `--user 0` warns (the non-root default is recommended) but must not fail. The warning
+    // is a report warning, so a gate on the JSON `warnings` array sees it (TASK-219), and the
+    // text report prints it. The daemonless OCI-archive sink needs no Docker.
     let Some(bin) = small_fixture() else {
         skip_required("no id binary to pack");
         return;
     };
     let tmp = tempfile::tempdir().unwrap();
-    let archive = tmp.path().join("img.tar");
-    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
-        .args([
-            "pack",
-            "--user",
-            "0",
-            "--oci-archive",
-            archive.to_str().unwrap(),
-            bin.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "pack should succeed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(archive.exists(), "archive not written");
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("runs the image as root"),
-        "root warning missing from stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    for format in ["text", "json"] {
+        let archive = tmp.path().join(format!("img-{format}.tar"));
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["pack", "--user", "0", "--format", format, "--oci-archive"])
+            .arg(&archive)
+            .arg(bin)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "pack should succeed: {stderr}");
+        assert!(archive.exists(), "archive not written");
+        if format == "json" {
+            let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+            assert!(
+                report["warnings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|w| w.as_str().unwrap().contains("runs the image as root")),
+                "root warning missing from the JSON warnings: {stdout}"
+            );
+        } else {
+            assert!(
+                stdout.contains("warning: --user 0 runs the image as root"),
+                "root warning missing from the text report: {stdout}{stderr}"
+            );
+        }
+        // Said once, in the report, not again on stderr.
+        assert!(!stderr.contains("runs the image as root"), "{stderr}");
+    }
 }
 
 #[test]

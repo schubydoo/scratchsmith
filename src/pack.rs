@@ -15,11 +15,11 @@ use std::time::Instant;
 const SMOKE_TIMEOUT_SECS: u32 = 15;
 
 // Generate the SBOM of the staged rootfs if requested, returning its path.
-fn maybe_sbom(rootfs: &Path, sbom: Option<&SbomRequest>) -> Result<Option<String>> {
+fn maybe_sbom(rootfs: &Path, sbom: Option<&SbomRequest>) -> Result<Option<PathBuf>> {
     match sbom {
         Some(req) => {
             supplychain::generate_sbom(rootfs, req.format, &req.path)?;
-            Ok(Some(req.path.display().to_string()))
+            Ok(Some(req.path.clone()))
         }
         None => Ok(None),
     }
@@ -30,12 +30,12 @@ fn maybe_sbom(rootfs: &Path, sbom: Option<&SbomRequest>) -> Result<Option<String
 // finding at or above that severity into a hard error, before anything is delivered.
 fn maybe_scan(
     rootfs: &Path,
-    sbom_path: Option<&str>,
+    sbom_path: Option<&Path>,
     scan: Option<&ScanRequest>,
 ) -> Result<Option<ScanSummary>> {
     let Some(req) = scan else { return Ok(None) };
     let source = match sbom_path {
-        Some(p) => ScanSource::Sbom(PathBuf::from(p)),
+        Some(p) => ScanSource::Sbom(p.to_path_buf()),
         None => ScanSource::Rootfs(rootfs.to_path_buf()),
     };
     let summary = supplychain::run_grype(&source)?;
@@ -698,7 +698,8 @@ fn finish_staging(
     Ok(Finished {
         extras,
         owners: found,
-        sbom,
+        // The report's field is text, so only it is lossy. The tools got the path itself.
+        sbom: sbom.map(|p| p.display().to_string()),
         scan,
     })
 }
@@ -844,7 +845,9 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
 
     if let Some(user) = &cfg.user {
         if image::is_root_user(user) {
-            eprintln!("warning: --user {user} runs the image as root; the default non-root user is recommended");
+            warnings.push(format!(
+                "--user {user} runs the image as root; the default non-root user is recommended"
+            ));
         }
     }
 
