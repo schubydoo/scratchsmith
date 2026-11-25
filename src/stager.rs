@@ -740,7 +740,7 @@ pub struct SizeEntry {
     pub after: u64,
 }
 
-/// Sizes of the staged ELF payload (binary + loader + libraries), with totals.
+/// Sizes of the staged ELF payload (binary + loader + libraries + NSS modules), with totals.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct SizeReport {
     pub entries: Vec<SizeEntry>,
