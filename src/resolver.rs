@@ -633,18 +633,6 @@ pub fn resolve_with(
             let declared_bare = i < declared && !soname.contains('/');
             let already = declared_bare.then(|| loaded.get(soname).cloned()).flatten();
             let matched = already.is_some();
-            let gap = (!matched)
-                .then(|| gap_hit(soname, &search, &search_gaps, &sysroot.default_dirs))
-                .flatten();
-            if let Some((gap, hit)) = gap {
-                // The note says the image's cache loads it, so check that ldconfig caches it.
-                let lib = (soname.clone(), cache_miss(soname, &hit, source));
-                match gaps.iter_mut().find(|(g, _)| g == gap) {
-                    Some((_, libs)) if !libs.iter().any(|(s, _)| s == soname) => libs.push(lib),
-                    Some(_) => {}
-                    None => gaps.push((gap.clone(), vec![lib])),
-                }
-            }
             // ld.so skips a file of another class or machine and keeps searching (glibc's
             // open_verify), so a 32-bit copy early on the path does not hide the right one.
             // When every copy is of another arch, the first stays the pick, as before, and a
@@ -667,18 +655,39 @@ pub fn resolve_with(
                     )
                 })
                 .or_else(|| skipped.first().cloned());
+            // The gap note is about the copy that was picked, so a wrong-arch copy skipped in a
+            // gap entry does not raise one.
+            let gap = found
+                .as_ref()
+                .filter(|_| !matched)
+                .and_then(|hit| gap_hit(soname, hit, &search, &search_gaps, &sysroot.default_dirs));
+            if let Some((gap, hit)) = gap {
+                // The note says the image's cache loads it, so check that ldconfig caches it.
+                let lib = (soname.clone(), cache_miss(soname, &hit, source));
+                match gaps.iter_mut().find(|(g, _)| g == gap) {
+                    Some((_, libs)) if !libs.iter().any(|(s, _)| s == soname) => libs.push(lib),
+                    Some(_) => {}
+                    None => gaps.push((gap.clone(), vec![lib])),
+                }
+            }
             if let Some(path) = found.as_ref().filter(|path| !matched && !fits(path)) {
                 let how = if soname.contains('/') {
                     "named by path"
                 } else {
                     "the only copy found"
                 };
+                // An --include loads later through dlopen, so the image still starts.
+                let effect = if i < declared {
+                    "the image cannot start"
+                } else {
+                    "the program cannot open it"
+                };
                 push_unique(
                     &mut resolution.arch_warnings,
                     format!(
                         "`{}` resolved to {}, {how}, which is a {} library. {} is {}, so the \
-                         loader will not load it and the image cannot start. Put a {4} copy on \
-                         the search path.",
+                         loader will not load it and {effect}. Put a {4} copy on the search \
+                         path.",
                         soname.escape_debug(),
                         printable(path),
                         arch_of(source, path),
@@ -964,12 +973,13 @@ fn holds_unknown_token(entry: &str) -> bool {
     })
 }
 
-// The entry a bare `soname` resolves through, when ld.so would not search it there, and the
-// file it found. A slash soname skips the search list. A hit counts only when neither an entry
+// The entry a bare `soname` resolved through to `found`, when ld.so would not search it there,
+// and that file. A slash soname skips the search list. A hit counts only when neither an entry
 // that ld.so does search nor a default directory names the same directory, because then ld.so
 // finds the same file.
 fn gap_hit<'a>(
     soname: &str,
+    found: &Path,
     search: &[PathBuf],
     gaps: &'a [Option<Gap>],
     default_dirs: &[PathBuf],
@@ -977,7 +987,7 @@ fn gap_hit<'a>(
     if soname.contains('/') {
         return None;
     }
-    let at = search.iter().position(|dir| dir.join(soname).exists())?;
+    let at = search.iter().position(|dir| dir.join(soname) == found)?;
     let gap = gaps[at].as_ref()?;
     let dir = &search[at];
     let searched = search
@@ -3656,6 +3666,18 @@ mod tests {
         needed: &str,
         copies: &[(&str, bool)],
     ) -> (PathBuf, Resolution) {
+        resolve_with_copies_on(root, "$ORIGIN/lib:$ORIGIN/lib64", &[needed], &[], copies)
+    }
+
+    // As `resolve_with_copies`, with the exe's RPATH string, its needed list and the
+    // `--include` names given.
+    fn resolve_with_copies_on(
+        root: &Path,
+        rpath: &str,
+        needed: &[&str],
+        includes: &[String],
+        copies: &[(&str, bool)],
+    ) -> (PathBuf, Resolution) {
         let loader = root.join("lib64/ld-linux-x86-64.so.2");
         let exe = root.join("a/exe");
         touch(&loader);
@@ -3663,12 +3685,7 @@ mod tests {
         let mut infos = HashMap::new();
         infos.insert(
             canonical(&exe),
-            elf(
-                &[needed],
-                &["$ORIGIN/lib:$ORIGIN/lib64"],
-                &[],
-                Some("/lib64/ld-linux-x86-64.so.2"),
-            ),
+            elf(needed, &[rpath], &[], Some("/lib64/ld-linux-x86-64.so.2")),
         );
         for (dir, is_64) in copies {
             let lib = root.join("a").join(dir).join("libx.so.1");
@@ -3680,7 +3697,7 @@ mod tests {
             }
             infos.insert(canonical(&lib), info);
         }
-        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        let res = resolve_with(&exe, &Sysroot::new(root), includes, &MapSource { infos }).unwrap();
         (exe, res)
     }
 
@@ -3719,6 +3736,58 @@ mod tests {
         ] {
             assert!(warning.contains(part), "{part:?} in {warning}");
         }
+    }
+
+    #[test]
+    fn a_wrong_arch_copy_skipped_in_a_gap_entry_raises_no_gap_note() {
+        // Review nit on PR 551. `lib` is relative, a gap entry. Its 32-bit copy is skipped, so
+        // the pick is the 64-bit one in `$ORIGIN/lib64`, which ld.so searches: no note.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (_, res) = resolve_with_copies_on(
+            root,
+            "lib:$ORIGIN/lib64",
+            &["libx.so.1"],
+            &[],
+            &[("lib", false), ("lib64", true)],
+        );
+        let lib = res.libs.iter().find(|l| l.soname == "libx.so.1").unwrap();
+        assert_eq!(lib.path, canonical(&root.join("a/lib64/libx.so.1")));
+        assert!(res.notes.is_empty(), "{:?}", res.notes);
+        // With only the 32-bit copy, the pick is in the gap entry, so the note stays.
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, res) = resolve_with_copies_on(
+            tmp.path(),
+            "lib:$ORIGIN/lib64",
+            &["libx.so.1"],
+            &[],
+            &[("lib", false)],
+        );
+        assert!(
+            res.notes.iter().any(|n| n.contains("RPATH entry `lib`")),
+            "{:?}",
+            res.notes
+        );
+    }
+
+    #[test]
+    fn a_wrong_arch_include_warns_that_the_program_cannot_open_it() {
+        // Review nit on PR 551. An --include loads later through dlopen, so the image starts.
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, res) = resolve_with_copies_on(
+            tmp.path(),
+            "$ORIGIN/lib",
+            &[],
+            &["libx.so.1".to_string()],
+            &[("lib", false)],
+        );
+        let [warning] = &res.arch_warnings[..] else {
+            panic!("one warning: {:?}", res.arch_warnings);
+        };
+        assert!(
+            warning.contains("will not load it and the program cannot open it"),
+            "{warning}"
+        );
     }
 
     #[test]
