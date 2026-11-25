@@ -1601,7 +1601,10 @@ compare two images: unpack both, then run <code>scratchsmith diff old new</code>
 an entry for a path that exists, <code>unpack</code> replaces that path, as a container runtime does. A
 directory over a directory keeps its contents. A symlink inside the image resolves against the
 target directory as the image's <code>/</code>, so a file under Debian's <code>var/run -&gt; /run</code> lands in
-<code>run/</code>. <code>unpack</code> refuses, and exits <code>1</code>, an entry or hard link that would leave the target.</p>
+<code>run/</code>. <code>unpack</code> refuses, and exits <code>1</code>, an entry or hard link that would leave the target.
+When the archive's index lists more than one manifest, <code>unpack</code> applies only the first, and
+prints a warning on standard error that names its digest, and its platform when the index gives
+one.</p>
 <p><code>unpack</code> reads every gzip member of a layer, as Docker does. It refuses a layer that is cut
 short, has data after its end, or holds a sparse entry or a malformed PAX record, and exits <code>1</code>
 before it writes any file from that layer. A layer may hold at most 2 GiB once decompressed, and
