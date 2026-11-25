@@ -214,7 +214,14 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
         &opts.require,
         &opts.deny,
     )?;
-    let sizes = stager::strip_and_measure(dest, &tree, &resolution, opts.strip, opts.upx)?;
+    let sizes = stager::strip_and_measure_with(
+        dest,
+        &tree,
+        &resolution,
+        &default_includes.staged,
+        opts.strip,
+        opts.upx,
+    )?;
     let interpreter = resolution.interpreter_path();
     let bundled = bundled_files(binary, &tree, &resolution, &default_includes.staged);
     clock.timings.stage_ms = millis(staging);

@@ -789,6 +789,20 @@ pub fn strip_and_measure(
     strip: bool,
     upx: bool,
 ) -> Result<SizeReport> {
+    strip_and_measure_with(dest, tree, resolution, &[], strip, upx)
+}
+
+/// [`strip_and_measure`], also over `extra`: other files staged at their host paths, as
+/// [`IncludeReport::staged`] lists them. Its shared objects, the NSS modules, are stripped
+/// and counted too, and the rest is left alone.
+pub fn strip_and_measure_with(
+    dest: &Path,
+    tree: &StagedTree,
+    resolution: &Resolution,
+    extra: &[PathBuf],
+    strip: bool,
+    upx: bool,
+) -> Result<SizeReport> {
     // The ELF files we placed: the binary, the loader, and every resolved library. UPX
     // compresses the executable ONLY — compressing the loader or a shared library would
     // break startup — so it is applied to the binary (the first target) alone.
@@ -815,6 +829,16 @@ pub fn strip_and_measure(
     for lib in &resolution.libs {
         let staged = staged_path(dest, &lib.path, false)?;
         targets.push((staged, display_image_path(dest, &under(dest, &lib.path))));
+    }
+    let is_lib = |p: &Path| resolution.libs.iter().any(|l| l.path == p);
+    for module in extra {
+        let shared = module
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().contains(".so"));
+        if shared && !is_lib(module) {
+            let staged = staged_path(dest, module, false)?;
+            targets.push((staged, display_image_path(dest, &under(dest, module))));
+        }
     }
 
     let mut report = SizeReport {
