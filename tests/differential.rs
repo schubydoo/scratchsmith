@@ -242,11 +242,11 @@ fn generate(rng: &mut Rng, root: &Path) -> Layout {
     }
     // Drawn last, so every earlier seed keeps its base layout. The second needer gets no
     // search-path entry: ld.so reaches the library only because a parent loaded it first.
-    for i in 1..count {
+    for (i, lib) in layout.libs.iter_mut().enumerate().skip(1) {
         if rng.chance(30) {
             let pick = rng.below(i + 1);
-            if pick != layout.libs[i].parent.map_or(0, |p| p + 1) {
-                layout.libs[i].also = Some(pick);
+            if pick != lib.parent.map_or(0, |p| p + 1) {
+                lib.also = Some(pick);
             }
         }
     }
