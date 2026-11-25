@@ -7,8 +7,10 @@
 
 use anyhow::{bail, Context, Result};
 use std::ffi::OsString;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// SBOM output format. CycloneDX is the default (better security-tool support);
 /// SPDX is offered for license/compliance consumers.
@@ -252,30 +254,94 @@ fn run_tool(tool: &str, args: &[OsString], hint: &str, io: Io) -> Result<()> {
     run_tool_capture(tool, args, hint, io).map(|_| ())
 }
 
+// The longest each tool may run. syft and grype read the whole rootfs, and grype's first run
+// downloads its vulnerability database (some hundreds of MB), so grype gets the most time.
+// cosign's keyless login waits for the user.
+fn limit_for(tool: &str) -> Duration {
+    let minutes = match tool {
+        "syft" => 15,
+        "grype" => 30,
+        _ => 10, // cosign
+    };
+    Duration::from_secs(minutes * 60)
+}
+
 // As `run_tool`, but returns captured stdout (for tools whose output we parse).
 fn run_tool_capture(tool: &str, args: &[OsString], hint: &str, io: Io) -> Result<Vec<u8>> {
+    run_tool_within(tool, args, hint, io, limit_for(tool))
+}
+
+// As `run_tool_capture`, but a run past `limit` is killed and reported, naming the tool and
+// the limit. A stalled tool otherwise blocks the pack with no output at all.
+fn run_tool_within(
+    tool: &str,
+    args: &[OsString],
+    hint: &str,
+    io: Io,
+    limit: Duration,
+) -> Result<Vec<u8>> {
     let mut command = Command::new(tool);
-    command.args(args);
-    if io == Io::Terminal {
-        command.stdin(Stdio::inherit()).stderr(Stdio::inherit());
-    }
-    let output = match command.output() {
-        Ok(o) => o,
+    command.args(args).stdout(Stdio::piped());
+    match io {
+        Io::Captured => command.stdin(Stdio::null()).stderr(Stdio::piped()),
+        Io::Terminal => command.stdin(Stdio::inherit()).stderr(Stdio::inherit()),
+    };
+    let mut child = match command.spawn() {
+        Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             bail!("{tool} not found; {hint}")
         }
         Err(e) => return Err(e).with_context(|| format!("running {tool}")),
     };
-    if !output.status.success() {
+    // Drain both pipes on their own threads, so a tool that fills one cannot block on it.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut buf);
+            }
+            buf
+        })
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as _));
+    let deadline = Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("waiting for {tool}"))?
+        {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!(
+                "{tool} did not finish within {}, so scratchsmith stopped it",
+                limit_text(limit)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let stdout = stdout.join().unwrap_or_default();
+    let stderr = stderr.join().unwrap_or_default();
+    if !status.success() {
         match io {
-            Io::Captured => bail!(
-                "{tool} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-            Io::Terminal => bail!("{tool} failed ({}); its messages are above", output.status),
+            Io::Captured => bail!("{tool} failed: {}", String::from_utf8_lossy(&stderr).trim()),
+            Io::Terminal => bail!("{tool} failed ({status}); its messages are above"),
         }
     }
-    Ok(output.stdout)
+    Ok(stdout)
+}
+
+fn limit_text(limit: Duration) -> String {
+    let secs = limit.as_secs();
+    match (secs / 60, secs % 60) {
+        (1, 0) => "1 minute".into(),
+        (m, 0) if m > 0 => format!("{m} minutes"),
+        _ if secs == 1 => "1 second".into(),
+        _ => format!("{secs} seconds"),
+    }
 }
 
 #[cfg(test)]
@@ -404,6 +470,50 @@ mod tests {
     fn run_tool_capture_returns_stdout_on_success() {
         let out = run_tool_capture("echo", &["scratchsmith".into()], "hint", Io::Captured).unwrap();
         assert_eq!(String::from_utf8_lossy(&out).trim(), "scratchsmith");
+    }
+
+    #[test]
+    fn a_tool_that_stalls_is_stopped_and_named_with_its_limit() {
+        // TASK-245. `sleep 30` stands in for a stalled syft, grype or cosign.
+        let started = Instant::now();
+        let err = run_tool_within(
+            "sleep",
+            &["30".into()],
+            "hint",
+            Io::Captured,
+            Duration::from_secs(1),
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(
+            err,
+            "sleep did not finish within 1 second, so scratchsmith stopped it"
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn each_tool_has_its_own_limit() {
+        assert_eq!(limit_text(limit_for("syft")), "15 minutes");
+        assert_eq!(limit_text(limit_for("grype")), "30 minutes");
+        assert_eq!(limit_text(limit_for("cosign")), "10 minutes");
+        assert_eq!(limit_text(Duration::from_secs(60)), "1 minute");
+        assert_eq!(limit_text(Duration::from_secs(90)), "90 seconds");
+    }
+
+    #[test]
+    fn a_tool_with_a_large_output_is_not_blocked_by_its_pipes() {
+        // More than a pipe holds on both streams at once, so both must drain while it runs.
+        let script = "head -c 1000000 /dev/zero; head -c 1000000 /dev/zero >&2; exit 0";
+        let out = run_tool_within(
+            "sh",
+            &["-c".into(), script.into()],
+            "hint",
+            Io::Captured,
+            Duration::from_secs(20),
+        )
+        .unwrap();
+        assert_eq!(out.len(), 1_000_000);
     }
 
     #[test]
