@@ -617,6 +617,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#a-whiteout-that-climbs-above-the-image-root" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A whiteout that climbs above the image root
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1012,6 +1023,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#a-whiteout-that-climbs-above-the-image-root" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A whiteout that climbs above the image root
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1210,6 +1232,16 @@ wrote up to N times 2 GiB to the target.</p>
 <p>Now <code>unpack</code> refuses an image whose layers hold more than 16 GiB in all once decompressed, and
 exits <code>1</code>. A layer listed twice counts twice, and an uncompressed layer counts at its own size.
 The error names the limit. The layers before the one that crosses it are already applied.</p>
+<h3 id="a-whiteout-that-climbs-above-the-image-root">A whiteout that climbs above the image root<a class="headerlink" href="#a-whiteout-that-climbs-above-the-image-root" title="Permanent link">&para;</a></h3>
+<p>A whiteout marker is a layer entry named <code>.wh.&lt;name&gt;</code>, which deletes <code>&lt;name&gt;</code> from the layers
+below. Through 2.0.2, <code>unpack</code> skipped a marker whose path had a <code>..</code> part, and applied the rest
+of the layer. That missed a marker like <code>etc/../etc/.wh.keep</code>, which Docker cleans to
+<code>etc/.wh.keep</code> and honors, so the unpacked tree kept a file that the image deletes.</p>
+<p>Now <code>unpack</code> cleans the marker's path as Docker does, and deletes what it names. A rooted path
+stops at <code>/</code>, so <code>/../etc/.wh.keep</code> deletes <code>etc/keep</code>. A relative path whose <code>..</code> climbs
+above the root, such as <code>../.wh.x</code>, makes <code>unpack</code> refuse the layer and exit <code>1</code>. It refuses
+the layer before it writes or deletes any file for it. Docker refuses that marker too, so no
+working image has one.</p>
 <h2 id="tolerances-ending-in-20">Tolerances ending in 2.0<a class="headerlink" href="#tolerances-ending-in-20" title="Permanent link">&para;</a></h2>
 <p>No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list
 <a href="#removed-in-200">Removed in 2.0.0</a> names each one.</p>
