@@ -2728,6 +2728,34 @@ fn an_sbom_path_or_format_without_sbom_is_named_in_the_report() {
     );
     assert!(!tmp.path().join("s.json").exists());
 
+    // A key that the selected profile sets is named with the profile.
+    std::fs::write(
+        &config,
+        "sbom-format = \"spdx-json\"\n[profile.ci]\nsbom-format = \"cyclonedx-json\"\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args([
+            "pack",
+            "--no-build",
+            "--packages",
+            "none",
+            "--format",
+            "json",
+            "--profile",
+            "ci",
+        ])
+        .arg("--config")
+        .arg(&config)
+        .arg("-o")
+        .arg(tmp.path().join("rootfs-profile"))
+        .arg(bin)
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let want = format!("`sbom-format` in {} [profile.ci] is set", config.display());
+    assert!(report["warnings"].to_string().contains(&want), "{report}");
+
     // A pack that sets neither says nothing about them.
     let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
         .args([

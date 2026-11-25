@@ -386,6 +386,20 @@ fn dispatch(cli: Cli) -> Result<()> {
             };
             let smoke_set = bool_set(|c| c.smoke);
             let sign_set = bool_set(|c| c.sign);
+            // Where `sbom-file` and `sbom-format` are set, for the warning below. A selected
+            // profile's value wins over the base's, so the profile is named when it sets one.
+            let key_in = |pick: fn(&crate::config::Config) -> bool| {
+                let path = config.as_ref()?;
+                match &profile {
+                    Some(name) if file.profile.get(name).is_some_and(pick) => {
+                        Some(format!("{} [profile.{name}]", path.display()))
+                    }
+                    _ if pick(&file) => Some(path.display().to_string()),
+                    _ => None,
+                }
+            };
+            let sbom_file_in = key_in(|c| c.sbom_file.is_some());
+            let sbom_format_in = key_in(|c| c.sbom_format.is_some());
             let file = match &profile {
                 Some(name) => file.select_profile(name).map_err(usage)?,
                 None => file,
@@ -402,28 +416,24 @@ fn dispatch(cli: Cli) -> Result<()> {
             // packs that pass --sbom only some of the time.
             let mut notes = Vec::new();
             if !(sbom || file.sbom) {
-                let in_config = config
-                    .as_ref()
-                    .map(|p| format!(" in {}", p.display()))
-                    .unwrap_or_default();
-                for (cli_set, file_set, flag, key) in [
+                for (cli_set, file_in, flag, key) in [
                     (
                         sbom_file.is_some(),
-                        file.sbom_file.is_some(),
+                        sbom_file_in,
                         "--sbom-file",
                         "sbom-file",
                     ),
                     (
                         sbom_format.is_some(),
-                        file.sbom_format.is_some(),
+                        sbom_format_in,
                         "--sbom-format",
                         "sbom-format",
                     ),
                 ] {
                     let what = if cli_set {
                         flag.to_string()
-                    } else if file_set {
-                        format!("`{key}`{in_config}")
+                    } else if let Some(at) = file_in {
+                        format!("`{key}` in {at}")
                     } else {
                         continue;
                     };
