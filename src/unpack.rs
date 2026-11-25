@@ -58,7 +58,7 @@ pub fn run(archive: &Path, dest: &Path) -> Result<UnpackReport> {
 
     std::fs::create_dir_all(dest).with_context(|| format!("creating {}", dest.display()))?;
     let mut files = 0usize;
-    let mut setid = std::collections::BTreeSet::new();
+    let mut applied = Applied::default();
     for layer in layers {
         let digest = strip_sha256(
             layer["digest"]
@@ -68,21 +68,25 @@ pub fn run(archive: &Path, dest: &Path) -> Result<UnpackReport> {
         let media = layer["mediaType"].as_str().unwrap_or_default();
         let bytes = blob(&blobs, digest)?;
         if media.ends_with("gzip") {
-            files += apply_layer(&gunzip(bytes)?, dest, &mut setid)?;
+            files += apply_layer(&gunzip(bytes)?, dest, &mut applied)?;
         } else if media.ends_with("tar") {
             // Uncompressed: hand the blob straight through, no second copy.
-            files += apply_layer(bytes, dest, &mut setid)?;
+            files += apply_layer(bytes, dest, &mut applied)?;
         } else {
             bail!("unsupported layer media type: {}", shown(media, SHOWN_MAX));
         }
     }
+    let dest_canon =
+        std::fs::canonicalize(dest).with_context(|| format!("resolving {}", dest.display()))?;
+    restore_dir_modes(&dest_canon, &applied.dir_modes)?;
 
     Ok(UnpackReport {
         source: archive.display().to_string(),
         dir: dest.display().to_string(),
         layers: layers.len(),
         files,
-        stripped_setid: setid
+        stripped_setid: applied
+            .setid
             .iter()
             .map(|p: &PathBuf| p.display().to_string())
             .collect(),
@@ -216,30 +220,49 @@ pub(crate) fn shown_archive_text(text: &str) -> String {
     shown(text, SHOWN_MAX)
 }
 
-// Drop everything under `path` from the setuid/setgid record, and `path` itself unless
-// `keep_self`: a whiteout removed them. `Path` orders by component, so the descendants sit
-// right after `path` in the set, and a range walk touches only them. A `retain` over the
-// whole set per whiteout would let a hostile layer make this quadratic.
-fn forget_under(setid: &mut std::collections::BTreeSet<PathBuf>, path: &Path, keep_self: bool) {
-    let gone: Vec<PathBuf> = setid
+// What extraction remembers across layers, keyed by image path.
+#[derive(Default)]
+struct Applied {
+    // The paths whose setuid or setgid bit this extraction cleared, as the final image has
+    // them: a later layer that rewrites a path without the bit, or a whiteout that deletes
+    // it, takes it off again.
+    setid: std::collections::BTreeSet<PathBuf>,
+    // Directory modes without owner rwx, held back until the last layer so that a user who is
+    // not root can still write into the directory. The setuid and setgid bits are masked.
+    dir_modes: std::collections::BTreeMap<PathBuf, u32>,
+}
+
+// Drop everything under `path` from both records, and `path` itself unless `keep_self`: a
+// whiteout removed them. `Path` orders by component, so the descendants sit right after
+// `path`, and a range walk touches only them. A `retain` over the whole record per whiteout
+// would let a hostile layer make this quadratic.
+fn forget_under(applied: &mut Applied, path: &Path, keep_self: bool) {
+    let under = |p: &&PathBuf| p.starts_with(path);
+    let gone_too = |p: &&PathBuf| !(keep_self && p.as_path() == path);
+    let gone: Vec<PathBuf> = applied
+        .setid
         .range(path.to_path_buf()..)
-        .take_while(|p| p.starts_with(path))
-        .filter(|p| !(keep_self && p.as_path() == path))
+        .take_while(under)
+        .filter(gone_too)
         .cloned()
         .collect();
     for p in gone {
-        setid.remove(&p);
+        applied.setid.remove(&p);
+    }
+    let gone: Vec<PathBuf> = applied
+        .dir_modes
+        .range(path.to_path_buf()..)
+        .map(|(p, _)| p)
+        .take_while(under)
+        .filter(gone_too)
+        .cloned()
+        .collect();
+    for p in gone {
+        applied.dir_modes.remove(&p);
     }
 }
 
-// `setid` collects the image paths whose setuid or setgid bit this extraction cleared, as the
-// final image has them: a later layer that rewrites a path without the bit, or a whiteout that
-// deletes it, takes it off again.
-fn apply_layer(
-    tar_bytes: &[u8],
-    dest: &Path,
-    setid: &mut std::collections::BTreeSet<PathBuf>,
-) -> Result<usize> {
+fn apply_layer(tar_bytes: &[u8], dest: &Path, applied: &mut Applied) -> Result<usize> {
     let dest_canon =
         std::fs::canonicalize(dest).with_context(|| format!("resolving {}", dest.display()))?;
 
@@ -256,7 +279,7 @@ fn apply_layer(
                 dest,
                 path.parent().unwrap_or(Path::new("")),
                 stripped,
-                setid,
+                applied,
             )?;
         }
     }
@@ -285,15 +308,18 @@ fn apply_layer(
         // The mask clears the bits on disk; remember where, so the report can say so.
         let image = image_path(&path);
         if e.header().mode().is_ok_and(|m| m & 0o6000 != 0) {
-            setid.insert(image);
+            applied.setid.insert(image);
         } else {
-            setid.remove(&image);
+            applied.setid.remove(&image);
         }
         if !e.unpack_in(dest).map_err(escape_tar_err)? {
             bail!(
                 "refusing to extract an entry that escapes the target: {}",
                 shown(path.display(), SHOWN_MAX)
             );
+        }
+        if e.header().entry_type().is_dir() {
+            hold_dir_mode(&dest_canon, &path, e.header().mode()?, applied)?;
         }
         count += 1;
     }
@@ -377,7 +403,7 @@ fn apply_whiteout(
     dest: &Path,
     parent: &Path,
     stripped: &str,
-    setid: &mut std::collections::BTreeSet<PathBuf>,
+    applied: &mut Applied,
 ) -> Result<()> {
     // `.wh.` alone, or a marker naming `.`/`..`/a path, is not a single-file deletion.
     if stripped.is_empty() || stripped == "." || stripped == ".." || stripped.contains('/') {
@@ -395,12 +421,99 @@ fn apply_whiteout(
     if stripped == ".wh..opq" {
         // An opaque marker clears the directory's contents, not the directory.
         clear_dir(&dir, &shown_dir)?;
-        forget_under(setid, &image, true);
+        forget_under(applied, &image, true);
     } else {
         remove_at(&dir, OsStr::new(stripped), &shown_dir)?;
-        forget_under(setid, &image.join(stripped), false);
+        forget_under(applied, &image.join(stripped), false);
     }
     Ok(())
+}
+
+// tar has just set the directory `path` to the mode its entry names. When that mode lacks
+// owner rwx, a user who is not root could not write the entries that follow, so record the
+// mode for `restore_dir_modes` and open the directory up to its owner until then.
+fn hold_dir_mode(dest_canon: &Path, path: &Path, mode: u32, applied: &mut Applied) -> Result<()> {
+    let wanted = mode & 0o7777 & !0o6000;
+    if wanted & 0o700 == 0o700 && applied.dir_modes.is_empty() {
+        return Ok(());
+    }
+    // An entry of only `/` or `.` names `dest` itself, which tar leaves alone.
+    let Some(name) = path.file_name() else {
+        return Ok(());
+    };
+    let opening = || format!("opening {}", shown(path.display(), SHOWN_MAX));
+    // tar created the directory, so a parent that is absent now is a broken walk, not a skip.
+    let (parent, at) = open_dir_in_root(dest_canon, path.parent().unwrap_or(Path::new("")))?
+        .with_context(opening)?;
+    let image = at.join(name);
+    if wanted & 0o700 == 0o700 {
+        applied.dir_modes.remove(&image);
+        return Ok(());
+    }
+    let fd = open_dir_handle(&parent, name).with_context(opening)?;
+    chmod_fd(&fd, wanted | 0o700, path)?;
+    applied.dir_modes.insert(image, wanted);
+    Ok(())
+}
+
+// Set each held-back directory mode, children before parents: `Path` orders by component, so
+// a directory's descendants sort right after it, and the reverse walk reaches them first, while
+// every directory above is still open to its owner. A directory that a later layer removed or
+// replaced is skipped.
+fn restore_dir_modes(
+    dest_canon: &Path,
+    modes: &std::collections::BTreeMap<PathBuf, u32>,
+) -> Result<()> {
+    use rustix::io::Errno;
+    for (image, &mode) in modes.iter().rev() {
+        let Some(name) = image.file_name() else {
+            continue;
+        };
+        let Some((parent, _)) =
+            open_dir_in_root(dest_canon, image.parent().unwrap_or(Path::new("/")))?
+        else {
+            continue;
+        };
+        let fd = match open_dir_handle(&parent, name) {
+            Ok(fd) => fd,
+            Err(Errno::NOENT | Errno::NOTDIR | Errno::LOOP) => continue,
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("opening {}", shown(image.display(), SHOWN_MAX)))
+            }
+        };
+        chmod_fd(&fd, mode, image)?;
+    }
+    Ok(())
+}
+
+// The directory `name` in `parent`, as an O_PATH handle that never follows a symlink.
+fn open_dir_handle(parent: &OwnedFd, name: &OsStr) -> rustix::io::Result<OwnedFd> {
+    use rustix::fs::{Mode, OFlags};
+    rustix::fs::openat(
+        parent,
+        name,
+        OFlags::PATH | OFlags::NOFOLLOW | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+}
+
+// Set the mode of the directory behind `fd`. fchmod refuses an O_PATH handle, and Linux has no
+// chmod at a handle that skips symlinks, so go through /proc/self/fd/N, which names the inode
+// itself whatever its path is now (glibc's fchmodat does the same). `shown_path` is for errors.
+fn chmod_fd(fd: &OwnedFd, mode: u32, shown_path: &Path) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        format!("/proc/self/fd/{}", fd.as_raw_fd()),
+        std::fs::Permissions::from_mode(mode),
+    )
+    .with_context(|| {
+        format!(
+            "setting the mode of {} through /proc/self/fd (is /proc mounted?)",
+            shown(shown_path.display(), SHOWN_MAX)
+        )
+    })
 }
 
 // Join `rel` under `dest`, refusing any component that could escape it (`..`, absolute).
@@ -693,7 +806,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("out");
         std::fs::create_dir_all(&dest).unwrap();
-        let mut setid = BTreeSet::new();
+        let mut applied = Applied::default();
         apply_layer(
             &tar_with_modes(&[
                 ("./usr/bin/su", tar::EntryType::Regular, 0o4755),
@@ -705,7 +818,7 @@ mod tests {
                 ("opt/a-b/sgid", tar::EntryType::Regular, 0o2755),
             ]),
             &dest,
-            &mut setid,
+            &mut applied,
         )
         .unwrap();
         let names = |s: &BTreeSet<PathBuf>| {
@@ -714,7 +827,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            names(&setid),
+            names(&applied.setid),
             [
                 "/opt/a/sgid",
                 "/opt/a-b/sgid",
@@ -732,26 +845,69 @@ mod tests {
                 ("opt/a/.wh..wh..opq", tar::EntryType::Regular, 0o644),
             ]),
             &dest,
-            &mut setid,
+            &mut applied,
         )
         .unwrap();
-        assert_eq!(names(&setid), ["/opt/a-b/sgid", "/var/mail"]);
+        assert_eq!(names(&applied.setid), ["/opt/a-b/sgid", "/var/mail"]);
+    }
+
+    #[test]
+    fn an_opaque_whiteout_drops_the_records_below_a_recorded_directory() {
+        use tar::EntryType::{Directory, Regular};
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let mut applied = Applied::default();
+        apply_layer(
+            &tar_with_modes(&[
+                ("var/mail/", Directory, 0o2775),
+                ("var/mail/spool", Regular, 0o2755),
+                ("lib64/", Directory, 0o555),
+                ("lib64/sub/", Directory, 0o555),
+            ]),
+            &dest,
+            &mut applied,
+        )
+        .unwrap();
+        apply_layer(
+            &tar_with_modes(&[
+                ("var/mail/.wh..wh..opq", Regular, 0o644),
+                ("lib64/.wh..wh..opq", Regular, 0o644),
+            ]),
+            &dest,
+            &mut applied,
+        )
+        .unwrap();
+        let names: Vec<_> = applied
+            .setid
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        assert_eq!(names, ["/var/mail"]);
+        let held: Vec<_> = applied
+            .dir_modes
+            .keys()
+            .map(|p| p.display().to_string())
+            .collect();
+        assert_eq!(held, ["/lib64"]);
+        restore_dir_modes(&std::fs::canonicalize(&dest).unwrap(), &applied.dir_modes).unwrap();
+        assert_eq!(mode_of(&dest.join("lib64")), 0o555);
+        open_up(&[dest.join("lib64")]);
     }
 
     #[test]
     fn a_whiteout_that_deletes_nothing_keeps_the_setid_record() {
-        use std::collections::BTreeSet;
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("out");
         std::fs::create_dir_all(&dest).unwrap();
-        let mut setid = BTreeSet::new();
+        let mut applied = Applied::default();
         apply_layer(
             &tar_with_modes(&[
                 ("etc/su", tar::EntryType::Regular, 0o4755),
                 ("bin/ping", tar::EntryType::Regular, 0o4755),
             ]),
             &dest,
-            &mut setid,
+            &mut applied,
         )
         .unwrap();
         // `..` is folded the way the extractor resolves it (tar's builder refuses to write one).
@@ -766,10 +922,14 @@ mod tests {
                 ("gone/.wh..wh..opq", tar::EntryType::Regular, 0o644),
             ]),
             &dest,
-            &mut setid,
+            &mut applied,
         )
         .unwrap();
-        let names: Vec<_> = setid.iter().map(|p| p.display().to_string()).collect();
+        let names: Vec<_> = applied
+            .setid
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
         assert_eq!(names, ["/bin/ping", "/etc/su"]);
     }
 
@@ -926,21 +1086,20 @@ mod tests {
 
     #[test]
     fn a_whiteout_through_a_link_clears_the_record_where_it_deleted() {
-        use std::collections::BTreeSet;
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("out");
         std::fs::create_dir_all(&dest).unwrap();
-        let mut setid = BTreeSet::new();
+        let mut applied = Applied::default();
         apply_layer(
             &tar_with_modes(&[("usr/lib/su", tar::EntryType::Regular, 0o4755)]),
             &dest,
-            &mut setid,
+            &mut applied,
         )
         .unwrap();
         std::os::unix::fs::symlink("/usr/lib", dest.join("lib")).unwrap();
-        apply_layer(&tar_of(&[("lib/.wh.su", b"")]), &dest, &mut setid).unwrap();
+        apply_layer(&tar_of(&[("lib/.wh.su", b"")]), &dest, &mut applied).unwrap();
         assert!(!dest.join("usr/lib/su").exists());
-        assert!(setid.is_empty(), "{setid:?}");
+        assert!(applied.setid.is_empty(), "{:?}", applied.setid);
     }
 
     #[test]
@@ -1319,6 +1478,125 @@ mod tests {
         let report = run(&archive, &dest).unwrap();
         assert_eq!((report.layers, report.files), (1, 1));
         assert_eq!(std::fs::read(dest.join("a")).unwrap(), b"x");
+    }
+
+    // An archive of uncompressed layers, each with its media type.
+    fn archive_of_layers(dir: &Path, layers: &[(&str, &[u8])]) -> PathBuf {
+        let descriptors: Vec<_> = layers
+            .iter()
+            .map(|(media, layer)| {
+                serde_json::json!({
+                    "mediaType": media,
+                    "digest": format!("sha256:{}", hex(Sha256::digest(layer))),
+                })
+            })
+            .collect();
+        let blobs: Vec<&[u8]> = layers.iter().map(|(_, layer)| *layer).collect();
+        archive_of(dir, &serde_json::json!({ "layers": descriptors }), &blobs)
+    }
+
+    const TAR: &str = "application/vnd.oci.image.layer.v1.tar";
+
+    // Give the owner rwx again on each directory, so the temporary directory can be removed.
+    fn open_up(dirs: &[PathBuf]) {
+        use std::os::unix::fs::PermissionsExt;
+        for dir in dirs {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    #[test]
+    fn run_extracts_into_a_directory_without_owner_write() {
+        use tar::EntryType::{Directory, Regular};
+        let tmp = tempfile::tempdir().unwrap();
+        let layer = tar_with_modes(&[
+            ("root/", Directory, 0o550),
+            ("root/f", Regular, 0o644),
+            // Nested, so the child must get its mode before its parent loses write.
+            ("a/", Directory, 0o500),
+            ("a/b/", Directory, 0o500),
+            ("a/b/f", Regular, 0o644),
+        ]);
+        let archive = archive_of_layers(tmp.path(), &[(TAR, &layer)]);
+        let dest = tmp.path().join("out");
+        let result = run(&archive, &dest);
+        let modes = [
+            mode_of(&dest.join("root")),
+            mode_of(&dest.join("a")),
+            mode_of(&dest.join("a/b")),
+        ];
+        let files = [dest.join("root/f").exists(), dest.join("a/b/f").exists()];
+        open_up(&[dest.join("root"), dest.join("a"), dest.join("a/b")]);
+        result.unwrap();
+        assert_eq!(files, [true, true]);
+        assert_eq!(modes, [0o550, 0o500, 0o500]);
+    }
+
+    #[test]
+    fn a_later_layer_writes_into_an_earlier_read_only_directory() {
+        use tar::EntryType::{Directory, Regular};
+        let tmp = tempfile::tempdir().unwrap();
+        let first = tar_with_modes(&[("d/", Directory, 0o555), ("d/a", Regular, 0o644)]);
+        let second = tar_with_modes(&[("d/b", Regular, 0o644), ("d/.wh.a", Regular, 0o644)]);
+        let archive = archive_of_layers(tmp.path(), &[(TAR, &first), (TAR, &second)]);
+        let dest = tmp.path().join("out");
+        let result = run(&archive, &dest);
+        let mode = mode_of(&dest.join("d"));
+        let (b, a) = (dest.join("d/b").exists(), dest.join("d/a").exists());
+        open_up(&[dest.join("d")]);
+        result.unwrap();
+        assert!(b && !a, "d/b: {b}, d/a: {a}");
+        assert_eq!(mode, 0o555);
+    }
+
+    #[test]
+    fn a_setgid_directory_without_owner_write_loses_only_the_setgid_bit() {
+        use tar::EntryType::{Directory, Regular};
+        let tmp = tempfile::tempdir().unwrap();
+        let layer = tar_with_modes(&[("s/", Directory, 0o2550), ("s/f", Regular, 0o644)]);
+        let archive = archive_of_layers(tmp.path(), &[(TAR, &layer)]);
+        let dest = tmp.path().join("out");
+        let result = run(&archive, &dest);
+        let mode = mode_of(&dest.join("s"));
+        open_up(&[dest.join("s")]);
+        assert_eq!(result.unwrap().stripped_setid, ["/s"]);
+        assert_eq!(mode, 0o550);
+    }
+
+    #[test]
+    fn a_failed_unpack_leaves_directories_that_the_owner_can_remove() {
+        use tar::EntryType::{Directory, Regular};
+        let tmp = tempfile::tempdir().unwrap();
+        let first = tar_with_modes(&[("d/", Directory, 0o500), ("d/f", Regular, 0o644)]);
+        let archive =
+            archive_of_layers(tmp.path(), &[(TAR, &first), ("application/x-unknown", b"")]);
+        let dest = tmp.path().join("out");
+        let err = run(&archive, &dest).unwrap_err();
+        let mode = mode_of(&dest.join("d"));
+        open_up(&[dest.join("d")]);
+        assert!(
+            format!("{err:#}").contains("unsupported layer media type"),
+            "{err:#}"
+        );
+        assert_eq!(mode & 0o700, 0o700, "{mode:o}");
+    }
+
+    #[test]
+    fn a_held_mode_is_dropped_when_its_directory_is_whited_out_or_rewritten() {
+        use tar::EntryType::{Directory, Regular};
+        let tmp = tempfile::tempdir().unwrap();
+        let first = tar_with_modes(&[
+            ("gone/", Directory, 0o500),
+            ("gone/f", Regular, 0o644),
+            ("opened/", Directory, 0o500),
+        ]);
+        // A whiteout removes `gone`, and a later entry for `opened` gives it owner rwx.
+        let second = tar_with_modes(&[(".wh.gone", Regular, 0o644), ("opened/", Directory, 0o750)]);
+        let archive = archive_of_layers(tmp.path(), &[(TAR, &first), (TAR, &second)]);
+        let dest = tmp.path().join("out");
+        run(&archive, &dest).unwrap();
+        assert!(!dest.join("gone").exists());
+        assert_eq!(mode_of(&dest.join("opened")), 0o750);
     }
 
     #[test]
