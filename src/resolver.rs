@@ -477,10 +477,14 @@ pub fn resolve_with(
         loaded.entry(name.clone()).or_insert_with(|| real.clone());
     }
     let mut queue = VecDeque::new();
-    // The fourth field counts the leading `needed` entries the ELF itself declared. Only the
-    // binary carries more: its --include entries. The last is false for an object reached only
-    // through an --include, which is dlopen'd later and so is not loaded at program start.
+    // Fields: the real path, where the object was found, its ELF info, what it inherits, the
+    // count of leading `needed` entries the ELF itself declared (only the binary carries more:
+    // its --include entries), and whether it loads at program start (false for an object
+    // reached only through an --include, which is dlopen'd later). Where it was found is what
+    // `$ORIGIN` names: glibc takes it from the name it opened, not the symlink target, and
+    // from the real path for the binary.
     queue.push_back((
+        root_path.clone(),
         root_path,
         root_info.clone(),
         (
@@ -501,6 +505,7 @@ pub fn resolve_with(
 
     while let Some((
         obj_path,
+        found_at,
         obj,
         (inherited_rpaths, inherited_literals, inherited_gaps, inherited_cpu),
         declared,
@@ -508,6 +513,7 @@ pub fn resolve_with(
     )) = queue.pop_front()
     {
         let obj_dir = obj_path.parent().unwrap_or(Path::new("/"));
+        let origin_dir = found_at.parent().unwrap_or(Path::new("/"));
 
         // One glibc rule, read twice below: an object that declares RUNPATH searches NO
         // RPATH for its own lookups, neither its own nor one inherited from an ancestor
@@ -534,20 +540,34 @@ pub fn resolve_with(
                         goblin::elf::header::machine_to_str(root_info.machine),
                         entry.escape_debug(),
                         printable(&obj_path),
-                        expand_tokens(entry, obj_dir, &root_info).escape_debug()
+                        expand_tokens(entry, origin_dir, &root_info).escape_debug()
                     );
                 }
             }
         }
-        let own_rpaths = build_dirs(used_rpaths, obj_dir, &sysroot.root, &root_info);
-        let runpath_dirs = build_dirs(&obj.runpaths, obj_dir, &sysroot.root, &root_info);
+        let own_rpaths = build_dirs(used_rpaths, origin_dir, &sysroot.root, &root_info);
+        let runpath_dirs = build_dirs(&obj.runpaths, origin_dir, &sysroot.root, &root_info);
         // Index for index with the dirs above, so a hit in `search` names its entry.
         let own_rpath_gaps = entry_gaps(used_rpaths, "RPATH", &obj_path, &root_info);
         let runpath_gaps = entry_gaps(&obj.runpaths, "RUNPATH", &obj_path, &root_info);
-        let own_rpath_cpu = cpu_entries(used_rpaths, "RPATH", &obj_path, sysroot, &root_info);
-        let runpath_cpu = cpu_entries(&obj.runpaths, "RUNPATH", &obj_path, sysroot, &root_info);
-        let own_literals = literal_dirs(used_rpaths, obj_dir, &sysroot.root, &root_info);
-        let runpath_literals = literal_dirs(&obj.runpaths, obj_dir, &sysroot.root, &root_info);
+        let own_rpath_cpu = cpu_entries(
+            used_rpaths,
+            "RPATH",
+            &obj_path,
+            origin_dir,
+            sysroot,
+            &root_info,
+        );
+        let runpath_cpu = cpu_entries(
+            &obj.runpaths,
+            "RUNPATH",
+            &obj_path,
+            origin_dir,
+            sysroot,
+            &root_info,
+        );
+        let own_literals = literal_dirs(used_rpaths, origin_dir, &sysroot.root, &root_info);
+        let runpath_literals = literal_dirs(&obj.runpaths, origin_dir, &sysroot.root, &root_info);
 
         // Search order: RPATH (own, then ancestors' — transitive) -> RUNPATH (this
         // object only) -> the whole-string fallbacks, in the same order -> default dirs.
@@ -737,8 +757,16 @@ pub fn resolve_with(
                         loaded.entry(name.clone()).or_insert_with(|| real.clone());
                     }
                     let declared = child.needed.len();
+                    // A relative search entry finds a relative path; its real path is the
+                    // only absolute directory there is.
+                    let found_at = if found.is_absolute() {
+                        found
+                    } else {
+                        real.clone()
+                    };
                     queue.push_back((
                         real,
+                        found_at,
                         child,
                         (
                             child_rpaths.clone(),
@@ -945,14 +973,15 @@ impl CpuEntry {
 
 // One `Option<CpuEntry>` per entry of `search_entries(raw)`, in the same order as `build_dirs`.
 // An entry that ld.so does not search at all is a `Gap` and gets its own note instead.
+// `origin_dir` is where `owner` was found, which may be a symlink's directory.
 fn cpu_entries(
     raw: &[String],
     tag: &'static str,
     owner: &Path,
+    origin_dir: &Path,
     sysroot: &Sysroot,
     root_info: &ElfInfo,
 ) -> Vec<Option<CpuEntry>> {
-    let origin_dir = owner.parent().unwrap_or(Path::new("/"));
     search_entries(raw)
         .map(|entry| {
             let names_platform = entry.contains("$PLATFORM") || entry.contains("${PLATFORM}");
@@ -1720,6 +1749,72 @@ mod tests {
         assert!(
             err.contains(&canonical(&mid).display().to_string()) && err.contains(abs),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn origin_of_a_library_reached_through_a_symlink_is_the_symlinks_directory() {
+        // TASK-231. A/lib/libbar.so -> ../../B/libbar.so has RUNPATH $ORIGIN/deps, and
+        // libdep.so is in A/lib/deps. glibc names A/lib, the directory it found the link in.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("A/bin/app");
+        let real_bar = root.join("B/libbar.so");
+        let dep = root.join("A/lib/deps/libdep.so");
+        for f in [&exe, &real_bar, &dep] {
+            touch(f);
+        }
+        std::os::unix::fs::symlink("../../B/libbar.so", root.join("A/lib/libbar.so")).unwrap();
+        let infos = HashMap::from([
+            (
+                canonical(&exe),
+                elf(&["libbar.so"], &[], &["$ORIGIN/../lib"], None),
+            ),
+            (
+                canonical(&real_bar),
+                elf(&["libdep.so"], &[], &["$ORIGIN/deps"], None),
+            ),
+            (canonical(&dep), elf(&[], &[], &[], None)),
+        ]);
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert!(res.missing.is_empty(), "{:?}", res.missing);
+        // Dedup and staging still use the real file.
+        let paths: Vec<_> = res.libs.iter().map(|l| l.path.clone()).collect();
+        assert_eq!(paths, [canonical(&real_bar), canonical(&dep)]);
+    }
+
+    #[test]
+    fn a_cpu_copy_beside_a_symlinked_library_is_noted_from_the_links_directory() {
+        // The `$PLATFORM` probes take `$ORIGIN` from the link's directory too, as the search does.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let exe = root.join("A/bin/app");
+        let real_bar = root.join("B/libbar.so");
+        let dep = root.join("A/lib/x86_64/libdep.so");
+        for f in [&exe, &real_bar, &dep, &root.join("A/lib/haswell/libdep.so")] {
+            touch(f);
+        }
+        std::os::unix::fs::symlink("../../B/libbar.so", root.join("A/lib/libbar.so")).unwrap();
+        let infos = HashMap::from([
+            (
+                canonical(&exe),
+                elf(&["libbar.so"], &[], &["$ORIGIN/../lib"], None),
+            ),
+            (
+                canonical(&real_bar),
+                elf(&["libdep.so"], &[], &["$ORIGIN/$PLATFORM"], None),
+            ),
+            (canonical(&dep), elf(&[], &[], &[], None)),
+        ]);
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert!(res.missing.is_empty(), "{:?}", res.missing);
+        // The binary's `$ORIGIN/../lib` is not normalized, as ld.so does not normalize it.
+        let haswell = canonical(&exe).parent().unwrap().join("../lib/haswell");
+        assert_eq!(res.notes.len(), 1, "{:?}", res.notes);
+        assert!(
+            res.notes[0].contains(&format!("loads the copy in {} instead", haswell.display())),
+            "{}",
+            res.notes[0]
         );
     }
 
