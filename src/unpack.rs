@@ -362,19 +362,7 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path, applied: &mut Applied) -> Result<u
         {
             continue;
         }
-        // Read the path as tar does: leading `/` and `.` parts drop, and a `..` part is refused
-        // loudly, since a silently-dropped entry ships a rootfs that does not match the image.
-        let mut rel = PathBuf::new();
-        for part in path.components() {
-            match part {
-                Component::Normal(n) => rel.push(n),
-                Component::ParentDir => bail!(
-                    "refusing to extract an entry that escapes the target: {}",
-                    shown(path.display(), SHOWN_MAX)
-                ),
-                _ => {}
-            }
-        }
+        let rel = entry_rel(&path)?;
         // Only `/` or `.`: that names `dest` itself, which tar leaves alone.
         let Some(name) = rel.file_name().map(OsStr::to_os_string) else {
             count += 1;
@@ -416,6 +404,24 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path, applied: &mut Applied) -> Result<u
     Ok(count)
 }
 
+// An entry's path inside the image, read as tar reads it: leading `/` and `.` parts drop, and a
+// `..` part is refused loudly, since a silently-dropped entry ships a rootfs that does not match
+// the image.
+fn entry_rel(path: &Path) -> Result<PathBuf> {
+    let mut rel = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::Normal(n) => rel.push(n),
+            Component::ParentDir => bail!(
+                "refusing to extract an entry that escapes the target: {}",
+                shown(path.display(), SHOWN_MAX)
+            ),
+            _ => {}
+        }
+    }
+    Ok(rel)
+}
+
 // A whiteout marker's path, cleaned inside the image root as Docker cleans it (Go's
 // `filepath.Clean`): `.` parts drop, and `..` takes back the part before it, so
 // `etc/../etc/.wh.keep` deletes `etc/keep` (TASK-250). A rooted path cannot climb above `/`,
@@ -440,7 +446,8 @@ fn clean_marker_path(path: &Path) -> Result<PathBuf> {
 // Read one layer's tar end to end, refusing what the extraction would get wrong, and return
 // its whiteout marker paths. A truncated entry fails as tar reads past it. tar stops at the
 // first zero block, but a reader that goes on (GNU tar `--ignore-zeros`) would find whatever
-// follows, so the rest must be zeros too. A sparse entry fails here, before any file is
+// follows, so the rest must be zeros too. An entry with a `..` part fails here too, before a
+// whiteout deletes anything (TASK-255). A sparse entry fails here, before any file is
 // written: tar expands its holes, so a few header bytes can claim any size on disk, and no
 // layer writer emits one (Go's archive/tar, which Docker and BuildKit use, cannot).
 fn scan_layer(tar_bytes: &[u8]) -> Result<Vec<PathBuf>> {
@@ -467,6 +474,8 @@ fn scan_layer(tar_bytes: &[u8]) -> Result<Vec<PathBuf>> {
             .is_some_and(|n| n.starts_with(".wh."))
         {
             whiteouts.push(path);
+        } else {
+            entry_rel(&path)?;
         }
     }
     let end = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
@@ -1429,6 +1438,36 @@ mod tests {
             );
             assert!(dest.join("etc/gone").is_file(), "{marker}");
             assert!(dest.join("etc/keep").is_file(), "{marker}");
+        }
+    }
+
+    #[test]
+    fn an_entry_with_a_dotdot_part_refuses_the_layer_before_its_whiteouts_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir(&dest).unwrap();
+        let mut applied = Applied::default();
+        apply_layer(
+            &tar_of_raw_names(&[("etc/keep", b"k"), ("etc/gone", b"g")]),
+            &dest,
+            &mut applied,
+        )
+        .unwrap();
+        for entry in ["../x", "etc/../../x", "etc/../y"] {
+            // The whiteout and the plain file stored before the entry are not applied either.
+            let err = apply_layer(
+                &tar_of_raw_names(&[("etc/.wh.gone", b""), ("new", b"n"), (entry, b"e")]),
+                &dest,
+                &mut applied,
+            )
+            .expect_err(entry);
+            assert!(
+                format!("{err:#}").contains("escapes the target"),
+                "{entry}: {err:#}"
+            );
+            assert!(dest.join("etc/gone").is_file(), "{entry}");
+            assert!(dest.join("etc/keep").is_file(), "{entry}");
+            assert!(!dest.join("new").exists(), "{entry}");
         }
     }
 

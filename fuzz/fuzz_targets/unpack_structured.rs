@@ -3,13 +3,13 @@
 //! `unpack` target rarely forms a valid archive, so it only exercises the outer tar/gzip/JSON
 //! parse. This harness assembles a real OCI-layout archive from arbitrary layers — regular
 //! files, directories, symlinks (whose targets may escape), whiteouts (`.wh.` and opaque),
-//! GNU sparse entries (in a layer, and rarely a sparse `index.json` in the archive), rarely a
-//! second `index.json`, gzip layers split into two members, bytes after a layer's end marker,
-//! chosen media types, an optional digest tamper, and an optional image-index manifest — so
+//! GNU sparse entries (in a layer, and rarely a sparse `index.json` in the archive), rarely an
+//! entry with a `..` part, rarely a second `index.json`, gzip layers split into two members,
+//! bytes after a layer's end marker, chosen media types, an optional digest tamper, and an optional image-index manifest — so
 //! the fuzzer reaches the layer application, whiteout deletion, path-containment, digest
 //! verification, and media dispatch that the raw target cannot. It asserts no panic, and that
 //! no error it returns can break a line of output. A run that succeeds must have extracted
-//! every entry it was given, and must have been given no sparse entry, no bytes after a
+//! every entry it was given, and must have been given no sparse or `..` entry, no bytes after a
 //! layer's end and no second `index.json`.
 
 use arbitrary::Arbitrary;
@@ -50,6 +50,9 @@ struct LayerSpec {
     // Rare on purpose (like `tamper`): a byte after the tar's end marker, which unpack must
     // refuse, because a reader that skips zero blocks would find it.
     trail: u8,
+    // Rare on purpose (like `tamper`): an entry with a `..` part after the others, which unpack
+    // must refuse before the layer's whiteouts delete anything.
+    dotdot: u8,
 }
 
 // What one layer's tar holds, for the check after a run that succeeds.
@@ -59,6 +62,8 @@ struct Built {
     extracted: usize,
     // A sparse entry, which unpack must refuse before it writes anything.
     sparse: bool,
+    // An entry with a `..` part, which unpack must refuse before a whiteout deletes anything.
+    dotdot: bool,
 }
 
 #[derive(Arbitrary, Debug)]
@@ -230,6 +235,10 @@ fn layer_tar(spec: &LayerSpec) -> Built {
             extracted += usize::from(!marker);
         }
     }
+    let dotdot = spec.dotdot % 16 == 5;
+    if dotdot {
+        put_raw_name(&mut ar, "a/../../b", b"");
+    }
     let mut tar = ar.into_inner().unwrap_or_default();
     if spec.trail % 16 == 3 {
         tar.push(spec.trail);
@@ -238,6 +247,7 @@ fn layer_tar(spec: &LayerSpec) -> Built {
         tar,
         extracted,
         sparse,
+        dotdot,
     }
 }
 
@@ -296,7 +306,7 @@ fn build_archive(spec: &Spec) -> (Vec<u8>, Expect) {
     for (i, layer) in spec.layers.iter().take(4).enumerate() {
         let built = layer_tar(layer);
         expect.extracted += built.extracted;
-        expect.refused |= built.sparse || layer.trail % 16 == 3;
+        expect.refused |= built.sparse || built.dotdot || layer.trail % 16 == 3;
         let tar = built.tar;
         let (bytes, media) = match layer.media {
             Media::Gzip => {
@@ -416,7 +426,7 @@ fuzz_target!(|spec: Spec| {
         Ok(report) => {
             assert!(
                 !expect.refused,
-                "unpack accepted a sparse entry, bytes after a layer's end or a second index.json"
+                "unpack accepted a sparse or `..` entry, bytes after a layer's end or a second index.json"
             );
             assert_eq!(
                 report.files, expect.extracted,
