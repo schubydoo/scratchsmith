@@ -65,6 +65,11 @@ that scratchsmith sent, also when the registry's answer names no digest, and ref
 names another digest. If signing fails after the push, the error says that the image was pushed
 but is not signed. `index --sign` works the same way.
 
+cosign signs and attests with your terminal's standard input and standard error. Outside CI,
+keyless signing prints a login URL there and can ask for a code, and you answer it as you would
+when you run cosign yourself. cosign's standard output stays captured, so `--format json` stays
+parseable. A failed cosign run is reported with its exit status, and its own messages are above.
+
 ## Supply-chain output, smoke-run, and size gates
 
 ```sh

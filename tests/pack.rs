@@ -1390,8 +1390,11 @@ fn a_signing_that_fails_after_the_push_says_the_image_is_not_signed() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(1), "{fails}: {stderr}");
         assert!(
+            // TASK-233: cosign writes to scratchsmith's own stderr, so its message shows
+            // as it is, and the error points to it.
             stderr.contains(&format!("{host}/{says}"))
-                && stderr.contains("cosign failed: no OIDC token"),
+                && stderr.contains("no OIDC token\n")
+                && stderr.contains("cosign failed (exit status: 1); its messages are above"),
             "{fails}: {stderr}"
         );
     }
