@@ -601,8 +601,15 @@ pub fn resolve_with(
                 }
             };
             let mut not_cached = Vec::new();
-            if let Some((gap, hit)) = gap_hit(soname, &search, &search_gaps, &sysroot.default_dirs)
-            {
+            // ld.so uses an object that is already loaded under this name and does not search,
+            // so the notes about a search (a gap entry, a CPU copy) do not apply to the edge.
+            let declared_bare = i < declared && !soname.contains('/');
+            let already = declared_bare.then(|| loaded.get(soname).cloned()).flatten();
+            let matched = already.is_some();
+            let gap = (!matched)
+                .then(|| gap_hit(soname, &search, &search_gaps, &sysroot.default_dirs))
+                .flatten();
+            if let Some((gap, hit)) = gap {
                 // The note says the image's cache loads it, so check that ldconfig caches it.
                 let lib = (soname.clone(), cache_miss(soname, &hit, source));
                 match gaps.iter_mut().find(|(g, _)| g == gap) {
@@ -611,9 +618,6 @@ pub fn resolve_with(
                     None => gaps.push((gap.clone(), vec![lib])),
                 }
             }
-            // ld.so uses an object that is already loaded under this name and does not search.
-            let declared_bare = i < declared && !soname.contains('/');
-            let already = declared_bare.then(|| loaded.get(soname).cloned()).flatten();
             let found = already
                 .or_else(|| find_lib(soname, &search, obj_dir, &sysroot.root))
                 .or_else(|| in_literals(&literals, &mut not_cached))
@@ -666,7 +670,10 @@ pub fn resolve_with(
                 gaps: &search_gaps,
                 default_dirs: &sysroot.default_dirs,
             };
-            if let Some(note) = cpu_copy_note(soname, &found, &reach, source) {
+            if let Some(note) = (!matched)
+                .then(|| cpu_copy_note(soname, &found, &reach, source))
+                .flatten()
+            {
                 push_unique(&mut cpu_notes, note);
             }
             // Record the edge before the visited check, so a diamond or a repeat keeps its
@@ -3611,6 +3618,29 @@ mod tests {
             .filter(|e| e.to.as_deref() == Some(canonical(&foo).as_path()))
             .count();
         assert_eq!(to_foo, 2, "{:?}", res.edges);
+    }
+
+    #[test]
+    fn an_edge_to_a_loaded_object_gets_no_search_note() {
+        // libbar's empty RUNPATH entry would be a gap note if ld.so searched for libfoo.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (exe, bar, foo) = app_layout(root);
+        let mut infos = HashMap::new();
+        infos.insert(
+            canonical(&exe),
+            elf(
+                &["libbar.so.1", "libfoo.so.1"],
+                &[],
+                &["$ORIGIN/../lib"],
+                Some("/lib64/ld-linux-x86-64.so.2"),
+            ),
+        );
+        infos.insert(canonical(&bar), elf(&["libfoo.so.1"], &[], &[""], None));
+        infos.insert(canonical(&foo), elf(&[], &[], &[], None));
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert!(res.missing.is_empty(), "{:?}", res.missing);
+        assert!(res.notes.is_empty(), "{:?}", res.notes);
     }
 
     #[test]
