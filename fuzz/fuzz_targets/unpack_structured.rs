@@ -4,13 +4,13 @@
 //! parse. This harness assembles a real OCI-layout archive from arbitrary layers — regular
 //! files, directories, symlinks (whose targets may escape), whiteouts (`.wh.` and opaque),
 //! GNU sparse entries (in a layer, and rarely a sparse `index.json` in the archive), rarely an
-//! entry with a `..` part, rarely a second `index.json`, gzip layers split into two members,
-//! bytes after a layer's end marker, chosen media types, an optional digest tamper, and an optional image-index manifest — so
-//! the fuzzer reaches the layer application, whiteout deletion, path-containment, digest
-//! verification, and media dispatch that the raw target cannot. It asserts no panic, and that
-//! no error it returns can break a line of output. A run that succeeds must have extracted
-//! every entry it was given, and must have been given no sparse or `..` entry, no bytes after a
-//! layer's end and no second `index.json`.
+//! entry or a hard link with a `..` part, rarely a second `index.json`, gzip layers split into
+//! two members, bytes after a layer's end marker, chosen media types, an optional digest tamper,
+//! and an optional image-index manifest — so the fuzzer reaches the layer application, whiteout
+//! deletion, path-containment, digest verification, and media dispatch that the raw target
+//! cannot. It asserts no panic, and that no error it returns can break a line of output. A run
+//! that succeeds must have extracted every entry it was given, and must have been given no
+//! sparse or `..` entry, no bytes after a layer's end and no second `index.json`.
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
@@ -50,8 +50,9 @@ struct LayerSpec {
     // Rare on purpose (like `tamper`): a byte after the tar's end marker, which unpack must
     // refuse, because a reader that skips zero blocks would find it.
     trail: u8,
-    // Rare on purpose (like `tamper`): an entry with a `..` part after the others, which unpack
-    // must refuse before the layer's whiteouts delete anything.
+    // Rare on purpose (like `tamper`): an entry with a `..` part, or a hard link whose name climbs
+    // above the root, after the others, which unpack must refuse. The unit tests check that
+    // the refusal comes before the layer's whiteouts delete anything.
     dotdot: u8,
 }
 
@@ -62,7 +63,7 @@ struct Built {
     extracted: usize,
     // A sparse entry, which unpack must refuse before it writes anything.
     sparse: bool,
-    // An entry with a `..` part, which unpack must refuse before a whiteout deletes anything.
+    // An entry with a `..` part, or a hard link above the root, which unpack must refuse.
     dotdot: bool,
 }
 
@@ -167,6 +168,15 @@ fn put_raw_name(ar: &mut tar::Builder<Vec<u8>>, name: &str, data: &[u8]) {
     let _ = ar.append(&h, data);
 }
 
+// A hard link whose name goes into the header as written: the tar builder refuses a `..` one.
+fn put_raw_link(ar: &mut tar::Builder<Vec<u8>>, name: &str, target: &str) {
+    let mut h = header(0, tar::EntryType::Link);
+    let _ = h.set_path(name);
+    h.as_old_mut().linkname[..target.len()].copy_from_slice(target.as_bytes());
+    h.set_cksum();
+    let _ = ar.append(&h, &b""[..]);
+}
+
 // Build one layer's uncompressed tar from its entries. Best-effort: a rejected entry is
 // skipped, never fatal.
 fn layer_tar(spec: &LayerSpec) -> Built {
@@ -235,9 +245,11 @@ fn layer_tar(spec: &LayerSpec) -> Built {
             extracted += usize::from(!marker);
         }
     }
-    let dotdot = spec.dotdot % 16 == 5;
-    if dotdot {
+    let dotdot = matches!(spec.dotdot % 16, 5 | 6);
+    if spec.dotdot % 16 == 5 {
         put_raw_name(&mut ar, "a/../../b", b"");
+    } else if dotdot {
+        put_raw_link(&mut ar, "b", "a/../../b");
     }
     let mut tar = ar.into_inner().unwrap_or_default();
     if spec.trail % 16 == 3 {
@@ -426,7 +438,8 @@ fuzz_target!(|spec: Spec| {
         Ok(report) => {
             assert!(
                 !expect.refused,
-                "unpack accepted a sparse or `..` entry, bytes after a layer's end or a second index.json"
+                "unpack accepted a sparse or `..` entry, bytes after a layer's end or a second \
+                 index.json"
             );
             assert_eq!(
                 report.files, expect.extracted,

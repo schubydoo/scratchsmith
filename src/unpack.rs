@@ -446,10 +446,11 @@ fn clean_marker_path(path: &Path) -> Result<PathBuf> {
 // Read one layer's tar end to end, refusing what the extraction would get wrong, and return
 // its whiteout marker paths. A truncated entry fails as tar reads past it. tar stops at the
 // first zero block, but a reader that goes on (GNU tar `--ignore-zeros`) would find whatever
-// follows, so the rest must be zeros too. An entry with a `..` part fails here too, before a
-// whiteout deletes anything (TASK-255). A sparse entry fails here, before any file is
-// written: tar expands its holes, so a few header bytes can claim any size on disk, and no
-// layer writer emits one (Go's archive/tar, which Docker and BuildKit use, cannot).
+// follows, so the rest must be zeros too. An entry with a `..` part, or a hard link whose name
+// climbs above the root, fails here too, before a whiteout deletes anything (TASK-255). A
+// sparse entry fails here, before any file is written: tar expands its holes, so a few header
+// bytes can claim any size on disk, and no layer writer emits one (Go's archive/tar, which
+// Docker and BuildKit use, cannot).
 fn scan_layer(tar_bytes: &[u8]) -> Result<Vec<PathBuf>> {
     let mut cursor = std::io::Cursor::new(tar_bytes);
     let mut whiteouts = Vec::new();
@@ -476,6 +477,9 @@ fn scan_layer(tar_bytes: &[u8]) -> Result<Vec<PathBuf>> {
             whiteouts.push(path);
         } else {
             entry_rel(&path)?;
+            if e.header().entry_type().is_hard_link() {
+                hard_link_rel(&e, &path)?;
+            }
         }
     }
     let end = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
@@ -584,16 +588,14 @@ fn replace_existing(
     Ok(())
 }
 
-// A hard link's target is walked inside the image too, and the link is made between the two
-// opened parents. linkat never follows a symlink, as link(2) does not.
-fn hard_link_in_root<R: Read>(
-    dest_canon: &Path,
-    e: &mut tar::Entry<'_, R>,
+// A hard link entry's link name and its path inside the image. tar refused a target outside
+// `dest`. A `..` that pops past the image root still fails, as it does for an entry. These
+// checks read only the name, so `scan_layer` runs them before the layer changes anything
+// (TASK-255). A symlink on the way is caught later, in pass 2.
+fn hard_link_rel<R: Read>(
+    e: &tar::Entry<'_, R>,
     path: &Path,
-    parent: &OwnedFd,
-    name: &OsStr,
-) -> Result<()> {
-    use rustix::fs::AtFlags;
+) -> Result<(PathBuf, PathBuf, OsString)> {
     let Some(src) = e.link_name().map_err(escape_tar_err)? else {
         bail!(
             "hard link {} has no target",
@@ -601,8 +603,6 @@ fn hard_link_in_root<R: Read>(
         );
     };
     let shown_src = || shown(src.display(), SHOWN_MAX);
-    // tar refused a target outside `dest`. A `..` that pops past the image root still fails,
-    // in the link name and in a symlink on the way, as it does for an entry.
     let mut rel = PathBuf::new();
     for part in src.components() {
         match part {
@@ -613,14 +613,29 @@ fn hard_link_in_root<R: Read>(
             _ => {}
         }
     }
-    let Some(src_name) = rel.file_name() else {
+    let Some(name) = rel.file_name().map(OsStr::to_os_string) else {
         bail!("refusing a hard link to {}, the target itself", shown_src());
     };
-    let src_parent = rel.parent().unwrap_or(Path::new(""));
-    let Some((src_dir, _)) = walk_in_root(dest_canon, src_parent, Walk::Strict)? else {
+    rel.pop();
+    Ok((src.into_owned(), rel, name))
+}
+
+// A hard link's target is walked inside the image too, and the link is made between the two
+// opened parents. linkat never follows a symlink, as link(2) does not.
+fn hard_link_in_root<R: Read>(
+    dest_canon: &Path,
+    e: &mut tar::Entry<'_, R>,
+    path: &Path,
+    parent: &OwnedFd,
+    name: &OsStr,
+) -> Result<()> {
+    use rustix::fs::AtFlags;
+    let (src, src_parent, src_name) = hard_link_rel(e, path)?;
+    let shown_src = || shown(src.display(), SHOWN_MAX);
+    let Some((src_dir, _)) = walk_in_root(dest_canon, &src_parent, Walk::Strict)? else {
         bail!("hard link target {} does not exist", shown_src());
     };
-    rustix::fs::linkat(&src_dir, src_name, parent, name, AtFlags::empty()).with_context(|| {
+    rustix::fs::linkat(&src_dir, &src_name, parent, name, AtFlags::empty()).with_context(|| {
         format!(
             "hard linking {} to {}",
             shown_src(),
@@ -1889,6 +1904,42 @@ mod tests {
         let err = apply_layer(&layer, &dest, &mut Default::default()).unwrap_err();
         assert!(format!("{err:#}").contains("outside the target"), "{err:#}");
         assert!(!dest.join("b").exists());
+    }
+
+    #[test]
+    fn a_hard_link_above_the_root_refuses_the_layer_before_its_whiteouts_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let mut applied = Applied::default();
+        apply_layer(
+            &tar_of_raw_names(&[("etc/gone", b"g")]),
+            &dest,
+            &mut applied,
+        )
+        .unwrap();
+        for (target, why) in [
+            (&b"../secret"[..], "outside the target"),
+            (b"etc/../..", "outside the target"),
+            (b"/", "the target itself"),
+        ] {
+            let mut ar = tar::Builder::new(Vec::new());
+            let mut wh = tar::Header::new_gnu();
+            wh.set_size(0);
+            wh.set_mode(0o644);
+            ar.append_data(&mut wh, "etc/.wh.gone", &b""[..]).unwrap();
+            let mut h = tar::Header::new_gnu();
+            h.set_path("b").unwrap();
+            h.set_entry_type(tar::EntryType::Link);
+            h.as_gnu_mut().unwrap().linkname[..target.len()].copy_from_slice(target);
+            h.set_size(0);
+            h.set_mode(0o644);
+            h.set_cksum();
+            ar.append(&h, &b""[..]).unwrap();
+            let err = apply_layer(&ar.into_inner().unwrap(), &dest, &mut applied).unwrap_err();
+            assert!(format!("{err:#}").contains(why), "{err:#}");
+            assert!(dest.join("etc/gone").is_file(), "{err:#}");
+        }
     }
 
     #[test]
