@@ -5,6 +5,102 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 2.0.1 (2026-11-25)
+
+### Fixes
+
+#### `diff` keeps file names that are not valid UTF-8 apart ([#512](https://github.com/schubydoo/scratchsmith/pull/512))
+
+`diff` turned every file name into text before it compared the two trees, and each invalid
+byte became the same replacement character. So two names that differed only in non-UTF-8
+bytes, such as `x\xfe` and `x\xff`, counted as one file. A file added under such a name
+gave `no changes`, and `diff --exit-code` passed. `diff` now compares the raw names, and
+symlink targets too, and prints a non-UTF-8 name escaped, its invalid bytes as `\xNN`, in
+both the text and the JSON output.
+
+#### `doctor` finds an installed cosign and shows the real syft and grype versions ([#513](https://github.com/schubydoo/scratchsmith/pull/513))
+
+`doctor` looked for every tool with `--version`, and cosign takes only `cosign version`, so
+an installed cosign showed as `MISS`. The syft and grype rows showed `Application: syft`,
+the first line of their output, in place of a version. `doctor` now asks each tool its own
+version command, and shows the value of a `Version:` or `GitVersion:` line when the output
+has one. It still exits 0 in every case.
+
+#### `--init` prefers a static tini ([#506](https://github.com/schubydoo/scratchsmith/pull/506))
+
+When both are installed, `--init` now stages the static `tini-static` instead of the dynamic
+`tini`. A static tini needs nothing from the image to start. When only a dynamic tini is
+found, the pack still succeeds and the report warns that it starts only if the image holds
+its loader and libraries. `doctor` now checks the same places `--init` does, names the tini
+a pack would stage, and warns when that tini is dynamic.
+
+#### The musl rejection no longer names v1 ([#518](https://github.com/schubydoo/scratchsmith/pull/518))
+
+`pack` refused a musl binary with "v1 targets glibc", which reads as stale after 2.0. It now
+says "Scratchsmith packs glibc binaries only". The exit code does not change.
+
+#### `pack` and `graph` point out copies under glibc's CPU names for `$PLATFORM` ([#517](https://github.com/schubydoo/scratchsmith/pull/517))
+
+On x86_64, glibc reads `$PLATFORM` in an RPATH or RUNPATH entry as `haswell` or `xeon_phi` on
+some Intel CPUs, and as `x86_64` everywhere else. Scratchsmith reads it as `x86_64`, as before.
+A library refused as missing now gets a hint when a copy sits under one of those CPU names. When
+a library ships but `ld.so` on such a CPU would load a CPU-specific copy instead, `pack` prints
+one `note:` line on stderr saying the image leaves that copy out, and whether the image can
+still load the shipped copy on such a CPU. Exit codes and the staged files do not change.
+
+#### `pack` notes a search-path entry that `ld.so` does not search ([#516](https://github.com/schubydoo/scratchsmith/pull/516))
+
+Three kinds of RPATH or RUNPATH entry resolve in Scratchsmith but not in `ld.so`: a wholly
+empty string, a relative entry, and a name glued to a token such as `$ORIGINX` or `$ORIGIN_x`.
+A library found only through one still packs, as before, and the image loads it through its
+`ld.so.cache` when `ldconfig` caches it under the needed name. `pack` now prints one `note:` line
+on stderr for each such entry. It names the entry and the libraries found through it, and says
+which of them the cache does not list, so the image cannot load them. Exit codes, the resolution
+and the staged files do not change.
+
+#### A slash soname reached through a link names the real library ([#509](https://github.com/schubydoo/scratchsmith/pull/509))
+
+When a `DT_NEEDED` entry holds a slash and a link on the host resolves it into another
+directory, the soname link in the image now points at the staged library. Before, its value
+was the library's bare file name, so the link dangled, or pointed at itself when both names
+matched. Bare soname links do not change.
+
+#### The `smoke` and `sign` refusals say where the key is set and what helps ([#514](https://github.com/schubydoo/scratchsmith/pull/514))
+
+`pack --no-build` with `smoke = true` in the config told you to set `smoke = false` in the
+profile. A profile can't turn off a boolean the base config sets, so that didn't work. A
+config `sign = true` without a push target told you to set `push` in the config, but
+`--oci-archive` or `--no-build` on the command line beats a config `push`. Both refusals now
+name where the key is set: the config file, its `[profile.NAME]`, or both. The advice fits
+that: remove the key there, drop `--no-build` and `-o`, or, for `sign`, drop the
+command-line sink and pass `--push`.
+
+#### `--strip` leaves a non-ELF `--include` alone ([#510](https://github.com/schubydoo/scratchsmith/pull/510))
+
+A pack with `--strip` and an `--include` that is not an ELF, such as a plugin's data file,
+failed with `strip: file format not recognized`. Strip now skips any staged file that is not
+an ELF, so the pack succeeds and the data file ships byte-identical. The binary, the loader
+and every ELF library are still stripped.
+
+#### `--symlinks` handles a binary path that contains `..` ([#511](https://github.com/schubydoo/scratchsmith/pull/511))
+
+`pack --symlinks preserve ../app`, and the same with `copy-unsafe` or `skip-unsafe`, failed
+with `File exists`, because the `..` stayed in the image path and the link for the name landed
+on the staged binary itself. A symlinked binary named through `..`, such as `../bin/app`, got a
+link whose value counted the `..` as a directory and pointed past the binary. The parent
+directory is now resolved the way the kernel walks it, so both pack, and the link points at the
+staged binary. A binary path with no `..` stages exactly as before.
+
+### Security
+
+#### `unpack` reads every gzip member of a layer and refuses data after a layer's end ([#507](https://github.com/schubydoo/scratchsmith/pull/507))
+
+`unpack` read only the first member of a gzip layer. Docker reads every member, so a second member could carry files that the image installs and `unpack` never showed. `unpack` now reads every member. It refuses a layer with bytes after its last gzip member, or with anything but zeros after its tar's end, and exits `1`. A layer cut short now fails before `unpack` writes or deletes any file for that layer. This is a security exception in COMPATIBILITY.md, with no deprecation cycle. [Deprecations](https://schubydoo.github.io/scratchsmith/latest/deprecations/) lists the change.
+
+#### `unpack` refuses a sparse entry in a layer ([#507](https://github.com/schubydoo/scratchsmith/pull/507))
+
+A sparse tar entry in a layer could claim a file of any size from a few header bytes, and `unpack` wrote it out, so a small image could fill the disk. `unpack` now refuses the layer, in GNU or PAX sparse form, before it writes any file from it, and exits `1`. No layer writer that Docker or BuildKit uses emits a sparse entry. A layer with a malformed PAX record is refused the same way, as Docker's tar reader refuses it. This is a security exception in COMPATIBILITY.md, with no deprecation cycle. [Deprecations](https://schubydoo.github.io/scratchsmith/latest/deprecations/) lists the change.
+
 ## 2.0.0 (2026-11-05)
 
 ### Breaking Changes
