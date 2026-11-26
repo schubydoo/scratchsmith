@@ -5,6 +5,66 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 2.1.0 (2026-11-26)
+
+### Features
+
+#### `pack --add-binary` adds a program with its shared libraries ([#583](https://github.com/schubydoo/scratchsmith/pull/583))
+
+`--add-file` copies an ELF program as a plain file, so a program added that way, such as a shell, failed in the image until each of its libraries was named with `--include`. The new `--add-binary SRC[:DST]` flag, or `add-binary` in `scratchsmith.toml`, copies the program and resolves its libraries with the same `ld.so` rules as the packed binary. A library both need is staged once, and `ld.so.cache`, the library policy, the SBOM and `--packages` cover the added libraries. The program is always copied as a file, whatever `--symlinks` says. An added ELF built for another architecture or loader fails the pack with a clear error, and so does one that finds its libraries through `$ORIGIN` but is given a `DST` outside its real directory.
+
+#### `diff` warns when an argument is not a directory ([#575](https://github.com/schubydoo/scratchsmith/pull/575))
+
+`diff` read a file argument, such as an OCI archive, as an empty tree, so two different files compared as no change and `--exit-code` passed. It now prints a deprecation warning on standard error for each such argument, and the exit code is unchanged. 3.0 refuses it. To compare two archives, `unpack` each one into a directory and compare those.
+
+#### `diff` compares file modes and empty directories ([#574](https://github.com/schubydoo/scratchsmith/pull/574))
+
+`diff` now reports a regular file or directory whose permission bits differ between the two trees, such as a lost exec bit or a world-writable directory, and an empty directory that is in only one tree. Before, it compared contents and symlink targets only, so `diff --exit-code` passed both. The JSON output gains three fields, `mode_changed`, `dirs_added` and `dirs_removed`. Existing fields are unchanged. A `pack --no-build --output` tree keeps the host's modes, which the image layer rewrites, so a drift gate that diffs two staged trees from builders with different umasks now fails on modes the images do not carry. Stage both builds on one builder, or `unpack` both images and diff those.
+
+#### `pack` warns when the binary needs a newer glibc than the host's ([#580](https://github.com/schubydoo/scratchsmith/pull/580))
+
+A binary built against a newer glibc than the build host's used to pack without a word, and then fail to start with `version 'GLIBC_2.38' not found`. `pack` now reads the `GLIBC_` symbol versions that the binary and each staged library need, and prints a warning on standard error for each object that needs a version the staged glibc does not define. The warning names the object, the version it needs and the newest version the staged libc defines. A version needed from an object that defines no versions is not checked, since `ld.so` accepts any version from it. The pack still succeeds, with the same exit code.
+
+#### `lint --format json` prints the hardening report as JSON ([#585](https://github.com/schubydoo/scratchsmith/pull/585))
+
+`lint` takes `--format json`, like `graph` and `diff`. It prints one object with the binary's path, its `hardening` checks (`relro` as `"full"`, `"partial"` or `"none"`), the `--fail-on` gates asked for, and the `violations` among them, in the `--fail-on` spelling. A failing gate still prints the whole report, then exits `1` as before. The text output is unchanged.
+
+#### A digest in `--push` no longer crashes, and is deprecated ([#572](https://github.com/schubydoo/scratchsmith/pull/572))
+
+`pack --push` with a reference that names a digest, such as `ghcr.io/owner/app@sha256:…`, crashed when the registry answered the manifest upload with no `Location` header, as AWS ECR does. The push now completes. A digest in the `--push` reference is deprecated: it prints one warning line on standard error, the exit code is unchanged, and 3.0 will refuse it. Push to a tag instead.
+
+#### `pack --push-untagged` pushes an image by digest without touching an image tag ([#584](https://github.com/schubydoo/scratchsmith/pull/584))
+
+`pack --push` with a reference that names no tag pushes to `latest`, and that is unchanged. The new `--push-untagged` flag, or `push-untagged = true` in `scratchsmith.toml`, pushes the manifest under its own digest and creates or moves no image tag. The `--push` reference then names only the repository. The report, and the `pushed` field of `--format json`, give the pushed `registry/repo@sha256:...` reference, and `--sign` signs that digest. cosign still stores the signature, and the SBOM attestation, under its own `sha256-<hex>` tags. A tag or a digest in the reference is a usage error.
+
+#### `pack --tmp` adds a writable `/tmp` to the image ([#582](https://github.com/schubydoo/scratchsmith/pull/582))
+
+A scratch image has no `/tmp`, and many programs exit at startup without one. The new `--tmp` flag, or `tmp = true` in `scratchsmith.toml`, stages an empty `/tmp` directory, mode `1777` and owned by uid 0, so the image's default non-root user can write there without a `--tmpfs` mount. It works for every sink and for `--no-build`, and the layer stays reproducible.
+
+#### `--verbose` prints each resolution and staging decision ([#569](https://github.com/schubydoo/scratchsmith/pull/569))
+
+A new global `--verbose` flag makes `pack` and `graph` print one `verbose: ` line on standard error for each decision: the directories each object searches, the file each `DT_NEEDED` name resolves to, and, for `pack`, the binary, interpreter, libraries and name-service files it stages, each link it makes, and the directories in the image's `/etc/ld.so.cache`. Without the flag, the output is unchanged.
+
+### Fixes
+
+#### `$LIB` in a search path now matches the host glibc ([#573](https://github.com/schubydoo/scratchsmith/pull/573))
+
+An RPATH or RUNPATH entry that holds `$LIB`, such as `$ORIGIN/../$LIB`, now expands to the directory the host glibc uses for it: `lib/x86_64-linux-gnu` on Debian and Ubuntu, `lib64` on Fedora, `lib` on Arch. Before, it always expanded to `lib64` (`lib` for a 32-bit binary), so on Debian or Ubuntu `pack` and `graph` reported a library as missing that the program loads on the host, or staged a different copy from the one the loader uses. `lib64` (or `lib`) is still searched after the glibc value, so a library found there before still resolves. The one exception is a search path whose directory name holds a `:`, which is now tried whole with the glibc value only. `pack` prints a note on standard error for a library found only through `lib64` (or `lib`), because the image's loader does not search that directory and finds the library only through the image's `ld.so.cache`.
+
+#### `unpack` extracts an entry whose path is longer than 4096 bytes ([#581](https://github.com/schubydoo/scratchsmith/pull/581))
+
+`unpack` wrote each entry by its full path on the host, so an entry whose path under the target directory was longer than the host's limit (`PATH_MAX`, 4096 bytes on Linux) failed with `File name too long`. It now writes each entry relative to the directory that holds it, which it reaches through `/proc`, so a deep tree unpacks.
+
+### Deprecated
+
+#### A `diff` argument that is not a directory ([#575](https://github.com/schubydoo/scratchsmith/pull/575))
+
+3.0 refuses a `diff` argument that is not a directory, such as `diff a.tar b.tar`. Pass two rootfs directories, or `unpack` each archive first. The [Deprecations](https://schubydoo.github.io/scratchsmith/latest/deprecations/) page has the detail.
+
+#### A digest in the `--push` reference ([#575](https://github.com/schubydoo/scratchsmith/pull/575))
+
+3.0 refuses a digest in the `--push` reference or the `push` key, such as `ghcr.io/owner/app@sha256:…`. Push to a tag instead. The [Deprecations](https://schubydoo.github.io/scratchsmith/latest/deprecations/) page has the detail.
+
 ## 2.0.3 (2026-11-26)
 
 ### Fixes
