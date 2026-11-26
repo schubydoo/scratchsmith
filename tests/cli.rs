@@ -221,6 +221,22 @@ fn post_parse_usage_refusals_exit_2() {
             "--add-binary '/usr/bin/bash:bin/bash': read",
         ),
         (
+            "--push-untagged with a tag in the reference",
+            vec![
+                "pack",
+                "--push",
+                "localhost:5000/x:1",
+                "--push-untagged",
+                bin,
+            ],
+            "drop `:1` from localhost:5000/x:1",
+        ),
+        (
+            "--push-untagged without --push",
+            vec!["pack", "--push-untagged", bin],
+            "--push <REF>",
+        ),
+        (
             "add-file with one image path twice from the config",
             vec!["pack", "--config", &dup_add_file],
             "/etc/x is given more than once",

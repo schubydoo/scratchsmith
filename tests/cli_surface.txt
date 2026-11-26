@@ -49,6 +49,7 @@
   --packages  value=true  multiple=true  required=false  values=[report,sbom,image,none]
   --profile  value=true  multiple=false  required=false
   --push  value=true  multiple=false  required=false
+  --push-untagged  value=false  multiple=false  required=false
   --require  value=true  multiple=true  required=false
   --runtime  value=true  multiple=false  required=false  values=[docker,podman,nerdctl]
   --sbom  value=false  multiple=false  required=false

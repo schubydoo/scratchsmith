@@ -72,6 +72,18 @@ that scratchsmith sent, also when the registry's answer names no digest, and ref
 names another digest. If signing fails after the push, the error says that the image was pushed
 but is not signed. `index --sign` works the same way.
 
+A reference with no tag pushes to `latest`, as it always has. To push the image without
+creating or moving any tag, add `--push-untagged` and name only the repository:
+
+```sh
+scratchsmith pack --push ghcr.io/you/app --push-untagged --sign ./app
+```
+
+The manifest goes up under its own digest. The report gives the pushed
+`ghcr.io/you/app@sha256:...` reference (the `pushed` field in `--format json`), and `--sign`
+signs that digest. A tag or a digest in the reference is a usage error with exit code 2. Tag
+the image later, for example after a review, with `crane tag` or `oras tag`.
+
 cosign signs and attests with your terminal's standard input and standard error. Outside CI,
 keyless signing prints a login URL there and can ask for a code, and you answer it as you would
 when you run cosign yourself. cosign's standard output stays captured, so `--format json` stays
