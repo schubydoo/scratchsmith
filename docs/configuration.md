@@ -80,6 +80,7 @@ deny = ["libssl.so.3"]
 require = ["libseccomp.so.2"]
 sign = true
 push = "ghcr.io/you/app:latest"
+# push-untagged = true        # needs a `push` reference with no tag, so not this one
 max-size = "50MB"
 runtime = "docker"
 ```
