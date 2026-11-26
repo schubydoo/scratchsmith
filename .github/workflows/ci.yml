@@ -427,7 +427,9 @@ jobs:
             > "$proj/pyproject.toml"
           # The image runs as its non-root user, so let it rewrite the mounted project.
           chmod 0777 "$proj" && chmod 0666 "$proj/pyproject.toml"
-          docker run --rm -v "$proj:/p" scratchsmith/uv:packed \
+          # uv puts its throwaway cache in /tmp, and a scratch image has no /tmp. Give it one
+          # until pack can stage one itself (TASK-225).
+          docker run --rm --tmpfs /tmp -v "$proj:/p" scratchsmith/uv:packed \
             --no-cache --offline version --bump minor --frozen --project /p
           grep -qx 'version = "0.2.0"' "$proj/pyproject.toml"
       - name: "duckdb: run a query"
