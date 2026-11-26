@@ -1,14 +1,16 @@
 # Verifying releases
 
 Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation, at Build
-Level 3 for new releases.
+Level 3 from v2.2.0 on.
 Each release also ships a CycloneDX SBOM of Scratchsmith's own dependency graph. That file is
 `scratchsmith-v<ver>.cdx.json`, and it is listed in `checksums.txt`, so the signature and
 provenance cover it too. It reflects the full `Cargo.lock` graph, so it includes build- and
 dev-dependencies, not only the crates that link into the shipped binary.
 
 The release also carries `scratchsmith.intoto.jsonl`, the SLSA provenance bundle. You do not need
-to download it, because `gh attestation verify` reads the attestation from GitHub.
+to download it, because `gh attestation verify` reads the attestation from GitHub. That needs `gh`
+signed in (`gh auth login`). To check against the bundle instead, see
+[Verifying from the bundle](#verifying-from-the-bundle).
 
 Replace `<ver>` with the bare version you downloaded, no leading `v` (the tarball adds the
 `v` prefix, but the image tag does not).
@@ -16,9 +18,13 @@ Replace `<ver>` with the bare version you downloaded, no leading `v` (the tarbal
 The provenance is Build Level 3 because the binaries are built and attested inside a reusable
 workflow, `release-binaries.yml`, which signs the provenance with its own identity. The release
 workflow that calls it can't add steps to its jobs. `--signer-workflow` checks for that identity, so
-a provenance signed by any other workflow in the repository fails the check. A release whose tag
-has no `.github/workflows/release-binaries.yml` carries Build Level 2 provenance, signed by
+a provenance signed by any other workflow in the repository fails the check. v2.2.0 is the first
+release built this way. v2.1.0 and older carry Build Level 2 provenance, signed by
 `knope-release.yml`. For those, leave out `--signer-workflow`.
+
+The provenance covers the tarballs and the SBOM. The GHCR image is not a provenance subject. It
+packs the same release binaries, and its own cosign signature is checked with the `cosign verify`
+command below.
 
 ```sh
 # SLSA Build L3 provenance — the simplest, ref-agnostic check
@@ -38,9 +44,24 @@ cosign verify ghcr.io/schubydoo/scratchsmith:<ver> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
+### Verifying from the bundle
+
+To check the provenance against the `scratchsmith.intoto.jsonl` that ships in the release, instead
+of fetching it from GitHub, pass it with `--bundle`:
+
+```sh
+gh attestation verify scratchsmith-v<ver>-linux-amd64.tar.gz --repo schubydoo/scratchsmith \
+  --bundle scratchsmith.intoto.jsonl \
+  --signer-workflow schubydoo/scratchsmith/.github/workflows/release-binaries.yml
+```
+
+`gh` still fetches Sigstore's trusted root. For a machine with no network, save it first on one
+that has it, with `gh attestation trusted-root > trusted_root.jsonl`, and add
+`--custom-trusted-root trusted_root.jsonl`.
+
 ## Rebuilding a release binary
 
-Release binaries after v2.1.0 are reproducible. For every such release, a CI job rebuilds both
+Release binaries from v2.2.0 on are reproducible. For every such release, a CI job rebuilds both
 binaries from the tag and checks that they match the published ones byte for byte. To run the same check
 yourself, follow [REPRODUCE.md](https://github.com/schubydoo/scratchsmith/blob/main/REPRODUCE.md).
 
