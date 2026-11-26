@@ -107,6 +107,16 @@ impl PackagesSelection {
     pub fn requires_records(&self) -> bool {
         self.explicit && self.needs_records()
     }
+
+    /// The record outputs that are on, as `--packages` spells them, for a message that names
+    /// what to remove. Only asked when `needs_records` holds, so `sbom` is the rest.
+    pub fn records_label(&self) -> &'static str {
+        match (self.sbom, self.image) {
+            (true, true) => "sbom,image",
+            (false, true) => "image",
+            _ => "sbom",
+        }
+    }
 }
 
 /// One distribution package that owns at least one bundled file.
@@ -792,6 +802,22 @@ mod tests {
         assert!(
             PackagesSelection::from_outputs(&[PackagesOutput::None, PackagesOutput::Sbom]).is_err()
         );
+    }
+
+    #[test]
+    fn the_records_label_names_the_record_outputs_as_the_flag_spells_them() {
+        use PackagesOutput::{Image, Report, Sbom};
+        let label = |outputs: &[_]| {
+            PackagesSelection::from_outputs(outputs)
+                .unwrap()
+                .records_label()
+        };
+        assert_eq!(label(&[Sbom]), "sbom");
+        assert_eq!(label(&[Report, Sbom]), "sbom");
+        assert_eq!(label(&[Image]), "image");
+        assert_eq!(label(&[Report, Image]), "image");
+        assert_eq!(label(&[Sbom, Image]), "sbom,image");
+        assert_eq!(PackagesSelection::default().records_label(), "sbom");
     }
 
     #[test]
