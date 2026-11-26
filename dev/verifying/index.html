@@ -756,7 +756,8 @@
 
 
 <h1 id="verifying-releases">Verifying releases<a class="headerlink" href="#verifying-releases" title="Permanent link">&para;</a></h1>
-<p>Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
+<p>Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation, at Build
+Level 3 for new releases.
 Each release also ships a CycloneDX SBOM of Scratchsmith's own dependency graph. That file is
 <code>scratchsmith-v&lt;ver&gt;.cdx.json</code>, and it is listed in <code>checksums.txt</code>, so the signature and
 provenance cover it too. It reflects the full <code>Cargo.lock</code> graph, so it includes build- and
@@ -765,20 +766,27 @@ dev-dependencies, not only the crates that link into the shipped binary.</p>
 to download it, because <code>gh attestation verify</code> reads the attestation from GitHub.</p>
 <p>Replace <code>&lt;ver&gt;</code> with the bare version you downloaded, no leading <code>v</code> (the tarball adds the
 <code>v</code> prefix, but the image tag does not).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># SLSA provenance — the simplest, ref-agnostic check</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>gh<span class="w"> </span>attestation<span class="w"> </span>verify<span class="w"> </span>scratchsmith-v&lt;ver&gt;-linux-amd64.tar.gz<span class="w"> </span>--repo<span class="w"> </span>schubydoo/scratchsmith
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Checksums signature (one cosign signature covers every tarball through its hash)</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>cosign<span class="w"> </span>verify-blob<span class="w"> </span>checksums.txt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>--bundle<span class="w"> </span>checksums.txt.sigstore.json<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/schubydoo/scratchsmith/\.github/workflows/knope-release\.yml@'</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>checksums.txt<span class="w">        </span><span class="c1"># then check the tarball + SBOM hashes</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="c1"># The signed GHCR image</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>cosign<span class="w"> </span>verify<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:&lt;ver&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/schubydoo/scratchsmith/\.github/workflows/release\.yml@refs/tags/'</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
+<p>The provenance is Build Level 3 because the binaries are built and attested inside a reusable
+workflow, <code>release-binaries.yml</code>, which signs the provenance with its own identity. The release
+workflow that calls it can't add steps to its jobs. <code>--signer-workflow</code> checks for that identity, so
+a provenance signed by any other workflow in the repository fails the check. A release whose tag
+has no <code>.github/workflows/release-binaries.yml</code> carries Build Level 2 provenance, signed by
+<code>knope-release.yml</code>. For those, leave out <code>--signer-workflow</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># SLSA Build L3 provenance — the simplest, ref-agnostic check</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>gh<span class="w"> </span>attestation<span class="w"> </span>verify<span class="w"> </span>scratchsmith-v&lt;ver&gt;-linux-amd64.tar.gz<span class="w"> </span>--repo<span class="w"> </span>schubydoo/scratchsmith<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--signer-workflow<span class="w"> </span>schubydoo/scratchsmith/.github/workflows/release-binaries.yml
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1"># Checksums signature (one cosign signature covers every tarball through its hash)</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>cosign<span class="w"> </span>verify-blob<span class="w"> </span>checksums.txt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span>--bundle<span class="w"> </span>checksums.txt.sigstore.json<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/schubydoo/scratchsmith/\.github/workflows/knope-release\.yml@'</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>checksums.txt<span class="w">        </span><span class="c1"># then check the tarball + SBOM hashes</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="c1"># The signed GHCR image</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>cosign<span class="w"> </span>verify<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:&lt;ver&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/schubydoo/scratchsmith/\.github/workflows/release\.yml@refs/tags/'</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
 </code></pre></div>
 <h2 id="rebuilding-a-release-binary">Rebuilding a release binary<a class="headerlink" href="#rebuilding-a-release-binary" title="Permanent link">&para;</a></h2>
 <p>Release binaries after v2.1.0 are reproducible. For every such release, a CI job rebuilds both
