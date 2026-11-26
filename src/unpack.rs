@@ -15,7 +15,7 @@ use std::collections::{HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::io::Read;
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Component, Path, PathBuf};
 
@@ -392,9 +392,14 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path, applied: &mut Applied) -> Result<u
         if kind.is_hard_link() {
             hard_link_in_root(&dest_canon, &mut e, &path, &parent, &name)?;
         } else {
-            // The walk left no symlink in this path, so tar writes where the image means.
-            let target = dest_canon.join(image.strip_prefix("/").unwrap_or(&image));
-            e.unpack(&target).map_err(escape_tar_err)?;
+            // tar writes through the parent the walk opened, as /proc/self/fd/N/<name>, so the
+            // kernel starts from that directory. The path stays short however deep the entry is
+            // (a full host path past PATH_MAX failed, TASK-251), and a symlink swapped into the
+            // path after the walk cannot move the write. `chmod_fd` already relies on /proc.
+            let target = Path::new(&format!("/proc/self/fd/{}", parent.as_raw_fd())).join(&name);
+            e.unpack(&target)
+                .map_err(escape_tar_err)
+                .with_context(|| format!("extracting {}", shown(image.display(), SHOWN_MAX)))?;
         }
         if kind.is_dir() {
             hold_dir_mode(&parent, &name, &image, e.header().mode()?, applied)?;
@@ -712,7 +717,6 @@ fn open_dir_handle(parent: &OwnedFd, name: &OsStr) -> rustix::io::Result<OwnedFd
 // chmod at a handle that skips symlinks, so go through /proc/self/fd/N, which names the inode
 // itself whatever its path is now (glibc's fchmodat does the same). `shown_path` is for errors.
 fn chmod_fd(fd: &OwnedFd, mode: u32, shown_path: &Path) -> Result<()> {
-    use std::os::fd::AsRawFd;
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(
         format!("/proc/self/fd/{}", fd.as_raw_fd()),
@@ -1509,6 +1513,58 @@ mod tests {
             "the child must run the test: {text}"
         );
         false
+    }
+
+    #[test]
+    fn an_entry_whose_host_path_passes_path_max_unpacks() {
+        // TASK-251. tar wrote each entry by its full host path, so one longer than PATH_MAX
+        // (4096 bytes) failed with "File name too long". 90 levels of 50 bytes is 4590.
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("out");
+        std::fs::create_dir(&dest).unwrap();
+        let level = format!("{}/", "d".repeat(49));
+        let deep = level.repeat(90);
+        assert!(dest.join(&deep).as_os_str().len() > 4096);
+        let mut ar = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_size(0);
+        header.set_mode(0o755);
+        ar.append_data(&mut header, format!("{deep}sub"), &b""[..])
+            .unwrap();
+        let mut header = tar::Header::new_gnu();
+        header.set_size(2);
+        header.set_mode(0o640);
+        ar.append_data(&mut header, format!("{deep}sub/f"), &b"hi"[..])
+            .unwrap();
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_mode(0o777);
+        ar.append_link(&mut header, format!("{deep}sub/l"), "f")
+            .unwrap();
+        let mut applied = Applied::default();
+        apply_layer(&ar.into_inner().unwrap(), &dest, &mut applied).unwrap();
+
+        // Read back the same way, one directory at a time, since the full path is too long
+        // for the test to name.
+        use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+        let open = |at: &OwnedFd, name: &str| {
+            rustix::fs::openat(at, name, OFlags::PATH | OFlags::DIRECTORY, Mode::empty()).unwrap()
+        };
+        let mut dir = open(
+            &rustix::fs::openat(rustix::fs::CWD, &dest, OFlags::PATH, Mode::empty()).unwrap(),
+            ".",
+        );
+        for part in format!("{deep}sub").split('/') {
+            dir = open(&dir, part);
+        }
+        let file = rustix::fs::statat(&dir, "f", AtFlags::SYMLINK_NOFOLLOW).unwrap();
+        assert_eq!(FileType::from_raw_mode(file.st_mode), FileType::RegularFile);
+        assert_eq!(file.st_mode & 0o7777, 0o640);
+        assert_eq!(file.st_size, 2);
+        let link = rustix::fs::readlinkat(&dir, "l", Vec::new()).unwrap();
+        assert_eq!(link.as_bytes(), b"f");
     }
 
     #[test]
