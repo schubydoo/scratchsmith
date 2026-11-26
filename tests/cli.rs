@@ -267,6 +267,16 @@ fn post_parse_usage_refusals_exit_2() {
             vec!["pack", "--sign", "--oci-archive", archive, bin],
             "Drop --oci-archive, and pass --push, or turn signing off: drop --sign",
         ),
+        (
+            "--push-untagged --oci-archive with no push target",
+            vec!["pack", "--push-untagged", "--oci-archive", archive, bin],
+            "Drop --oci-archive, and pass --push, or drop --push-untagged",
+        ),
+        (
+            "push-untagged from the config with --no-build",
+            vec!["pack", "--config", &untagged, "--no-build", "-o", rootfs],
+            "Drop --no-build and -o, and pass --push, or remove `push-untagged = true`",
+        ),
         // A config `push` is the target for --push-untagged on the command line: its tag is
         // refused, not the flag.
         (

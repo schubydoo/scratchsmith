@@ -719,15 +719,25 @@ fn dispatch(cli: Cli) -> Result<()> {
                             _ => format!("{conflict}: {set_in}"),
                         }
                     }
-                    Conflict::UntaggedWithoutPush if push_untagged => format!(
-                        "--push-untagged needs a push target. Pass --push or set `push` in the \
-                         config, or drop --push-untagged{}",
-                        if file_push_untagged {
-                            " and remove `push-untagged = true`"
-                        } else {
-                            ""
+                    // As for --sign: a CLI sink beats a config `push`, so that advice is only
+                    // for the Docker sink. The last part names where the flag is set.
+                    Conflict::UntaggedWithoutPush => {
+                        let drop_it = match (push_untagged, file_push_untagged) {
+                            (true, true) => {
+                                "drop --push-untagged and remove `push-untagged = true`"
+                            }
+                            (true, false) => "drop --push-untagged",
+                            _ => "remove `push-untagged = true`",
+                        };
+                        match &sink {
+                            Sink::OciArchive(_) => cli_sink_untagged("--oci-archive", drop_it),
+                            Sink::Rootfs(_) => cli_sink_untagged("--no-build and -o", drop_it),
+                            _ => format!(
+                                "--push-untagged needs a push target. Pass --push or set `push` \
+                                 in the config, or {drop_it}"
+                            ),
                         }
-                    ),
+                    }
                     other => other.to_string(),
                 }));
             }
@@ -856,6 +866,14 @@ fn cli_sink_sign(flag: &str, drop: &str, set_in: &str) -> String {
     format!(
         "--sign needs a push target, and {flag} on the command line takes the place of any \
          `push` in the config. Drop {drop}, and pass --push, or turn signing off: {set_in}"
+    )
+}
+
+// The --push-untagged form of `cli_sink_sign`. `sink` is the flag or flags to drop.
+fn cli_sink_untagged(sink: &str, drop_it: &str) -> String {
+    format!(
+        "--push-untagged needs a push target, and {sink} on the command line takes the place of \
+         any `push` in the config. Drop {sink}, and pass --push, or {drop_it}"
     )
 }
 

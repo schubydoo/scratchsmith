@@ -48,8 +48,8 @@ Scratchsmith owns the one input the others do not serve: **an arbitrary prebuilt
   local engine for convenience: `docker` by default, or `--runtime podman|nerdctl` for those.
   You can also go daemon-free entirely with `--push <ref>` (straight to a registry),
   `--oci-archive <file>` (an OCI archive), or `--no-build --output` (a rootfs).
-- **Signing the image `pack` produces needs `--push`.** `pack --push --sign` cosign-signs the
-  pushed image by digest (keyless). `--sbom --sign` attaches the SBOM as a signed attestation.
-  Both apply only to the registry-push sink, because cosign signs a registry image. Release
-  *artifacts* are separately cosign-signed with SLSA provenance
-  ([Verifying releases](verifying.md)).
+- **Signing the image `pack` produces needs a push target (`--push` or `push` in the config).**
+  `pack --push --sign` cosign-signs the pushed image by digest (keyless). `--sbom --sign`
+  attaches the SBOM as a signed attestation. Both apply only to the registry-push sink, because
+  cosign signs a registry image. Release *artifacts* are separately cosign-signed with SLSA
+  provenance ([Verifying releases](verifying.md)).
