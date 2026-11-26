@@ -1209,6 +1209,10 @@ within 30 seconds, and the error names the endpoint. The identity-token exchange
 after 60 seconds of silence from the token host. Talking to the registry itself has no read
 limit, so a slow upload of a large layer is not cut off, and a registry that accepts the
 connection and then sends nothing still keeps the command waiting.</p>
+<p>A login stored as an identity token (<code>identitytoken</code> in the Docker config) is exchanged for an
+access token at the realm the registry names. scratchsmith sends it only to an <code>https</code> realm,
+or to a loopback <code>http</code> realm for a local registry, and follows no redirect from that realm. A
+failed exchange shows at most the first 1 KiB of the token host's answer, escaped.</p>
 <p>The report names the loader the image carries, because the binary's <code>PT_INTERP</code> chooses that
 path and not scratchsmith. <code>--format json</code> carries it as <code>interpreter</code>, so a job can assert it
 without unpacking the image. An ELF that carries no <code>PT_INTERP</code> reports null, which is the
@@ -1619,8 +1623,9 @@ When the archive's index lists more than one manifest, <code>unpack</code> appli
 prints a warning on standard error that names its digest, and its platform when the index gives
 one.</p>
 <p><code>unpack</code> reads every gzip member of a layer, as Docker does. It refuses a layer that is cut
-short, has data after its end, or holds a sparse entry or a malformed PAX record, and exits <code>1</code>
-before it writes any file from that layer. A layer may hold at most 2 GiB once decompressed, and
+short, has data after its end, or holds a sparse entry, an entry with a <code>..</code> part, a hard link
+above the image root or a malformed PAX record, and exits <code>1</code> before that layer writes or deletes
+any file. A layer may hold at most 2 GiB once decompressed, and
 all layers together at most 16 GiB. A layer that the manifest lists twice counts twice.</p>
 <p><code>unpack</code> clears the setuid and setgid bits on every file and directory it writes. An untrusted
 image cannot then plant a setuid program owned by the user who unpacks it. <code>unpack</code> prints one

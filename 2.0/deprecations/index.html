@@ -617,6 +617,39 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#a-whiteout-that-climbs-above-the-image-root" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A whiteout that climbs above the image root
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#an-oci-archive-with-two-indexjson-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An OCI archive with two index.json files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#an-identity-token-sent-to-an-http-realm-or-across-a-redirect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An identity token sent to an http realm, or across a redirect
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1012,6 +1045,39 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#a-whiteout-that-climbs-above-the-image-root" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A whiteout that climbs above the image root
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#an-oci-archive-with-two-indexjson-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An OCI archive with two index.json files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#an-identity-token-sent-to-an-http-realm-or-across-a-redirect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An identity token sent to an http realm, or across a redirect
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1210,6 +1276,35 @@ wrote up to N times 2 GiB to the target.</p>
 <p>Now <code>unpack</code> refuses an image whose layers hold more than 16 GiB in all once decompressed, and
 exits <code>1</code>. A layer listed twice counts twice, and an uncompressed layer counts at its own size.
 The error names the limit. The layers before the one that crosses it are already applied.</p>
+<h3 id="a-whiteout-that-climbs-above-the-image-root">A whiteout that climbs above the image root<a class="headerlink" href="#a-whiteout-that-climbs-above-the-image-root" title="Permanent link">&para;</a></h3>
+<p>A whiteout marker is a layer entry named <code>.wh.&lt;name&gt;</code>, which deletes <code>&lt;name&gt;</code> from the layers
+below. Through 2.0.2, <code>unpack</code> skipped a marker whose path had a <code>..</code> part, and applied the rest
+of the layer. That missed a marker like <code>etc/../etc/.wh.keep</code>, which Docker cleans to
+<code>etc/.wh.keep</code> and honors, so the unpacked tree kept a file that the image deletes.</p>
+<p>Now <code>unpack</code> cleans the marker's path as Docker does, and deletes what it names. A rooted path
+stops at <code>/</code>, so <code>/../etc/.wh.keep</code> deletes <code>etc/keep</code>. A relative path whose <code>..</code> climbs
+above the root, such as <code>../.wh.x</code>, makes <code>unpack</code> refuse the layer and exit <code>1</code>. It refuses
+the layer before it writes or deletes any file for it. Docker refuses that marker too, so no
+working image has one.</p>
+<h3 id="an-oci-archive-with-two-indexjson-files">An OCI archive with two <code>index.json</code> files<a class="headerlink" href="#an-oci-archive-with-two-indexjson-files" title="Permanent link">&para;</a></h3>
+<p>An OCI archive holds one <code>index.json</code>, which names the image. A tar file can still hold two
+entries with that name, or <code>index.json</code> and <code>./index.json</code>. Through 2.0.2, <code>unpack</code> kept the
+last one and said nothing. Another tool that keeps the first would show a different image from
+the same archive.</p>
+<p>Now <code>unpack</code> refuses the archive and exits <code>1</code>. The error names the second entry as it is
+stored. It refuses before it reads that entry. No OCI layout writer puts two <code>index.json</code>
+files in one archive, so no working image has one.</p>
+<h3 id="an-identity-token-sent-to-an-http-realm-or-across-a-redirect">An identity token sent to an <code>http</code> realm, or across a redirect<a class="headerlink" href="#an-identity-token-sent-to-an-http-realm-or-across-a-redirect" title="Permanent link">&para;</a></h3>
+<p>A Docker config can hold a login as an identity token, a refresh token that <code>--push</code> and
+<code>index</code> exchange for an access token at the realm that the registry names. Through 2.0.2, the
+exchange posted the refresh token to that realm over plain <code>http</code> too, and followed a redirect
+from it with the token in the body. A registry, or anyone on the network path, could then read
+the refresh token.</p>
+<p>Now the realm must be <code>https</code>, and a redirect from it is refused, not followed. Either one makes
+<code>--push</code> or <code>index</code> fail with exit <code>1</code>. The one exception is an <code>http</code> realm on a loopback
+address, for a registry at <code>localhost</code>, <code>127.0.0.1</code> or <code>::1</code>, which scratchsmith already
+reaches over <code>http</code>. Hosted registries such as Docker Hub and GHCR name an <code>https</code> realm, and
+a local test registry keeps working, so no working push depends on the refused realm.</p>
 <h2 id="tolerances-ending-in-20">Tolerances ending in 2.0<a class="headerlink" href="#tolerances-ending-in-20" title="Permanent link">&para;</a></h2>
 <p>No tolerance is left now. Version 2.0.0 ended the 1.x tolerances, and the list
 <a href="#removed-in-200">Removed in 2.0.0</a> names each one.</p>
