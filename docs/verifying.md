@@ -22,9 +22,9 @@ a provenance signed by any other workflow in the repository fails the check. v2.
 release built this way. v2.1.0 and older carry Build Level 2 provenance, signed by
 `knope-release.yml`. For those, leave out `--signer-workflow`.
 
-The provenance covers the tarballs and the SBOM. The GHCR image is not a provenance subject. It
-packs the same release binaries, and its own cosign signature is checked with the `cosign verify`
-command below.
+The Build Level 3 provenance covers the tarballs and the SBOM, not the GHCR image. The image packs
+the same release binaries. It carries its own cosign signature, which the `cosign verify` command
+below checks, and a BuildKit provenance attestation in the registry, which is not Level 3.
 
 ```sh
 # SLSA Build L3 provenance — the simplest, ref-agnostic check
