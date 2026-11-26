@@ -108,13 +108,17 @@ pub enum Command {
         #[arg(long, value_name = "REF", conflicts_with_all = ["no_build", "oci_archive"])]
         push: Option<String>,
         /// Sign the pushed image with cosign (keyless) and attest the SBOM, if one was
-        /// generated. Requires --push (cosign signs a registry image by digest).
-        #[arg(long, requires = "push")]
+        /// generated. Requires a push target, --push or `push` in the config (cosign signs a
+        /// registry image by digest).
+        // No clap `requires = "push"`: a config `push` is a target too, and clap cannot see it.
+        // The sink check after the config merge refuses a pack with no target.
+        #[arg(long)]
         sign: bool,
-        /// Push the image by its digest only, creating or moving no image tag. The --push
-        /// reference then names just the repository, with no tag. Requires --push. With --sign,
-        /// cosign still stores its signature under a `sha256-<hex>` tag.
-        #[arg(long = "push-untagged", requires = "push")]
+        /// Push the image by its digest only, creating or moving no image tag. The push
+        /// reference then names just the repository, with no tag. Requires a push target,
+        /// --push or `push` in the config. With --sign, cosign still stores its signature under
+        /// a `sha256-<hex>` tag.
+        #[arg(long = "push-untagged")]
         push_untagged: bool,
         /// Image entrypoint (defaults to the packed binary's path).
         #[arg(long, value_name = "PATH")]
@@ -690,8 +694,21 @@ fn dispatch(cli: Cli) -> Result<()> {
                     // A CLI sink beats a config `push`, so setting one there would not help. The
                     // second part is what to drop: -o needs --no-build.
                     Conflict::SignWithoutPush => {
-                        let set_in =
-                            bool_set_in("sign", config.as_deref(), profile.as_deref(), sign_set);
+                        let set_in = if sign_set == (false, false) {
+                            "drop --sign".to_string()
+                        } else {
+                            let in_file = bool_set_in(
+                                "sign",
+                                config.as_deref(),
+                                profile.as_deref(),
+                                sign_set,
+                            );
+                            if sign {
+                                format!("drop --sign, and {in_file}")
+                            } else {
+                                in_file
+                            }
+                        };
                         match &sink {
                             Sink::OciArchive(_) => {
                                 cli_sink_sign("--oci-archive", "--oci-archive", &set_in)
@@ -702,6 +719,15 @@ fn dispatch(cli: Cli) -> Result<()> {
                             _ => format!("{conflict}: {set_in}"),
                         }
                     }
+                    Conflict::UntaggedWithoutPush if push_untagged => format!(
+                        "--push-untagged needs a push target. Pass --push or set `push` in the \
+                         config, or drop --push-untagged{}",
+                        if file_push_untagged {
+                            " and remove `push-untagged = true`"
+                        } else {
+                            ""
+                        }
+                    ),
                     other => other.to_string(),
                 }));
             }
@@ -1086,10 +1112,26 @@ mod tests {
     }
 
     #[test]
-    fn sign_requires_push() {
-        // --sign signs a registry image by digest, so it needs --push.
-        let err = Cli::try_parse_from(["scratchsmith", "pack", "--sign", "/bin/ls"]).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    fn sign_and_push_untagged_parse_without_push() {
+        // A config `push` is a target too, which clap cannot see, so the refusal of a pack with
+        // no target comes after the config merge, not from clap.
+        let cli = Cli::try_parse_from([
+            "scratchsmith",
+            "pack",
+            "--sign",
+            "--push-untagged",
+            "/bin/ls",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Pack {
+                sign: true,
+                push_untagged: true,
+                push: None,
+                ..
+            })
+        ));
     }
 
     #[test]

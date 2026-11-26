@@ -241,9 +241,44 @@ fn post_parse_usage_refusals_exit_2() {
             "drop `:1` from localhost:5000/x:1",
         ),
         (
-            "--push-untagged without --push",
+            "--push-untagged with no push target",
             vec!["pack", "--push-untagged", bin],
-            "--push <REF>",
+            "--push-untagged needs a push target. Pass --push or set `push` in the config, or \
+             drop --push-untagged",
+        ),
+        (
+            "--push-untagged and the config key with no push target",
+            vec!["pack", "--config", &untagged, "--push-untagged"],
+            "or drop --push-untagged and remove `push-untagged = true`",
+        ),
+        (
+            "--sign with no push target",
+            vec!["pack", "--sign", bin],
+            "--sign needs a push target. Pass --push or set `push` in the config, or turn \
+             signing off: drop --sign",
+        ),
+        (
+            "--sign and the config key with no push target",
+            vec!["pack", "--config", &sign, "--sign"],
+            "drop --sign, and `sign = true` is set in",
+        ),
+        (
+            "--sign --oci-archive with no push target",
+            vec!["pack", "--sign", "--oci-archive", archive, bin],
+            "Drop --oci-archive, and pass --push, or turn signing off: drop --sign",
+        ),
+        // A config `push` is the target for --push-untagged on the command line: its tag is
+        // refused, not the flag.
+        (
+            "--push-untagged with a tag in the config push",
+            vec!["pack", "--config", &push, "--push-untagged"],
+            "drop `:1` from localhost:5000/x:1",
+        ),
+        // The same for --sign: the config reference is parsed, so the flag was taken.
+        (
+            "--sign with a bad config push",
+            vec!["pack", "--config", &bad_push, "--sign"],
+            "invalid image reference",
         ),
         (
             "add-file with one image path twice from the config",
@@ -288,6 +323,38 @@ fn post_parse_usage_refusals_exit_2() {
         assert_eq!(out.status.code(), Some(2), "{name}: {stderr}");
         assert!(stderr.contains(needle), "{name}: {stderr}");
     }
+}
+
+#[test]
+fn a_config_push_is_the_target_for_sign_on_the_command_line() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join("scratchsmith.toml");
+    // Port 1 refuses a connection, but the pack stops at the missing cosign before any push.
+    std::fs::write(
+        &cfg,
+        format!("binary = \"{bin}\"\npush = \"127.0.0.1:1/app:1\"\n"),
+    )
+    .unwrap();
+    let empty = tmp.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["pack", "--config", cfg.to_str().unwrap(), "--sign"])
+        .env("PATH", &empty)
+        .env("HOME", tmp.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Not clap's exit 2: --sign was taken, the config `push` was the target, and the pack got
+    // as far as the cosign check that guards the push.
+    assert_eq!(out.status.code(), Some(1), "got: {stderr}");
+    assert!(
+        stderr.contains("--sign needs cosign, so nothing was pushed"),
+        "got: {stderr}"
+    );
 }
 
 #[test]
