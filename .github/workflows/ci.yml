@@ -367,9 +367,8 @@ jobs:
     # short piece of real work. The fixtures in tests/ are binaries we build ourselves; these
     # are upstream release builds, and duckdb is C++, so it also needs libstdc++ staged. The
     # nightly full list belongs to schubydoo/scratchsmith-images, not here.
-    # Each tool comes from its PyPI wheel (the projects publish their Linux binaries there),
-    # pinned by version and sha256. Bump a pin by hand: a version bump also needs the new
-    # wheel's URL and hash from PyPI.
+    # Each tool is its project's x86_64 glibc Linux archive from its GitHub release, checked
+    # against its pinned sha256 and its build-provenance attestation.
     name: pack real tools
     runs-on: ubuntu-latest
     timeout-minutes: 10 # new job; a local run of the three packs takes well under a minute
@@ -384,22 +383,50 @@ jobs:
       - name: Build scratchsmith
         run: cargo build --bin scratchsmith
       - name: Download the pinned tools
+        env:
+          # Pinned by version and by the sha256 GitHub publishes for each release asset.
+          # Renovate bumps the three versions as one weekly group, and its postUpgradeTask
+          # `python3 scripts/check_binary_dep_pins.py --fix` rewrites the hashes in the same
+          # commit. binary-dep-pins.yml verifies them. A moved asset fails the sha256 -c.
+          # renovate: datasource=github-releases depName=astral-sh/ruff
+          RUFF_VERSION: "0.17.6"
+          RUFF_SHA256: "94b33791f48cd54ab35ad673a443a5c001d3e6d87effeaba9899070b700d45f3"
+          # renovate: datasource=github-releases depName=astral-sh/uv
+          UV_VERSION: "0.13.10"
+          UV_SHA256: "bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+          # renovate: datasource=github-releases depName=duckdb/duckdb
+          DUCKDB_VERSION: "2.0.1"
+          DUCKDB_SHA256: "b676268be4d39e4e41a904442c9796c9914e645cc085c7505f048f2c992b5eca"
+          # gh attestation verify reads each project's public attestations through the API.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/whl" "$RUNNER_TEMP/tools"
-          cd "$RUNNER_TEMP/whl"
-          # tool, path of the binary inside the wheel, sha256, wheel URL
-          while read -r tool member sha url; do
-            whl="${url##*/}"
-            curl -fsSL --retry 3 -o "$whl" "$url"
-            echo "$sha  $whl" | sha256sum -c -
-            python3 -I -m zipfile -e "$whl" "x-$tool"
+          mkdir -p "$RUNNER_TEMP/dl" "$RUNNER_TEMP/tools"
+          cd "$RUNNER_TEMP/dl"
+          # tool, GitHub repo, release URL, pinned sha256, path of the binary in the archive
+          fetch() {
+            local tool=$1 repo=$2 url=$3 sha=$4 member=$5 file="${3##*/}"
+            curl -fsSL --retry 3 -o "$file" "$url"
+            echo "$sha  $file" | sha256sum -c -
+            gh attestation verify "$file" --repo "$repo"
+            mkdir -p "x-$tool" && tar -xzf "$file" -C "x-$tool"
             install -m 0755 "x-$tool/$member" "$RUNNER_TEMP/tools/$tool"
-          done <<'EOF'
-          ruff ruff-0.17.6.data/scripts/ruff aa3b08254a732acba246891089a152c47c5733dc36b8ecb76ce8602f8326e5e4 https://files.pythonhosted.org/packages/be/48/3df7d81249fd69ee6a49519b149fb5d11e13118fd7d0e8d65329a237087b/ruff-0.17.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-          uv uv-0.13.10.data/scripts/uv 7cc9c41b43d583e34c781fd3446405b06e9c5fa2db468ce2a534d353db6429e5 https://files.pythonhosted.org/packages/8b/99/fad906311e48fce22e4db71ee4c3df29bdb17b29eb36878f52b8dcd79237/uv-0.13.10-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-          duckdb duckdb_cli/duckdb 44131cf22c717febcb9bb9f1ae117690f1e2ff6947a3154150ddf2ad40d8b31b https://files.pythonhosted.org/packages/6a/a4/402c39041ccd4a0f6fac4e63ae42215a42d11336bace1278c48541febdf8/duckdb_cli-2.0.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-          EOF
+          }
+          fetch ruff astral-sh/ruff \
+            "https://github.com/astral-sh/ruff/releases/download/${RUFF_VERSION}/ruff-x86_64-unknown-linux-gnu.tar.gz" \
+            "$RUFF_SHA256" ruff-x86_64-unknown-linux-gnu/ruff
+          fetch uv astral-sh/uv \
+            "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
+            "$UV_SHA256" uv-x86_64-unknown-linux-gnu/uv
+          fetch duckdb duckdb/duckdb \
+            "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb-cli-linux-amd64.tar.gz" \
+            "$DUCKDB_SHA256" duckdb
+          # The job tests packing a dynamic glibc ELF, so a static or musl build would pass
+          # for the wrong reason.
+          for tool in ruff uv duckdb; do
+            readelf -l "$RUNNER_TEMP/tools/$tool" | grep -q 'ld-linux-x86-64.so.2' \
+              || { echo "::error::$tool is not a dynamic glibc binary"; exit 1; }
+          done
       - name: Pack each tool
         run: |
           set -euo pipefail

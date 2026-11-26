@@ -1,10 +1,11 @@
 name: Binary dep pins
 
 # Verify each version + sha256 release-asset pin against the digest GitHub publishes for the
-# asset (scripts/check_binary_dep_pins.py, verify mode). Today that is the actionlint pin in
-# actionlint.yml. Renovate CE runs the same script with --fix as a postUpgradeTask, so this job
-# also proves that the script still works: an upstream change (a renamed asset, a dropped
-# digest) fails here instead of first appearing as a failed Renovate PR.
+# asset (scripts/check_binary_dep_pins.py, verify mode). Today those are the actionlint pin in
+# actionlint.yml and the ruff, uv and duckdb pins of the `pack real tools` job in ci.yml.
+# Renovate CE runs the same script with --fix as a postUpgradeTask, so this job also proves
+# that the script still works: an upstream change (a renamed asset, a dropped digest) fails
+# here instead of first appearing as a failed Renovate PR.
 #
 # Path-filtered on PRs and pushes, so it never runs on an unrelated PR, and weekly on a
 # schedule. It is NOT a required check: a required path-filtered check leaves every other PR
@@ -15,12 +16,14 @@ on:
     paths:
       - "scripts/check_binary_dep_pins.py"
       - ".github/workflows/actionlint.yml"
+      - ".github/workflows/ci.yml"
       - ".github/workflows/binary-dep-pins.yml"
   push:
     branches: [main]
     paths:
       - "scripts/check_binary_dep_pins.py"
       - ".github/workflows/actionlint.yml"
+      - ".github/workflows/ci.yml"
       - ".github/workflows/binary-dep-pins.yml"
   schedule:
     - cron: "17 6 * * 1"

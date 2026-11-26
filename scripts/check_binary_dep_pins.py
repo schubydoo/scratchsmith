@@ -2,8 +2,9 @@
 """Verify, or with ``--fix`` refresh, the release-asset sha256 pinned next to a version.
 
 ``.github/workflows/actionlint.yml`` pins actionlint by ``ACTIONLINT_VERSION`` and by the
-sha256 of the downloaded tarball (``sha256sum -c`` fails the job on a mismatch). Renovate
-bumps the version through the ``# renovate:`` annotation, but it cannot rewrite the sha256:
+sha256 of the downloaded tarball (``sha256sum -c`` fails the job on a mismatch). The
+``pack real tools`` job in ``.github/workflows/ci.yml`` pins ruff, uv and duckdb the same way.
+Renovate bumps the version through the ``# renovate:`` annotation, but it cannot rewrite the sha256:
 the ``github-releases`` datasource exposes the git-tag commit, not the asset's file hash.
 GitHub publishes a per-asset SHA-256 (the ``digest`` field of a release asset), so this
 script reads that digest and compares it with the pin.
@@ -61,6 +62,34 @@ PINS: tuple[WorkflowPin, ...] = (
         sha_re=re.compile(r'ACTIONLINT_SHA256:\s*"([0-9a-f]{64})"'),
         tag=lambda v: f"v{v}",
         asset=lambda v: f"actionlint_{v}_linux_amd64.tar.gz",
+    ),
+    # The three tools the `pack real tools` job in ci.yml packs and runs.
+    WorkflowPin(
+        path=".github/workflows/ci.yml",
+        owner="astral-sh",
+        repo="ruff",
+        version_re=re.compile(r'RUFF_VERSION:\s*"([^"]+)"'),
+        sha_re=re.compile(r'RUFF_SHA256:\s*"([0-9a-f]{64})"'),
+        tag=lambda v: v,
+        asset=lambda v: "ruff-x86_64-unknown-linux-gnu.tar.gz",
+    ),
+    WorkflowPin(
+        path=".github/workflows/ci.yml",
+        owner="astral-sh",
+        repo="uv",
+        version_re=re.compile(r'UV_VERSION:\s*"([^"]+)"'),
+        sha_re=re.compile(r'UV_SHA256:\s*"([0-9a-f]{64})"'),
+        tag=lambda v: v,
+        asset=lambda v: "uv-x86_64-unknown-linux-gnu.tar.gz",
+    ),
+    WorkflowPin(
+        path=".github/workflows/ci.yml",
+        owner="duckdb",
+        repo="duckdb",
+        version_re=re.compile(r'DUCKDB_VERSION:\s*"([^"]+)"'),
+        sha_re=re.compile(r'DUCKDB_SHA256:\s*"([0-9a-f]{64})"'),
+        tag=lambda v: f"v{v}",
+        asset=lambda v: "duckdb-cli-linux-amd64.tar.gz",
     ),
 )
 
@@ -128,17 +157,18 @@ def main(argv: list[str] | None = None) -> int:
     fixes: list[tuple[WorkflowPin, str]] = []
     for pin in PINS:
         status, detail, current = resolve(pin, root)
+        where = f"{pin.path} ({pin.owner}/{pin.repo})"
         if status == "ok":
-            print(f"OK   {pin.path}: sha256 matches GitHub's published digest")
+            print(f"OK   {where}: sha256 matches GitHub's published digest")
         elif status == "error":
-            print(f"FAIL {pin.path}: {detail}")
+            print(f"FAIL {where}: {detail}")
             failures += 1
         elif args.fix:
             fixes.append((pin, detail))
-            print(f"FIX  {pin.path}: sha256\n       was:  {current}\n       now:  {detail}")
+            print(f"FIX  {where}: sha256\n       was:  {current}\n       now:  {detail}")
         else:
             print(
-                f"FAIL {pin.path}: sha256 mismatch\n"
+                f"FAIL {where}: sha256 mismatch\n"
                 f"       pinned:    {current}\n"
                 f"       published: {detail}   <- set the *_SHA256 in this workflow to this"
             )
