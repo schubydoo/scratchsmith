@@ -110,7 +110,7 @@ Pack a dynamic binary into a scratch image and run it:
 
 ```sh
 scratchsmith pack ./app
-docker run --rm scratchsmith/app:packed --version   # image is named scratchsmith/<name>:packed (characters a tag cannot hold become -)
+docker run --rm scratchsmith/app:packed --version   # image is scratchsmith/<name>:packed, <name> lowercased (other characters an image name cannot hold become -)
 ```
 
 To skip the daemon entirely, stage a rootfs, write an OCI archive, or push straight to a

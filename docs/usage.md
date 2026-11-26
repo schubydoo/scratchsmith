@@ -6,15 +6,16 @@ Pack a dynamic binary into a scratch image and run it:
 
 ```sh
 scratchsmith pack ./app
-docker run --rm scratchsmith/app:packed --version   # image is named scratchsmith/<name>:packed (characters a tag cannot hold become -)
+docker run --rm scratchsmith/app:packed --version   # image is scratchsmith/<name>:packed, <name> lowercased (other characters an image name cannot hold become -)
 ```
 
 The image gets the build host's glibc. A binary built against a newer glibc than the host's
 packs, and then fails to start with an error like ``version `GLIBC_2.38' not found``. `pack`
-reads the `GLIBC_` versions that the binary and each library need, and prints a warning on
-standard error for each one that the staged glibc does not define. The pack still succeeds,
-with the same exit code. Pack on a host whose glibc is as new as the one the binary was built
-against.
+reads the `GLIBC_` versions that the binary and each library need. For each object that needs
+a version the staged glibc does not define, it adds a warning to the report that names the
+highest missing version. The text report prints it on standard output as `warning: …`, and
+`--format json` lists it in `warnings`. The pack still succeeds, with the same exit code.
+Pack on a host whose glibc is as new as the one the binary was built against.
 
 The default sink loads into Docker. To load with **podman** or **nerdctl** instead (and run
 `--smoke` with it), pass `--runtime`:
@@ -238,10 +239,10 @@ Each entry names one package and the files in the image that it owns:
 - `type` is `deb` on a dpkg host and `rpm` on an rpm host.
 - On an rpm host, `version` is the version and the release with a hyphen between them, such as
   `2.34-83.el9.7`. If the package has an epoch, the epoch and a colon come first.
-- `files` are paths in the image. One host file can be in the image two times, as the loader
-  is in this example.
+- `files` are paths in the image. The loader is listed at two paths in this example. The
+  interpreter path holds the one copy, and the other path is a relative symlink to it.
 - The lookup covers the binary, the libraries that it needs, the loader, and the NSS modules.
-  It also covers the files from `--tz`, `--init` and `--add-file`.
+  It also covers the files from `--tz`, `--init`, `--add-file` and `--add-binary`.
 - If `--symlinks` staged an `--add-file` entry as a link, that entry is not in the list. A link
   carries none of the package's content.
 - The `--ca-certs` bundle is a special case. The host generates that file, so no package owns
@@ -343,8 +344,9 @@ module, user and group lookups do not work there.
 ## Add a writable /tmp
 
 A scratch image has no `/tmp`, and many programs exit at startup without one. `--tmp` adds an
-empty `/tmp`, mode `1777` and owned by uid 0, the same as on a Linux host. The image's
-non-root user can then write there with no `--tmpfs` at run time.
+empty `/tmp`, mode `1777` and owned by uid 0, the same as on a Linux host. If a library staged
+from an RPATH under `/tmp` already made it, `/tmp` keeps that library and only its mode is
+set. The image's non-root user can then write there with no `--tmpfs` at run time.
 
 ```sh
 scratchsmith pack --tmp ./app
@@ -521,7 +523,7 @@ To catch image drift, stage two builds and compare their rootfs directories:
 ```sh
 scratchsmith pack --no-build --output old ./app-v1
 scratchsmith pack --no-build --output new ./app-v2
-scratchsmith diff old new              # files added, removed, changed, and the size delta
+scratchsmith diff old new              # files added, removed, changed, mode changes, size delta
 scratchsmith diff --exit-code old new  # exit non-zero on any difference (a CI gate)
 ```
 
@@ -537,9 +539,9 @@ directories in `dirs_added` and `dirs_removed`.
 
 A staged rootfs keeps the modes from the host: a directory gets its mode from the umask, and a
 file keeps the mode of its source. The image layer rewrites them, to `0755` for a directory and
-`0755` or `0644` for a file by its exec bit. So two staged trees from builders with different
-umasks, or with a binary at `0775` on one and `0755` on the other, differ in mode although their
-images are the same. Stage both builds on one builder, or compare the modes that ship: `unpack`
+`0755` or `0644` for a file by its exec bit. A sticky directory such as the `--tmp` `/tmp`
+keeps `1777`. So two staged trees from builders with different umasks, or with a binary at
+`0775` on one and `0755` on the other, differ in mode although their images are the same. Stage both builds on one builder, or compare the modes that ship: `unpack`
 both images and diff those trees, which carry the layer's modes.
 
 A file name that is not valid UTF-8 is escaped whole, in both the text and the JSON output:

@@ -35,11 +35,14 @@
    `libc.so.6` of the binary's arch sits, without a leading `usr/`: `lib/x86_64-linux-gnu` on
    Debian and Ubuntu, `lib64` on Fedora, `lib` on Arch. When that value is not `lib64` (`lib`
    for a 32-bit binary), that old fixed value is searched next, so a library found there before
-   still resolves. A string that holds `:`, tried whole, uses the glibc value only. With no such
-   `libc.so.6`, the old value is the only one. Scratchsmith never
-   scrapes the host's `ldd`, `ld.so.cache`, or `LD_LIBRARY_PATH`, so the result is deterministic.
-2. **Stage**: copy the interpreter to its verbatim path, mirror the libraries, recreate
-   versioned-soname symlinks, regenerate `ld.so.cache`, and add the glibc NSS pieces.
+   still resolves. `ld.so` does not search that old value, so `pack` prints a note on stderr for
+   a library found only there: it loads only through the image's `ld.so.cache`. A string that
+   holds `:`, tried whole, uses the glibc value only. With no such `libc.so.6`, the old value is
+   the only one. Scratchsmith never scrapes the host's `ldd`, `ld.so.cache`, or
+   `LD_LIBRARY_PATH`, so the result is deterministic.
+2. **Stage**: copy the interpreter to its verbatim path (another path to the loader becomes a
+   relative symlink to that copy), mirror the libraries, recreate versioned-soname symlinks,
+   regenerate `ld.so.cache`, and add the glibc NSS pieces.
 3. **Assemble**: build a non-root image with reproducible layers (sorted entries, zeroed
    mtime/uid/gid). The uncompressed `diff_id` and the gzip layer digest are computed
    separately, which avoids the classic unpullable-image bug.
