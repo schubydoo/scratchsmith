@@ -504,34 +504,35 @@ fn lint_json_prints_the_report_then_fails_on_a_gate() {
     assert_eq!(json["binary"], "/bin/sh");
     assert!(["full", "partial", "none"].contains(&json["hardening"]["relro"].as_str().unwrap()));
     assert_eq!(json["fail_on"], serde_json::json!([]));
-    // A gate the binary fails: the whole report is still on stdout, then exit 1.
-    let weakness = if json["hardening"]["fortify"] == true {
-        None
-    } else {
-        Some("no-fortify")
+    // A gate the binary fails: the whole report is still on stdout, then exit 1. A shared
+    // library is ET_DYN without DF_1_PIE, so `no-pie` fails on libc wherever it lives.
+    let Some(libc) = [
+        "/lib/x86_64-linux-gnu/libc.so.6",
+        "/lib/aarch64-linux-gnu/libc.so.6",
+        "/lib64/libc.so.6",
+        "/usr/lib64/libc.so.6",
+    ]
+    .into_iter()
+    .find(|p| std::path::Path::new(p).exists()) else {
+        skip_required("no libc.so.6 to lint");
+        return;
     };
-    let gate = weakness.unwrap_or("no-pie");
-    let failing = json["hardening"]["pie"] == false || weakness.is_some();
     let out = run(&[
         "lint",
         "--format",
         "json",
         "--fail-on",
-        gate,
+        "no-pie",
         "--fail-on",
-        gate,
-        "/bin/sh",
+        "no-pie",
+        libc,
     ]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("lint JSON");
-    assert_eq!(json["fail_on"], serde_json::json!([gate]));
-    if failing {
-        assert_eq!(out.status.code(), Some(1), "{out:?}");
-        assert_eq!(json["violations"], serde_json::json!([gate]));
-        assert!(String::from_utf8_lossy(&out.stderr).contains("hardening gate failed"));
-    } else {
-        assert!(out.status.success(), "{out:?}");
-        assert_eq!(json["violations"], serde_json::json!([]));
-    }
+    assert_eq!(json["hardening"]["pie"], false);
+    assert_eq!(json["fail_on"], serde_json::json!(["no-pie"]));
+    assert_eq!(json["violations"], serde_json::json!(["no-pie"]));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("hardening gate failed: no-pie"));
 }
 
 #[test]
