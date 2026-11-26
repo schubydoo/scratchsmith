@@ -108,7 +108,7 @@ jobs:
       # nextest instead of `cargo test`: same gate, plus a junit.xml (the ci
       # profile in .config/nextest.toml) — the only format Codecov Test Analytics
       # ingests. Prebuilt binary via install-action.
-      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-nextest
       # upx isn't preinstalled; the --upx pack tests skip without it.
@@ -158,7 +158,7 @@ jobs:
           toolchain: stable
           components: llvm-tools-preview
           rustflags: ""
-      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-llvm-cov
       # Enforce the line floor (baseline ~94.5%) and emit lcov. cargo-llvm-cov
@@ -196,7 +196,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-audit,cargo-deny
       - name: Audit
@@ -276,7 +276,7 @@ jobs:
           # renovate: datasource=github-releases depName=ziglang/zig
           version: 0.15.1
           use-cache: false
-      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-zigbuild@0.24.0
       # Debug build: the point is the link, not optimization — reuse the warm cache

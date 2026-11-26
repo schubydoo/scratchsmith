@@ -96,7 +96,7 @@ jobs:
           use-cache: false
       # Pinned prebuilt (not `cargo install`): cargo-zigbuild tracks zig's breaking
       # CLI, so a skew would only surface at release time. Renovate bumps the pin.
-      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-zigbuild@0.24.0
       - name: Build (static musl via zig)
@@ -146,7 +146,7 @@ jobs:
       # due to recursion suppression).
       - name: Mint scratchsmith-ci App token
         id: app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ secrets.SCRATCHSMITH_CI_CLIENT_ID }}
           private-key: ${{ secrets.SCRATCHSMITH_CI_APP_PRIVATE_KEY }}
