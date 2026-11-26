@@ -784,7 +784,13 @@
    <code>$PLATFORM</code> is read as <code>x86_64</code>. glibc reads it as <code>haswell</code> or <code>xeon_phi</code> on some Intel CPUs,
    but those copies are optimized builds that not every CPU can run, so they never stage. A
    library missing as <code>x86_64</code> but present under such a name gets a hint, and a library that
-   ships while <code>ld.so</code> on such a CPU would load such a copy gets a note on stderr. Scratchsmith never
+   ships while <code>ld.so</code> on such a CPU would load such a copy gets a note on stderr. <code>$LIB</code> takes
+   the value the glibc in the host root uses, read from the directory where the first
+   <code>libc.so.6</code> of the binary's arch sits, without a leading <code>usr/</code>: <code>lib/x86_64-linux-gnu</code> on
+   Debian and Ubuntu, <code>lib64</code> on Fedora, <code>lib</code> on Arch. When that value is not <code>lib64</code> (<code>lib</code>
+   for a 32-bit binary), that old fixed value is searched next, so a library found there before
+   still resolves. A string that holds <code>:</code>, tried whole, uses the glibc value only. With no such
+   <code>libc.so.6</code>, the old value is the only one. Scratchsmith never
    scrapes the host's <code>ldd</code>, <code>ld.so.cache</code>, or <code>LD_LIBRARY_PATH</code>, so the result is deterministic.</li>
 <li><strong>Stage</strong>: copy the interpreter to its verbatim path, mirror the libraries, recreate
    versioned-soname symlinks, regenerate <code>ld.so.cache</code>, and add the glibc NSS pieces.</li>
