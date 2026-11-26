@@ -1211,14 +1211,15 @@
 <h2 id="quick-start">Quick start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
 <p>Pack a dynamic binary into a scratch image and run it:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>scratchsmith/app:packed<span class="w"> </span>--version<span class="w">   </span><span class="c1"># image is named scratchsmith/&lt;name&gt;:packed (characters a tag cannot hold become -)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>scratchsmith/app:packed<span class="w"> </span>--version<span class="w">   </span><span class="c1"># image is scratchsmith/&lt;name&gt;:packed, &lt;name&gt; lowercased (other characters an image name cannot hold become -)</span>
 </code></pre></div>
 <p>The image gets the build host's glibc. A binary built against a newer glibc than the host's
 packs, and then fails to start with an error like <code>version `GLIBC_2.38' not found</code>. <code>pack</code>
-reads the <code>GLIBC_</code> versions that the binary and each library need, and prints a warning on
-standard error for each one that the staged glibc does not define. The pack still succeeds,
-with the same exit code. Pack on a host whose glibc is as new as the one the binary was built
-against.</p>
+reads the <code>GLIBC_</code> versions that the binary and each library need. For each object that needs
+a version the staged glibc does not define, it adds a warning to the report that names the
+highest missing version. The text report prints it on standard output as <code>warning: …</code>, and
+<code>--format json</code> lists it in <code>warnings</code>. The pack still succeeds, with the same exit code.
+Pack on a host whose glibc is as new as the one the binary was built against.</p>
 <p>The default sink loads into Docker. To load with <strong>podman</strong> or <strong>nerdctl</strong> instead (and run
 <code>--smoke</code> with it), pass <code>--runtime</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--runtime<span class="w"> </span>podman<span class="w"> </span>./app
@@ -1438,10 +1439,10 @@ before. The scan did not see them.</p>
 <li><code>type</code> is <code>deb</code> on a dpkg host and <code>rpm</code> on an rpm host.</li>
 <li>On an rpm host, <code>version</code> is the version and the release with a hyphen between them, such as
   <code>2.34-83.el9.7</code>. If the package has an epoch, the epoch and a colon come first.</li>
-<li><code>files</code> are paths in the image. One host file can be in the image two times, as the loader
-  is in this example.</li>
+<li><code>files</code> are paths in the image. The loader is listed at two paths in this example. The
+  interpreter path holds the one copy, and the other path is a relative symlink to it.</li>
 <li>The lookup covers the binary, the libraries that it needs, the loader, and the NSS modules.
-  It also covers the files from <code>--tz</code>, <code>--init</code> and <code>--add-file</code>.</li>
+  It also covers the files from <code>--tz</code>, <code>--init</code>, <code>--add-file</code> and <code>--add-binary</code>.</li>
 <li>If <code>--symlinks</code> staged an <code>--add-file</code> entry as a link, that entry is not in the list. A link
   carries none of the package's content.</li>
 <li>The <code>--ca-certs</code> bundle is a special case. The host generates that file, so no package owns
@@ -1581,8 +1582,9 @@ certificates, which you add separately with <code>--ca-certs</code>. <code>--nss
 module, user and group lookups do not work there.</p>
 <h2 id="add-a-writable-tmp">Add a writable /tmp<a class="headerlink" href="#add-a-writable-tmp" title="Permanent link">&para;</a></h2>
 <p>A scratch image has no <code>/tmp</code>, and many programs exit at startup without one. <code>--tmp</code> adds an
-empty <code>/tmp</code>, mode <code>1777</code> and owned by uid 0, the same as on a Linux host. The image's
-non-root user can then write there with no <code>--tmpfs</code> at run time.</p>
+empty <code>/tmp</code>, mode <code>1777</code> and owned by uid 0, the same as on a Linux host. If a library staged
+from an RPATH under <code>/tmp</code> already made it, <code>/tmp</code> keeps that library and only its mode is
+set. The image's non-root user can then write there with no <code>--tmpfs</code> at run time.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--tmp<span class="w"> </span>./app
 </code></pre></div>
 <p>The layer stays reproducible: the directory gets the same mode, owner and mtime on every
@@ -1730,7 +1732,7 @@ The same keys work in <code>scratchsmith.toml</code> as <code>deny</code> and <c
 <p>To catch image drift, stage two builds and compare their rootfs directories:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>old<span class="w"> </span>./app-v1
 <a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>new<span class="w"> </span>./app-v2
-<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>scratchsmith<span class="w"> </span>diff<span class="w"> </span>old<span class="w"> </span>new<span class="w">              </span><span class="c1"># files added, removed, changed, and the size delta</span>
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>scratchsmith<span class="w"> </span>diff<span class="w"> </span>old<span class="w"> </span>new<span class="w">              </span><span class="c1"># files added, removed, changed, mode changes, size delta</span>
 <a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>scratchsmith<span class="w"> </span>diff<span class="w"> </span>--exit-code<span class="w"> </span>old<span class="w"> </span>new<span class="w">  </span><span class="c1"># exit non-zero on any difference (a CI gate)</span>
 </code></pre></div>
 <p><code>diff</code> marks an added file with <code>+</code>, a removed file with <code>-</code>, and a changed file with <code>~</code>.
@@ -1746,8 +1748,9 @@ directories in <code>dirs_added</code> and <code>dirs_removed</code>.</p>
 file keeps the mode of its source. The image layer rewrites them, to <code>0755</code> for a directory and
 <code>0755</code> or <code>0644</code> for a file by its exec bit. So two staged trees from builders with different
 umasks, or with a binary at <code>0775</code> on one and <code>0755</code> on the other, differ in mode although their
-images are the same. Stage both builds on one builder, or compare the modes that ship: <code>unpack</code>
-both images and diff those trees, which carry the layer's modes.</p>
+images are the same. A sticky directory such as the <code>--tmp</code> <code>/tmp</code> keeps <code>1777</code> in the layer.
+Stage both builds on one builder, or compare the modes that ship: <code>unpack</code> both images and diff
+those trees, which carry the layer's modes.</p>
 <p>A file name that is not valid UTF-8 is escaped whole, in both the text and the JSON output:
 its invalid bytes become <code>\xNN</code>, and a backslash, a quote or a control character in it is
 escaped too.</p>
