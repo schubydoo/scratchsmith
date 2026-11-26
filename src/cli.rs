@@ -67,6 +67,9 @@ pub struct Cli {
     /// Emit a shell completion script to stdout and exit (bash, zsh, fish).
     #[arg(long, value_enum, value_name = "SHELL")]
     pub completions: Option<Shell>,
+    /// Print each library-resolution and staging decision on stderr.
+    #[arg(long, global = true)]
+    pub verbose: bool,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -300,6 +303,7 @@ fn write_completions<W: std::io::Write>(shell: Shell, out: &mut W) {
 // Split from `run` so tests drive dispatch directly on a parsed `Cli`, without
 // touching argv or spawning a process.
 fn dispatch(cli: Cli) -> Result<()> {
+    crate::verbose::set(cli.verbose);
     if let Some(shell) = cli.completions {
         // Fail loud rather than silently dropping a subcommand passed alongside.
         if cli.command.is_some() {
@@ -1180,6 +1184,7 @@ mod tests {
         // argv cannot reach this (clap prints help first), but `dispatch` must not panic on it.
         let cli = Cli {
             completions: None,
+            verbose: false,
             command: None,
         };
         let err = dispatch(cli).unwrap_err();

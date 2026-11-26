@@ -2956,3 +2956,58 @@ fn a_docker_hub_reference_asks_the_credential_store_for_the_docker_login_key() {
         );
     }
 }
+
+#[test]
+fn verbose_prints_each_decision_on_stderr_and_changes_nothing_else() {
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let out_dir = |name: &str| tmp.path().join(name).to_str().unwrap().to_owned();
+    let pack = |args: &[&str]| {
+        let out = run(args);
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out
+    };
+    let quiet = pack(&["pack", "--no-build", "-o", &out_dir("quiet"), bin]);
+    let quiet_err = String::from_utf8_lossy(&quiet.stderr);
+    assert!(!quiet_err.contains("verbose:"), "{quiet_err}");
+
+    // The flag is global, so it works before or after the subcommand.
+    let before = out_dir("before");
+    let after = out_dir("after");
+    for (dir, args) in [
+        (
+            &before,
+            ["--verbose", "pack", "--no-build", "-o", &before, bin],
+        ),
+        (
+            &after,
+            ["pack", "--verbose", "--no-build", "-o", &after, bin],
+        ),
+    ] {
+        let out = pack(&args);
+        let err = String::from_utf8_lossy(&out.stderr);
+        let (lines, rest): (Vec<_>, Vec<_>) = err.lines().partition(|l| l.starts_with("verbose: "));
+        for want in [
+            "needs `libc.so.6`",
+            "searches",
+            "staged the binary",
+            "/etc/ld.so.cache",
+        ] {
+            assert!(lines.iter().any(|l| l.contains(want)), "{want}: {err}");
+        }
+        // Everything else on stderr, and stdout, is what a run without the flag prints.
+        assert_eq!(rest, quiet_err.lines().collect::<Vec<_>>());
+        // The last line names the output dir, which differs.
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).replace(dir.as_str(), &out_dir("quiet")),
+            String::from_utf8_lossy(&quiet.stdout)
+        );
+    }
+}
