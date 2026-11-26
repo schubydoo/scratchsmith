@@ -523,6 +523,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#verifying-from-the-bundle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verifying from the bundle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#rebuilding-a-release-binary" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -714,6 +725,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#verifying-from-the-bundle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verifying from the bundle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#rebuilding-a-release-binary" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -757,21 +779,26 @@
 
 <h1 id="verifying-releases">Verifying releases<a class="headerlink" href="#verifying-releases" title="Permanent link">&para;</a></h1>
 <p>Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation, at Build
-Level 3 for new releases.
+Level 3 from v2.2.0 on.
 Each release also ships a CycloneDX SBOM of Scratchsmith's own dependency graph. That file is
 <code>scratchsmith-v&lt;ver&gt;.cdx.json</code>, and it is listed in <code>checksums.txt</code>, so the signature and
 provenance cover it too. It reflects the full <code>Cargo.lock</code> graph, so it includes build- and
 dev-dependencies, not only the crates that link into the shipped binary.</p>
 <p>The release also carries <code>scratchsmith.intoto.jsonl</code>, the SLSA provenance bundle. You do not need
-to download it, because <code>gh attestation verify</code> reads the attestation from GitHub.</p>
+to download it, because <code>gh attestation verify</code> reads the attestation from GitHub. That needs <code>gh</code>
+signed in (<code>gh auth login</code>). To check against the bundle instead, see
+<a href="#verifying-from-the-bundle">Verifying from the bundle</a>.</p>
 <p>Replace <code>&lt;ver&gt;</code> with the bare version you downloaded, no leading <code>v</code> (the tarball adds the
 <code>v</code> prefix, but the image tag does not).</p>
 <p>The provenance is Build Level 3 because the binaries are built and attested inside a reusable
 workflow, <code>release-binaries.yml</code>, which signs the provenance with its own identity. The release
 workflow that calls it can't add steps to its jobs. <code>--signer-workflow</code> checks for that identity, so
-a provenance signed by any other workflow in the repository fails the check. A release whose tag
-has no <code>.github/workflows/release-binaries.yml</code> carries Build Level 2 provenance, signed by
+a provenance signed by any other workflow in the repository fails the check. v2.2.0 is the first
+release built this way. v2.1.0 and older carry Build Level 2 provenance, signed by
 <code>knope-release.yml</code>. For those, leave out <code>--signer-workflow</code>.</p>
+<p>The Build Level 3 provenance covers the tarballs and the SBOM, not the GHCR image. The image packs
+the same release binaries. It carries its own cosign signature, which the <code>cosign verify</code> command
+below checks, and a BuildKit provenance attestation in the registry, which is not Level 3.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># SLSA Build L3 provenance — the simplest, ref-agnostic check</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>gh<span class="w"> </span>attestation<span class="w"> </span>verify<span class="w"> </span>scratchsmith-v&lt;ver&gt;-linux-amd64.tar.gz<span class="w"> </span>--repo<span class="w"> </span>schubydoo/scratchsmith<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--signer-workflow<span class="w"> </span>schubydoo/scratchsmith/.github/workflows/release-binaries.yml
@@ -788,8 +815,18 @@ has no <code>.github/workflows/release-binaries.yml</code> carries Build Level 2
 <a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/schubydoo/scratchsmith/\.github/workflows/release\.yml@refs/tags/'</span><span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
 </code></pre></div>
+<h3 id="verifying-from-the-bundle">Verifying from the bundle<a class="headerlink" href="#verifying-from-the-bundle" title="Permanent link">&para;</a></h3>
+<p>To check the provenance against the <code>scratchsmith.intoto.jsonl</code> that ships in the release, instead
+of fetching it from GitHub, pass it with <code>--bundle</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>gh<span class="w"> </span>attestation<span class="w"> </span>verify<span class="w"> </span>scratchsmith-v&lt;ver&gt;-linux-amd64.tar.gz<span class="w"> </span>--repo<span class="w"> </span>schubydoo/scratchsmith<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--bundle<span class="w"> </span>scratchsmith.intoto.jsonl<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--signer-workflow<span class="w"> </span>schubydoo/scratchsmith/.github/workflows/release-binaries.yml
+</code></pre></div>
+<p><code>gh</code> still fetches Sigstore's trusted root. For a machine with no network, save it first on one
+that has it, with <code>gh attestation trusted-root &gt; trusted_root.jsonl</code>, and add
+<code>--custom-trusted-root trusted_root.jsonl</code>.</p>
 <h2 id="rebuilding-a-release-binary">Rebuilding a release binary<a class="headerlink" href="#rebuilding-a-release-binary" title="Permanent link">&para;</a></h2>
-<p>Release binaries after v2.1.0 are reproducible. For every such release, a CI job rebuilds both
+<p>Release binaries from v2.2.0 on are reproducible. For every such release, a CI job rebuilds both
 binaries from the tag and checks that they match the published ones byte for byte. To run the same check
 yourself, follow <a href="https://github.com/schubydoo/scratchsmith/blob/main/REPRODUCE.md">REPRODUCE.md</a>.</p>
 <h2 id="verifying-an-image-you-signed-with-pack">Verifying an image you signed with <code>pack</code><a class="headerlink" href="#verifying-an-image-you-signed-with-pack" title="Permanent link">&para;</a></h2>
@@ -824,24 +861,24 @@ OIDC identity of whoever ran <code>--sign</code>. Verify with the identity and i
 that provider's. Sigstore's <a href="https://docs.sigstore.dev/quickstart/verification-cheat-sheet/">verification cheat sheet</a>
 lists them. In CI, <code>--certificate-identity-regexp</code> lets one check hold for every branch or tag
 of the workflow.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">IMAGE</span><span class="o">=</span>ghcr.io/you/app:latest<span class="w">   </span><span class="c1"># or the @sha256:... reference that the pack printed</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># The signature that --sign made</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>cosign<span class="w"> </span>verify<span class="w"> </span><span class="s2">"</span><span class="nv">$IMAGE</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/you/app/\.github/workflows/release\.yml@'</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="c1"># The SBOM attestation that --sbom --sign made (CycloneDX, the default --sbom-format)</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>cosign<span class="w"> </span>verify-attestation<span class="w"> </span><span class="s2">"</span><span class="nv">$IMAGE</span><span class="s2">"</span><span class="w"> </span>--type<span class="w"> </span>cyclonedx<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/you/app/\.github/workflows/release\.yml@'</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com<span class="w"> </span>&gt;<span class="w"> </span>/dev/null
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">IMAGE</span><span class="o">=</span>ghcr.io/you/app:latest<span class="w">   </span><span class="c1"># or the @sha256:... reference that the pack printed</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># The signature that --sign made</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>cosign<span class="w"> </span>verify<span class="w"> </span><span class="s2">"</span><span class="nv">$IMAGE</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/you/app/\.github/workflows/release\.yml@'</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># The SBOM attestation that --sbom --sign made (CycloneDX, the default --sbom-format)</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>cosign<span class="w"> </span>verify-attestation<span class="w"> </span><span class="s2">"</span><span class="nv">$IMAGE</span><span class="s2">"</span><span class="w"> </span>--type<span class="w"> </span>cyclonedx<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/you/app/\.github/workflows/release\.yml@'</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com<span class="w"> </span>&gt;<span class="w"> </span>/dev/null
 </code></pre></div>
 <p>With <code>--sbom-format spdx-json</code>, use <code>--type spdxjson</code>. Pass a tag only if you trust it not to
 move. The digest reference that the pack printed (<code>signed ...@sha256:...</code>, or the <code>signed</code> field
 in <code>--format json</code>) pins the exact image. To read the attested SBOM, drop the <code>&gt; /dev/null</code> and
 decode its payload:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>cosign<span class="w"> </span>verify-attestation<span class="w"> </span><span class="s2">"</span><span class="nv">$IMAGE</span><span class="s2">"</span><span class="w"> </span>--type<span class="w"> </span>cyclonedx<span class="w"> </span>&lt;identity<span class="w"> </span>flags<span class="w"> </span>as<span class="w"> </span>above&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span>.payload<span class="w"> </span><span class="p">|</span><span class="w"> </span>base64<span class="w"> </span>-d<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.predicate
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>cosign<span class="w"> </span>verify-attestation<span class="w"> </span><span class="s2">"</span><span class="nv">$IMAGE</span><span class="s2">"</span><span class="w"> </span>--type<span class="w"> </span>cyclonedx<span class="w"> </span>&lt;identity<span class="w"> </span>flags<span class="w"> </span>as<span class="w"> </span>above&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span>.payload<span class="w"> </span><span class="p">|</span><span class="w"> </span>base64<span class="w"> </span>-d<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.predicate
 </code></pre></div>
 <p>Scratchsmith's <code>push-auth-smoke</code> workflow runs the same <code>cosign verify</code> and
 <code>cosign verify-attestation</code> checks, with its own workflow identity, against an image it packs,
