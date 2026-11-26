@@ -409,11 +409,12 @@ jobs:
       # Each check does real work, not just --version, and fails on a wrong answer.
       - name: "ruff: lint a file"
         run: |
-          set -uo pipefail
+          set -euo pipefail
           mkdir -p "$RUNNER_TEMP/ruff" && printf 'import os\n' > "$RUNNER_TEMP/ruff/a.py"
+          # The runner's bash has -e, so catch the expected exit 1 instead of stopping on it.
+          rc=0
           out=$(docker run --rm -v "$RUNNER_TEMP/ruff:/work:ro" scratchsmith/ruff:packed \
-            check --no-cache --select F401 /work/a.py)
-          rc=$?
+            check --no-cache --select F401 /work/a.py) || rc=$?
           echo "$out"
           # ruff exits 1 when it finds a problem, and this file has exactly one.
           [ "$rc" -eq 1 ] && grep -q 'F401' <<<"$out"
