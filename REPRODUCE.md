@@ -5,8 +5,8 @@ Each release binary can be rebuilt from its tag, byte for byte. The
 both binaries from the tag and compares them with the ones in the published tarballs. This page
 shows how to run the same check yourself.
 
-It covers releases built with `.github/actions/release-build`. Older tags don't have it, and the
-workflow fails for them with a clear error.
+It covers releases built with `.github/actions/release-build`. Tags from before that recipe
+existed can't be rebuilt this way.
 
 ## What matches, and what doesn't
 

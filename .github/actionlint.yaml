@@ -5,8 +5,8 @@
 # reference. The syntax is deliberate: it pins a local action to the checked-out ref and
 # is immune to runtime filesystem substitution, so the message is suppressed here rather
 # than the syntax reverted. This repo uses only the composite-action form: `uses: $/` at the
-# repo root (action-selftest.yml) and `uses: $/.github/actions/<name>` for the two release
-# composites (release.yml). There are no `$/` reusable-workflow calls, so one pattern covers
+# repo root (action-selftest.yml) and `uses: $/.github/actions/<name>` for the release
+# composites (release.yml, knope-release.yml, reproduce.yml). There are no `$/` reusable-workflow calls, so one pattern covers
 # both, because `\$/.*` matches a subpath as well as the bare root.
 #
 # Suppressing the format error also silences actionlint's call validation for those steps

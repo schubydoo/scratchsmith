@@ -84,7 +84,7 @@ jobs:
       # One recipe for the release and for reproduce.yml's rebuild: the pinned toolchain,
       # zig, cargo-zigbuild and scripts/build-release-binary.sh. See REPRODUCE.md.
       - name: Build (static musl via zig)
-        uses: ./.github/actions/release-build
+        uses: $/.github/actions/release-build
         with:
           target: ${{ matrix.target }}
       - name: Package tarball
