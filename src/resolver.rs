@@ -142,6 +142,60 @@ fn references_dlopen(elf: &goblin::elf::Elf) -> bool {
         .any(|name| name == "dlopen" || name == "dlmopen")
 }
 
+/// The symbol versions an ELF object needs from other objects (`DT_VERNEED`) and the ones it
+/// defines itself (`DT_VERDEF`). ld.so refuses to start a program when an object needs a
+/// version that the object it names does not define, so these two lists are what it checks.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SymbolVersions {
+    /// `(file, version)`: the soname the version is needed from, such as `libc.so.6`, and
+    /// the version, such as `GLIBC_2.34`.
+    pub needed: Vec<(String, String)>,
+    /// Every version name this object defines, its own soname's base entry included.
+    pub defined: Vec<String>,
+}
+
+/// Read the symbol versions of an ELF object. The bytes are untrusted: a malformed version
+/// section is an error, never a panic, and an object without one has empty lists.
+pub fn symbol_versions(bytes: &[u8]) -> Result<SymbolVersions> {
+    let elf = goblin::elf::Elf::parse(bytes).context("not a valid ELF binary")?;
+    let name = |offset: usize| elf.dynstrtab.get_at(offset).map(str::to_owned);
+    let mut versions = SymbolVersions::default();
+    for need in elf.verneed.iter().flat_map(|section| section.iter()) {
+        let Some(file) = name(need.vn_file) else {
+            continue;
+        };
+        for aux in need.iter() {
+            if let Some(version) = name(aux.vna_name) {
+                versions.needed.push((file.clone(), version));
+            }
+        }
+    }
+    for def in elf.verdef.iter().flat_map(|section| section.iter()) {
+        // The first verdaux names the version. The rest name the versions it inherits from,
+        // which are defined by entries of their own.
+        if let Some(version) = def.iter().next().and_then(|aux| name(aux.vda_name)) {
+            versions.defined.push(version);
+        }
+    }
+    Ok(versions)
+}
+
+/// A `GLIBC_x.y` or `GLIBC_x.y.z` version as numbers, so two can be ordered. Any other name,
+/// such as `GLIBC_PRIVATE` or `GLIBC_ABI_DT_RELR`, is `None`.
+pub fn glibc_release(version: &str) -> Option<Vec<u32>> {
+    let parts: Vec<u32> = version
+        .strip_prefix("GLIBC_")?
+        .split('.')
+        // `parse` takes a leading `+`, which no version name has.
+        .map(|part| {
+            (!part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| part.parse().ok())
+                .flatten()
+        })
+        .collect::<Option<_>>()?;
+    (2..=3).contains(&parts.len()).then_some(parts)
+}
+
 // ---------------------------------------------------------------------------
 // Emulate the ld.so search order.
 // ---------------------------------------------------------------------------
@@ -1614,6 +1668,55 @@ pub(crate) fn push_unique(v: &mut Vec<String>, item: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_glibc_release_is_two_or_three_numbers_and_nothing_else() {
+        assert_eq!(glibc_release("GLIBC_2.34"), Some(vec![2, 34]));
+        assert_eq!(glibc_release("GLIBC_2.3.4"), Some(vec![2, 3, 4]));
+        for name in [
+            "GLIBC_PRIVATE",
+            "GLIBC_ABI_DT_RELR",
+            "GLIBC_2",
+            "GLIBC_2.3.4.5",
+            "GLIBC_2.+3",
+            "GLIBC_2..3",
+            "GLIBCXX_3.4.30",
+            "2.34",
+        ] {
+            assert_eq!(glibc_release(name), None, "{name}");
+        }
+        // Ordered as numbers, not as text: 2.10 is newer than 2.9.
+        assert!(glibc_release("GLIBC_2.10") > glibc_release("GLIBC_2.9"));
+    }
+
+    #[test]
+    fn symbol_versions_read_what_a_real_binary_needs_and_its_libc_defines() {
+        let id = std::fs::read("/usr/bin/id").unwrap();
+        let needed = symbol_versions(&id).unwrap().needed;
+        assert!(
+            needed
+                .iter()
+                .any(|(file, v)| file == "libc.so.6" && glibc_release(v).is_some()),
+            "{needed:?}"
+        );
+        // The libc it runs against defines every GLIBC_ version it needs from libc.so.6.
+        let resolution = resolve(Path::new("/usr/bin/id"), &Sysroot::new("/")).unwrap();
+        let libc = resolution
+            .libs
+            .iter()
+            .find(|lib| lib.soname == "libc.so.6")
+            .expect("id links libc.so.6");
+        let defined = symbol_versions(&std::fs::read(&libc.path).unwrap())
+            .unwrap()
+            .defined;
+        for (file, version) in &needed {
+            if file == "libc.so.6" {
+                assert!(defined.contains(version), "{version} not in {defined:?}");
+            }
+        }
+        // Not an ELF: an error, and no panic.
+        assert!(symbol_versions(b"not an elf").is_err());
+    }
 
     fn info(interpreter: Option<&str>, needed: &[&str]) -> ElfInfo {
         ElfInfo {

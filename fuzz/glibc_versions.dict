@@ -1,0 +1,10 @@
+# libFuzzer dictionary for glibc_versions: the version names the parse branches on. The seeds
+# are real glibc ELFs, so these sit in .dynstr already; a mutated name still needs the prefix.
+"GLIBC_"
+"GLIBC_2."
+"GLIBC_2.34"
+"GLIBC_2.3.4"
+"GLIBC_PRIVATE"
+"GLIBC_ABI_DT_RELR"
+"libc.so.6"
+"ld-linux-x86-64.so.2"

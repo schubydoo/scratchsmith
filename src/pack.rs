@@ -8,6 +8,7 @@ use crate::resolver::{self, Sysroot};
 use crate::stager::{self, AddFile, NssSelection, RuntimeExtras, SizeReport, StagedTree};
 use crate::supplychain::{self, SbomRequest, ScanRequest, ScanSource, ScanSummary};
 use anyhow::{bail, Context, Result};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -201,6 +202,7 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
             resolver::missing_for_display(&resolution.missing)
         );
     }
+    warnings.extend(glibc_version_warnings(binary, &resolution));
     clock.timings.resolve_ms = millis(clock.started);
     let staging = Instant::now();
     let (tree, default_includes) =
@@ -233,6 +235,92 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
         bundled,
         clock,
     })
+}
+
+// Resolution matches sonames, not symbol versions, so a binary built against a newer glibc
+// than this host's resolves, stages and packs, and then ld.so refuses to start it ("version
+// `GLIBC_2.38' not found"). Read the `GLIBC_` versions that the binary and each staged library
+// need, and warn for each one the staged object it names does not define. A warning, not a
+// failure: failing would change the exit code, which the v2 line keeps.
+fn glibc_version_warnings(binary: &Path, resolution: &resolver::Resolution) -> Vec<String> {
+    // An object that cannot be read here was read by the resolver a moment ago, so this is
+    // rare, and the pack does not depend on it: say nothing rather than fail.
+    let read = |path: &Path| {
+        std::fs::read(path)
+            .ok()
+            .and_then(|bytes| resolver::symbol_versions(&bytes).ok())
+            .unwrap_or_default()
+    };
+    let mut objects = vec![(binary.to_path_buf(), read(binary))];
+    let mut provided = HashMap::new();
+    for lib in &resolution.libs {
+        let versions = read(&lib.path);
+        provided.insert(lib.soname.clone(), versions.defined.clone());
+        objects.push((lib.path.clone(), versions));
+    }
+    // The loader is a DT_NEEDED entry too (`__tls_get_addr` is in GLIBC_2.3 of
+    // ld-linux-x86-64.so.2), named by the file name that PT_INTERP gives it.
+    if let Some(interp) = &resolution.interpreter {
+        if let Some(name) = interp.image_path.file_name() {
+            let name = name.to_string_lossy().into_owned();
+            provided.insert(name, read(&interp.source).defined);
+        }
+    }
+    glibc_gaps(&objects, &provided)
+}
+
+// One warning for each object that needs a `GLIBC_` version its named object does not
+// define, naming the highest such version. An object it names that is not staged is skipped:
+// the resolver already failed the pack on it, or it is a loader this pack did not resolve.
+fn glibc_gaps(
+    objects: &[(PathBuf, resolver::SymbolVersions)],
+    provided: &HashMap<String, Vec<String>>,
+) -> Vec<String> {
+    let staged = provided.get("libc.so.6").and_then(|defined| {
+        defined
+            .iter()
+            .filter_map(|v| resolver::glibc_release(v))
+            .max()
+    });
+    let dotted = |release: &[u32]| {
+        release
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(".")
+    };
+    let mut warnings = Vec::new();
+    for (path, versions) in objects {
+        let missing = versions.needed.iter().filter(|(file, version)| {
+            version.starts_with("GLIBC_")
+                && provided
+                    .get(file)
+                    .is_some_and(|defined| !defined.contains(version))
+        });
+        // The highest numbered version names the glibc to pack on. A name with no number
+        // (`GLIBC_ABI_DT_RELR`) is reported only when it is the only one missing.
+        let Some((file, version)) =
+            missing.max_by_key(|(_, version)| resolver::glibc_release(version))
+        else {
+            continue;
+        };
+        let staged_note = staged
+            .as_ref()
+            .map(|r| format!(" (the staged glibc is {})", dotted(r)))
+            .unwrap_or_default();
+        let fix = match resolver::glibc_release(version) {
+            Some(r) => format!("Pack on a host whose glibc is {} or newer", dotted(&r)),
+            None => "Pack on a host with a newer glibc".to_string(),
+        };
+        warnings.push(format!(
+            "{} needs {version} from {file}, which the staged {file} does not define{staged_note}, \
+             so the image will not start. {fix}",
+            path.display().to_string().escape_debug(),
+            version = version.escape_debug(),
+            file = file.escape_debug(),
+        ));
+    }
+    warnings
 }
 
 // The files whose owner is worth asking for, as `(host path, image path)`: the binary, the
@@ -1162,6 +1250,112 @@ fn path_component(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_glibc_version_the_staged_object_lacks_warns_once_per_object() {
+        let versions = |needed: &[(&str, &str)]| resolver::SymbolVersions {
+            needed: needed
+                .iter()
+                .map(|(f, v)| (f.to_string(), v.to_string()))
+                .collect(),
+            defined: Vec::new(),
+        };
+        let defines = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let provided = HashMap::from([
+            (
+                "libc.so.6".to_string(),
+                defines(&["libc.so.6", "GLIBC_2.2.5", "GLIBC_2.34", "GLIBC_2.35"]),
+            ),
+            ("ld-linux-x86-64.so.2".to_string(), defines(&["GLIBC_2.3"])),
+        ]);
+        let objects = vec![
+            // Needs two versions libc lacks: named once, by the higher one.
+            (
+                PathBuf::from("/app/new"),
+                versions(&[
+                    ("libc.so.6", "GLIBC_2.34"),
+                    ("libc.so.6", "GLIBC_2.38"),
+                    ("libc.so.6", "GLIBC_2.36"),
+                ]),
+            ),
+            // Everything it needs is there, from libc and from the loader.
+            (
+                PathBuf::from("/app/old"),
+                versions(&[
+                    ("libc.so.6", "GLIBC_2.2.5"),
+                    ("ld-linux-x86-64.so.2", "GLIBC_2.3"),
+                ]),
+            ),
+            // Not glibc's, and from a file this pack did not stage: neither is checked here.
+            (
+                PathBuf::from("/app/cxx"),
+                versions(&[
+                    ("libstdc++.so.6", "GLIBCXX_3.4.30"),
+                    ("libgone.so.1", "GLIBC_2.99"),
+                ]),
+            ),
+            // A version with no number still breaks the start.
+            (
+                PathBuf::from("/app/relr"),
+                versions(&[("libc.so.6", "GLIBC_ABI_DT_RELR")]),
+            ),
+        ];
+        let warnings = glibc_gaps(&objects, &provided);
+        assert_eq!(
+            warnings,
+            [
+                "/app/new needs GLIBC_2.38 from libc.so.6, which the staged libc.so.6 does not \
+                 define (the staged glibc is 2.35), so the image will not start. Pack on a host \
+                 whose glibc is 2.38 or newer",
+                "/app/relr needs GLIBC_ABI_DT_RELR from libc.so.6, which the staged libc.so.6 \
+                 does not define (the staged glibc is 2.35), so the image will not start. Pack \
+                 on a host with a newer glibc",
+            ]
+        );
+        // A path is escaped: the text report prints warnings as they are.
+        let odd = vec![(
+            PathBuf::from("/app/a\nb"),
+            versions(&[("libc.so.6", "GLIBC_2.99")]),
+        )];
+        let warnings = glibc_gaps(&odd, &provided);
+        assert!(warnings[0].starts_with("/app/a\\nb needs"), "{warnings:?}");
+    }
+
+    #[test]
+    fn a_binary_built_for_this_hosts_glibc_packs_with_no_version_warning() {
+        let resolution = resolver::resolve(Path::new("/usr/bin/id"), &Sysroot::new("/")).unwrap();
+        assert_eq!(
+            glibc_version_warnings(Path::new("/usr/bin/id"), &resolution),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_binary_that_needs_a_newer_glibc_than_the_staged_one_is_named() {
+        // /usr/bin/id with one needed `GLIBC_2.x` name rewritten to `GLIBC_2.99`, in place
+        // and at the same length, so only the version it needs changes.
+        let mut bytes = std::fs::read("/usr/bin/id").unwrap();
+        let at = bytes
+            .windows(11)
+            .position(|w| {
+                w.starts_with(b"GLIBC_2.") && w[8..10].iter().all(u8::is_ascii_digit) && w[10] == 0
+            })
+            .expect("id needs a two-digit GLIBC_2.x version");
+        bytes[at + 8..at + 10].copy_from_slice(b"99");
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("id");
+        std::fs::write(&binary, &bytes).unwrap();
+        let resolution = resolver::resolve(Path::new("/usr/bin/id"), &Sysroot::new("/")).unwrap();
+        let warnings = glibc_version_warnings(&binary, &resolution);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        // From libc.so.6 on most hosts, but the loader is the other glibc object it can name.
+        let expected = format!("{} needs GLIBC_2.99 from ", binary.display());
+        assert!(warnings[0].starts_with(&expected), "{warnings:?}");
+        assert!(
+            warnings[0].ends_with("glibc is 2.99 or newer"),
+            "{warnings:?}"
+        );
+    }
 
     #[test]
     fn each_delivery_fills_only_its_own_report_fields() {

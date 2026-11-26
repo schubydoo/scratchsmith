@@ -13,6 +13,7 @@ cargo +nightly fuzz run <target>
 | Target | Entry point | What it reaches |
 |---|---|---|
 | `parse_elf_info` | `resolver::parse_elf_info` | ELF header and dynamic-section parse (goblin). |
+| `glibc_versions` | `resolver::symbol_versions`, `glibc_release` | The `DT_VERNEED` and `DT_VERDEF` read behind the glibc version warning, and the `GLIBC_x.y` parse. |
 | `analyze_hardening` | `lint::hardening_from_bytes` | ELF hardening read (PIE, RELRO, NX, canary, fortify). |
 | `resolve_graph` | `resolver::resolve_with` | `ld.so` search: RPATH, RUNPATH, `$ORIGIN`, soname lookup, and the refusals: a corrupt, non-ELF, or wrong-type library or loader, and `$PLATFORM` with no value. Asserts that no hint or `$PLATFORM` error holds a character that breaks a line. Structured input. |
 | `unpack` | `unpack::run` | The outer OCI-archive parse (tar, gzip, JSON) on raw bytes. |
@@ -43,7 +44,7 @@ A target whose entry point parses a concrete format starts from a seed corpus. T
 structure, so they take no seed. `.clusterfuzzlite/build.sh` generates the seeds in CI, and
 they are not committed:
 
-- `parse_elf_info` and `analyze_hardening`: a real dynamic executable plus link-variant ELFs
+- `parse_elf_info`, `glibc_versions` and `analyze_hardening`: a real dynamic executable plus link-variant ELFs
   (RPATH, RUNPATH with `$ORIGIN`, a shared object, a static PIE, and a full-RELRO build).
 - `unpack`: a real OCI-layout archive whose blob digests match.
 - `registry_parse`: a valid child manifest, config blob, and token response.
