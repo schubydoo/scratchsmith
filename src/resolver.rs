@@ -986,6 +986,8 @@ struct Gap {
     tag: &'static str,
     entry: String,
     kind: GapKind,
+    // For `LibFallback`: the old `$LIB` value this entry was expanded with, then glibc's own.
+    lib: Option<(String, String)>,
 }
 
 // A soname found through a gap, and why ldconfig would not cache it, if it would not.
@@ -1001,6 +1003,9 @@ enum GapKind {
     // ld.so reads a relative entry against the working directory. It is read here against
     // the object's directory.
     Relative,
+    // An entry naming `$LIB`, expanded with the old fixed value (`lib64` or `lib`) after
+    // glibc's own. ld.so expands `$LIB` to glibc's value only (decision-036, option B).
+    LibFallback,
 }
 
 impl Gap {
@@ -1016,18 +1021,34 @@ impl Gap {
         let (entry, why) = match self.kind {
             GapKind::Empty => (
                 format!("{owner} has an empty {tag} string"),
-                "it ignores an empty string",
+                "it ignores an empty string".to_string(),
             ),
             GapKind::Token => (
                 format!("{tag} entry `{}` of {owner}", self.entry.escape_debug()),
                 "it expands `$ORIGIN`, `$LIB` and `$PLATFORM` only when no letter, digit or `_` \
-                 follows the name",
+                 follows the name"
+                    .to_string(),
             ),
             GapKind::Relative => (
                 format!("{tag} entry `{}` of {owner}", self.entry.escape_debug()),
                 "it reads a relative entry against the working directory, not the object's \
-                 directory",
+                 directory"
+                    .to_string(),
             ),
+            GapKind::LibFallback => {
+                let (old, glibc) = self.lib.clone().unwrap_or_default();
+                (
+                    format!(
+                        "{tag} entry `{}` of {owner}, with `$LIB` as `{}`",
+                        self.entry.escape_debug(),
+                        old.escape_debug()
+                    ),
+                    format!(
+                        "it expands `$LIB` to `{}`, the directory of the host glibc",
+                        glibc.escape_debug()
+                    ),
+                )
+            }
         };
         let mut note = format!("{entry}: ld.so does not search this entry, because {why}");
         if !cached.is_empty() {
@@ -1067,6 +1088,9 @@ fn entry_gaps(
                 GapKind::Token
             } else if !Path::new(&expand_tokens(entry, origin_dir, root_info, lib)).is_absolute() {
                 GapKind::Relative
+            } else if lib != libs[0] {
+                // `lib_entries` gives an entry a second value only when it names `$LIB`.
+                GapKind::LibFallback
             } else {
                 return None;
             };
@@ -1075,6 +1099,7 @@ fn entry_gaps(
                 tag,
                 entry: entry.to_owned(),
                 kind,
+                lib: (kind == GapKind::LibFallback).then(|| (lib.to_owned(), libs[0].clone())),
             })
         })
         .collect()
@@ -4157,6 +4182,14 @@ mod tests {
     // and an app with RUNPATH `$ORIGIN/../$LIB` and a copy of libfoo.so.1 under each of
     // `copies`, relative to the app. Returns where libfoo.so.1 resolved, or None if missing.
     fn lib_token_case(libc_dir: Option<&str>, copies: &[&str]) -> Option<PathBuf> {
+        lib_token_notes(libc_dir, copies).0
+    }
+
+    // `lib_token_case`, with the resolution's notes, and the app's path to name them by.
+    fn lib_token_notes(
+        libc_dir: Option<&str>,
+        copies: &[&str],
+    ) -> (Option<PathBuf>, Vec<String>, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         fs::create_dir_all(root.join("usr/lib")).unwrap();
@@ -4180,14 +4213,18 @@ mod tests {
             infos.insert(canonical(&lib), elf(&[], &[], &[], None));
         }
         let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
-        let found = res.libs.iter().find(|l| l.soname == "libfoo.so.1")?;
-        Some(
-            found
-                .path
-                .strip_prefix(canonical(root))
-                .unwrap()
-                .to_path_buf(),
-        )
+        let found = res
+            .libs
+            .iter()
+            .find(|l| l.soname == "libfoo.so.1")
+            .map(|found| {
+                found
+                    .path
+                    .strip_prefix(canonical(root))
+                    .unwrap()
+                    .to_path_buf()
+            });
+        (found, res.notes, canonical(&exe))
     }
 
     #[test]
@@ -4222,6 +4259,47 @@ mod tests {
             found.as_deref(),
             Some(Path::new("opt/app/lib64/libfoo.so.1"))
         );
+    }
+
+    #[test]
+    fn a_library_found_only_through_the_old_lib_value_gets_a_note() {
+        // TASK-257. On a Debian layout ld.so expands `$LIB` to `lib/x86_64-linux-gnu` only, so
+        // the copy under lib64 loads only through the image's ld.so.cache.
+        let (found, notes, exe) = lib_token_notes(Some("usr/lib/x86_64-linux-gnu"), &["lib64"]);
+        assert_eq!(
+            found.as_deref(),
+            Some(Path::new("opt/app/lib64/libfoo.so.1"))
+        );
+        assert_eq!(
+            notes,
+            [format!(
+                "RUNPATH entry `$ORIGIN/../$LIB` of {}, with `$LIB` as `lib64`: ld.so does not \
+                 search this entry, because it expands `$LIB` to `lib/x86_64-linux-gnu`, the \
+                 directory of the host glibc, so `libfoo.so.1` loads only through the image's \
+                 ld.so.cache",
+                exe.display()
+            )]
+        );
+        // Found through glibc's own `$LIB` directory, or with no glibc to take it from: the
+        // search is the one ld.so makes, so nothing is said.
+        for (libc_dir, copies) in [
+            (
+                Some("usr/lib/x86_64-linux-gnu"),
+                &["lib/x86_64-linux-gnu"][..],
+            ),
+            (
+                Some("usr/lib/x86_64-linux-gnu"),
+                &["lib64", "lib/x86_64-linux-gnu"][..],
+            ),
+            (Some("usr/lib64"), &["lib64"][..]),
+            (None, &["lib64"][..]),
+        ] {
+            let (found, notes, _) = lib_token_notes(libc_dir, copies);
+            assert!(
+                found.is_some() && notes.is_empty(),
+                "{libc_dir:?} {copies:?}: {notes:?}"
+            );
+        }
     }
 
     #[test]
