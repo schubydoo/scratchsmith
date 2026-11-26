@@ -897,6 +897,11 @@ file</strong>.</p>
 <td>cosign-sign the pushed image (keyless, by digest). Requires a push target.</td>
 </tr>
 <tr>
+<td><code>push-untagged</code></td>
+<td><code>--push-untagged</code></td>
+<td>Push the image by its digest only, creating or moving no image tag (<code>sign</code> still adds cosign's <code>sha256-&lt;hex&gt;</code> signature tags). The push reference then names just the repository. Needs a push target, like <code>sign</code>. See <a href="../usage/#quick-start">Usage</a>.</td>
+</tr>
+<tr>
 <td><code>push</code></td>
 <td><code>--push</code></td>
 <td>Push the image straight to this registry reference, daemonless. A sink on the command line (<code>--push</code>, <code>--oci-archive</code> or <code>--no-build</code>) replaces this key. If the file also sets <code>sign</code>, <code>--oci-archive</code> or <code>--no-build</code> leaves it no push target, and the pack fails with exit code 2.</td>
@@ -949,8 +954,9 @@ directory of the file.</p>
 <a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="n">require</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">"libseccomp.so.2"</span><span class="p">]</span>
 <a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
 <a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="n">push</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"ghcr.io/you/app:latest"</span>
-<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a><span class="n">max-size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50MB"</span>
-<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"docker"</span>
+<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a><span class="c1"># push-untagged = true        # needs a `push` reference with no tag, so not this one</span>
+<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a><span class="n">max-size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"50MB"</span>
+<a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a><span class="n">runtime</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"docker"</span>
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w">                 </span><span class="c1"># binary + all keys come from the file</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--config<span class="w"> </span>scratchsmith.toml<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:dev<span class="w"> </span>./other<span class="w">   </span><span class="c1"># CLI overrides binary + push</span>
