@@ -549,19 +549,81 @@ pub enum Sink {
     Push(String),
 }
 
+/// A pack option that the chosen sink, or `--watch`, cannot honour. [`Sink::conflict`] finds
+/// it; the CLI words some of them itself, because only it knows where a config value was set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive] // a new sink or option rule may add one
+pub enum Conflict {
+    /// `smoke` with [`Sink::Rootfs`]: no image is built, so nothing can run.
+    SmokeNoBuild,
+    /// `smoke` with [`Sink::OciArchive`]: nothing loads the archive to run it.
+    SmokeOciArchive,
+    /// `smoke` with [`Sink::Push`]: the image goes to a registry, not to a local engine.
+    SmokePush,
+    /// `sign` without [`Sink::Push`]: cosign signs a pushed image by its digest.
+    SignWithoutPush,
+    /// `--watch` with [`Sink::Push`]: a registry is not the place for a pack on every save.
+    WatchPush,
+    /// `--watch` with `--format json`: one JSON document per pack is a stream shape nobody
+    /// has chosen yet. Refusing it keeps that choice open; allowing it later is additive.
+    WatchJson,
+}
+
+impl std::fmt::Display for Conflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::SmokeNoBuild => "--smoke needs a built image, so it isn't supported with --no-build; drop --smoke, or remove `smoke = true` from the config and the selected profile",
+            Self::SmokeOciArchive => "--smoke needs a running image, so it isn't supported with --oci-archive; load the archive (docker load / skopeo) and run it separately, or drop --smoke",
+            Self::SmokePush => "--smoke needs a running image, so it isn't supported with --push; pull the pushed image and run it separately, or drop --smoke",
+            Self::SignWithoutPush => "--sign needs a push target. Pass --push or set `push` in the config, or turn signing off",
+            Self::WatchPush => "--watch cannot push: it packs again on every change. Pass --oci-archive, remove `push` from the config/profile, or drop --watch",
+            Self::WatchJson => "--watch prints a text report for each pack; it cannot be used with --format json",
+        })
+    }
+}
+
+impl Sink {
+    /// The first rule that `opts`, `--watch` and its JSON output break for this sink. Every
+    /// sink-versus-option rule lives here, in the order the CLI has always reported them, so a
+    /// caller that runs this before staging refuses every one of them before any work.
+    pub fn conflict(&self, opts: &PackOptions, watch: bool, json: bool) -> Option<Conflict> {
+        let push = matches!(self, Self::Push(_));
+        if opts.smoke && matches!(self, Self::Rootfs(_)) {
+            Some(Conflict::SmokeNoBuild)
+        } else if opts.sign && !push {
+            Some(Conflict::SignWithoutPush)
+        } else if watch && push {
+            Some(Conflict::WatchPush)
+        } else if watch && json {
+            Some(Conflict::WatchJson)
+        } else if opts.smoke && matches!(self, Self::OciArchive(_)) {
+            Some(Conflict::SmokeOciArchive)
+        } else if opts.smoke && push {
+            Some(Conflict::SmokePush)
+        } else {
+            None
+        }
+    }
+}
+
 /// Pack `binary` and deliver it via `sink` — the single entry point the CLI dispatches
 /// to. `Rootfs` stops after staging; the image sinks build the scratch image and deliver.
 pub fn pack(binary: &Path, opts: &PackOptions, sink: Sink) -> Result<PackReport> {
+    // The CLI has refused these already, worded for where each option was set; this is the
+    // check for any other caller, and it runs before any staging.
+    if let Some(conflict) = sink.conflict(opts, false, false) {
+        bail!(crate::cli::UsageError(conflict.to_string()));
+    }
     match sink {
-        Sink::Rootfs(dir) => stage_only(binary, &dir, opts),
-        Sink::DockerLoad => run(binary, opts),
+        Sink::Rootfs(dir) => to_rootfs(binary, &dir, opts),
+        Sink::DockerLoad => to_docker(binary, opts),
         Sink::OciArchive(out) => to_oci_archive(binary, opts, &out),
         Sink::Push(reference) => to_push(binary, opts, &reference),
     }
 }
 
 /// What `finish_staging` produced. `extras` matters only to the image sinks (tini wrapping);
-/// `stage_only` ignores it.
+/// `to_rootfs` ignores it.
 struct Finished {
     extras: stager::RuntimeResult,
     /// The packages that own the bundled files, when a lookup ran and the host could answer.
@@ -756,11 +818,10 @@ fn claim_output_dir(out_dir: &Path) -> Result<()> {
 
 /// Stage `binary`'s rootfs into `out_dir` and stop — no image is built (`-n -o`).
 pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<PackReport> {
-    // No image is built here, so there is nothing to smoke-run. The CLI blocks --smoke --no-build
-    // and names where a config `smoke` is set; this is the backstop for any other caller.
-    if opts.smoke {
-        bail!(crate::cli::UsageError("--smoke needs a built image, so it isn't supported with --no-build; drop --smoke, or remove `smoke = true` from the config and the selected profile".into()));
-    }
+    pack(binary, opts, Sink::Rootfs(out_dir.to_path_buf()))
+}
+
+fn to_rootfs(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<PackReport> {
     check_output_dir(out_dir)?;
     let StagedRootfs {
         tree,
@@ -871,6 +932,10 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
 /// `opts.smoke`, run the image once afterwards and fail if the dynamic loader could
 /// not start it — the guard against a silently broken image.
 pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
+    pack(binary, opts, Sink::DockerLoad)
+}
+
+fn to_docker(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
     let mut s = stage_for_image(binary, opts)?;
     let ((), ms) = timed(|| image::load_into_docker(&s.tree, &s.tag, &s.cfg, opts.runtime))?;
     s.clock.timings.deliver_ms = Some(ms);
@@ -910,9 +975,6 @@ pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
 /// Pack `binary` into a daemonless OCI-archive tarball at `out`. No Docker daemon is
 /// contacted; `docker load` / `skopeo copy oci-archive:<out>` accept the result.
 fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackReport> {
-    if opts.smoke {
-        bail!(crate::cli::UsageError("--smoke needs a running image, so it isn't supported with --oci-archive; load the archive (docker load / skopeo) and run it separately, or drop --smoke".into()));
-    }
     let mut s = stage_for_image(binary, opts)?;
     let ((), ms) = timed(|| image::write_oci_archive(&s.tree, &s.tag, &s.cfg, out))?;
     s.clock.timings.deliver_ms = Some(ms);
@@ -938,9 +1000,6 @@ fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackR
 /// Credentials come from the local Docker config; every blob is uploaded (oci-client 0.18
 /// makes no HEAD check first).
 fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackReport> {
-    if opts.smoke {
-        bail!(crate::cli::UsageError("--smoke needs a running image, so it isn't supported with --push; pull the pushed image and run it separately, or drop --smoke".into()));
-    }
     let mut s = stage_for_image(binary, opts)?;
     // After staging, so a bad binary or option is reported first; before the push, which
     // would make the image public.
@@ -1055,6 +1114,58 @@ fn path_component(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_sink_refuses_what_it_cannot_honour_in_the_cli_order() {
+        let rootfs = Sink::Rootfs("out".into());
+        let archive = Sink::OciArchive("x.tar".into());
+        let push = Sink::Push("localhost:5000/x:1".into());
+        let smoke = PackOptions {
+            smoke: true,
+            ..Default::default()
+        };
+        let sign = PackOptions {
+            sign: true,
+            ..Default::default()
+        };
+        let both = PackOptions {
+            smoke: true,
+            sign: true,
+            ..Default::default()
+        };
+        let none = PackOptions::default();
+        let cases = [
+            (&rootfs, &smoke, false, false, Some(Conflict::SmokeNoBuild)),
+            (
+                &archive,
+                &smoke,
+                false,
+                false,
+                Some(Conflict::SmokeOciArchive),
+            ),
+            (&push, &smoke, false, false, Some(Conflict::SmokePush)),
+            (&Sink::DockerLoad, &smoke, false, false, None),
+            (
+                &Sink::DockerLoad,
+                &sign,
+                false,
+                false,
+                Some(Conflict::SignWithoutPush),
+            ),
+            (&push, &sign, false, false, None),
+            (&push, &none, true, false, Some(Conflict::WatchPush)),
+            (&archive, &none, true, true, Some(Conflict::WatchJson)),
+            (&archive, &none, false, true, None),
+            // More than one rule broken: the first in the order the CLI always reported.
+            (&rootfs, &both, true, true, Some(Conflict::SmokeNoBuild)),
+            (&archive, &both, true, true, Some(Conflict::SignWithoutPush)),
+            (&push, &smoke, true, true, Some(Conflict::WatchPush)),
+            (&archive, &smoke, true, true, Some(Conflict::WatchJson)),
+        ];
+        for (sink, opts, watch, json, want) in cases {
+            assert_eq!(sink.conflict(opts, watch, json), want);
+        }
+    }
 
     #[test]
     fn a_symlinked_output_dir_is_refused_only_when_its_target_is_not_empty() {
