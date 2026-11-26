@@ -1623,8 +1623,9 @@ When the archive's index lists more than one manifest, <code>unpack</code> appli
 prints a warning on standard error that names its digest, and its platform when the index gives
 one.</p>
 <p><code>unpack</code> reads every gzip member of a layer, as Docker does. It refuses a layer that is cut
-short, has data after its end, or holds a sparse entry or a malformed PAX record, and exits <code>1</code>
-before it writes any file from that layer. A layer may hold at most 2 GiB once decompressed, and
+short, has data after its end, or holds a sparse entry, an entry with a <code>..</code> part, a hard link
+above the image root or a malformed PAX record, and exits <code>1</code> before that layer writes or deletes
+any file. A layer may hold at most 2 GiB once decompressed, and
 all layers together at most 16 GiB. A layer that the manifest lists twice counts twice.</p>
 <p><code>unpack</code> clears the setuid and setgid bits on every file and directory it writes. An untrusted
 image cannot then plant a setuid program owned by the user who unpacks it. <code>unpack</code> prints one
