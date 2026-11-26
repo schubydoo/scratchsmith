@@ -23,6 +23,7 @@ pub enum Gate {
 /// RELRO protects the GOT: `Partial` marks the relocations read-only after load,
 /// `Full` also resolves them eagerly (BIND_NOW) so the GOT itself is read-only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")] // as the text report and the `--fail-on` values spell it
 pub enum Relro {
     Full,
     Partial,
@@ -158,17 +159,39 @@ impl std::fmt::Display for Hardening {
 
 /// Analyze and print the hardening report (the `lint` subcommand). When `gates` are
 /// given, fail (non-zero) if any is violated, naming the offending checks — without
-/// a gate, lint only reports and always succeeds.
-pub fn run(binary: &Path, gates: &[Gate]) -> Result<()> {
+/// a gate, lint only reports and always succeeds. The report prints first, in either
+/// format, so a failing gate still leaves the whole report on stdout.
+pub fn run(binary: &Path, gates: &[Gate], format: crate::cli::Format) -> Result<()> {
     let hardening = analyze(binary)?;
-    println!("{hardening}");
-
-    let violations = hardening.violations(gates);
-    if !violations.is_empty() {
-        let names: Vec<String> = violations.into_iter().map(gate_name).collect();
-        bail!("hardening gate failed: {}", names.join(", "));
+    let report = report(binary, hardening, gates);
+    match format {
+        crate::cli::Format::Text => println!("{hardening}"),
+        crate::cli::Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+    }
+    if !report.violations.is_empty() {
+        bail!("hardening gate failed: {}", report.violations.join(", "));
     }
     Ok(())
+}
+
+// A gate given twice is asked for once, so the report lists it once, in the order first given.
+fn report(binary: &Path, hardening: Hardening, gates: &[Gate]) -> crate::report::LintReport {
+    let mut asked: Vec<Gate> = Vec::new();
+    for gate in gates {
+        if !asked.contains(gate) {
+            asked.push(*gate);
+        }
+    }
+    crate::report::LintReport {
+        binary: binary.to_string_lossy().into_owned(),
+        hardening,
+        violations: hardening
+            .violations(&asked)
+            .into_iter()
+            .map(gate_name)
+            .collect(),
+        fail_on: asked.into_iter().map(gate_name).collect(),
+    }
 }
 
 #[cfg(test)]
@@ -182,6 +205,33 @@ mod tests {
             nx: true,
             canary: true,
             fortify: true,
+        }
+    }
+
+    #[test]
+    fn the_report_lists_each_gate_once_in_the_order_given() {
+        let weak = Hardening {
+            fortify: false,
+            relro: Relro::Partial,
+            ..strong()
+        };
+        let gates = [
+            Gate::NoFortify,
+            Gate::NoPie,
+            Gate::NoFortify,
+            Gate::PartialRelro,
+            Gate::NoPie,
+        ];
+        let r = report(Path::new("./app"), weak, &gates);
+        assert_eq!(r.binary, "./app");
+        assert_eq!(r.fail_on, ["no-fortify", "no-pie", "partial-relro"]);
+        assert_eq!(r.violations, ["no-fortify", "partial-relro"]);
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["hardening"]["relro"], "partial");
+        let none = report(Path::new("./app"), strong(), &[]);
+        assert!(none.fail_on.is_empty() && none.violations.is_empty());
+        for (relro, name) in [(Relro::Full, "full"), (Relro::None, "none")] {
+            assert_eq!(serde_json::to_value(relro).unwrap(), name);
         }
     }
 

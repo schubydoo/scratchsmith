@@ -99,7 +99,15 @@ scratchsmith pack --sbom --sbom-format spdx-json --sbom-file bom.spdx.json ./app
 scratchsmith pack --scan --scan-fail-on high ./app    # grype vuln scan; fail the build on a high+ CVE
 scratchsmith pack --strip --max-size 8MB ./app        # fail the build if the staged image exceeds 8 MB
 scratchsmith lint --fail-on no-pie --fail-on no-relro ./app   # hardening gate for CI
+scratchsmith lint --format json --fail-on no-fortify ./app     # the same report as JSON
 ```
+
+`lint --format json` prints one object: `binary` (the path as given), `hardening` (`pie`, `nx`,
+`canary` and `fortify` as booleans, `relro` as `"full"`, `"partial"` or `"none"`), `fail_on`
+(the gates asked for) and `violations` (the gates this binary fails). Gates use the `--fail-on`
+spelling, each listed once in the order given, so a CI script can feed a violation back to the
+flag. The report prints in full before a failing gate exits `1`. `canary` and `fortify` mean the
+binary imports the guard or a `*_chk` wrapper, so a stripped static binary reads `false`.
 
 `--smoke` runs the image once and fails the pack only when the binary could not start: a
 missing library or loader, or an entrypoint the runtime could not exec. An app that starts and

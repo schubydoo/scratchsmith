@@ -241,6 +241,9 @@ pub enum Command {
         /// Fail (non-zero) if a mitigation is missing; repeatable.
         #[arg(long = "fail-on", value_enum, value_name = "CHECK")]
         fail_on: Vec<crate::lint::Gate>,
+        /// Report format.
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
     },
     /// Check for the external tools Scratchsmith can use (syft, cosign, ...).
     Doctor,
@@ -715,7 +718,11 @@ fn dispatch(cli: Cli) -> Result<()> {
             crate::watch::run(&binary, pack_once)
         }
         Command::Doctor => crate::doctor::run(),
-        Command::Lint { binary, fail_on } => crate::lint::run(&binary, &fail_on),
+        Command::Lint {
+            binary,
+            fail_on,
+            format,
+        } => crate::lint::run(&binary, &fail_on, format),
         Command::Index {
             target,
             sources,
