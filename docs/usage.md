@@ -73,7 +73,7 @@ names another digest. If signing fails after the push, the error says that the i
 but is not signed. `index --sign` works the same way.
 
 A reference with no tag pushes to `latest`, as it always has. To push the image without
-creating or moving any tag, add `--push-untagged` and name only the repository:
+creating or moving an image tag, add `--push-untagged` and name only the repository:
 
 ```sh
 scratchsmith pack --push ghcr.io/you/app --push-untagged --sign ./app
@@ -81,7 +81,9 @@ scratchsmith pack --push ghcr.io/you/app --push-untagged --sign ./app
 
 The manifest goes up under its own digest. The report gives the pushed
 `ghcr.io/you/app@sha256:...` reference (the `pushed` field in `--format json`), and `--sign`
-signs that digest. A tag or a digest in the reference is a usage error with exit code 2. Tag
+signs that digest. cosign still stores the signature, and the SBOM attestation if there is one,
+under a `sha256-<hex>` tag in the same repository, so `--sign` adds those tags. No image tag is
+created or moved. A tag or a digest in the reference is a usage error with exit code 2. Tag
 the image later, for example after a review, with `crane tag` or `oras tag`.
 
 cosign signs and attests with your terminal's standard input and standard error. Outside CI,

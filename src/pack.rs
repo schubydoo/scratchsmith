@@ -1337,8 +1337,15 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<(Delive
         by_digest,
     } = outcome;
     s.clock.timings.deliver_ms = Some(ms);
+    // An untagged push has no reference but its digest, so that is what the report names, and
+    // what a signing failure names as the image to sign by hand.
+    let pushed = if opts.push_untagged {
+        by_digest
+    } else {
+        reference.to_string()
+    };
     let signed = if opts.sign {
-        let (signed, ms) = timed(|| sign_pushed(reference, digest_ref, opts))?;
+        let (signed, ms) = timed(|| sign_pushed(&pushed, digest_ref, opts))?;
         s.clock.timings.sign_ms = Some(ms);
         Some(signed)
     } else {
@@ -1348,12 +1355,6 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<(Delive
             s.warnings.push(format!("{e:#}"));
         }
         None
-    };
-    // An untagged push has no reference but its digest, so that is what the report names.
-    let pushed = if opts.push_untagged {
-        by_digest
-    } else {
-        reference.to_string()
     };
     Ok((Delivered::Push { pushed, signed }, s.into_common()))
 }

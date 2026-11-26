@@ -111,8 +111,9 @@ pub enum Command {
         /// generated. Requires --push (cosign signs a registry image by digest).
         #[arg(long, requires = "push")]
         sign: bool,
-        /// Push the image by its digest only, creating or moving no tag. The --push reference
-        /// then names just the repository, with no tag. Requires --push.
+        /// Push the image by its digest only, creating or moving no image tag. The --push
+        /// reference then names just the repository, with no tag. Requires --push. With --sign,
+        /// cosign still stores its signature under a `sha256-<hex>` tag.
         #[arg(long = "push-untagged", requires = "push")]
         push_untagged: bool,
         /// Image entrypoint (defaults to the packed binary's path).

@@ -130,7 +130,8 @@ pub fn untagged_reference(raw: &str) -> Result<Reference> {
     {
         bail!(
             "--push-untagged pushes no tag, so the --push reference names a repository with no \
-             tag: drop `:{}` from {shown}, or drop --push-untagged to push to that tag",
+             tag: drop `:{}` from {shown}, or drop --push-untagged (or `push-untagged` in the config) \
+             to push to that tag",
             crate::resolver::escape_for_display(reference.tag().unwrap_or_default())
         );
     }
