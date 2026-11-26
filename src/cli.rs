@@ -177,7 +177,7 @@ pub enum Command {
         /// Add a minimal init (tini) as pid 1 wrapping the entrypoint.
         #[arg(long)]
         init: bool,
-        /// Add an empty, world-writable /tmp (mode 1777, owned by root).
+        /// Add an empty, world-writable /tmp (mode 1777, owned by root); an existing one is kept.
         #[arg(long)]
         tmp: bool,
         /// Copy a host file into the image: `SRC:DST`, or `SRC` to keep its own absolute
@@ -275,7 +275,8 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
     },
-    /// Compare two staged rootfs directories: files added, removed, changed, size delta.
+    /// Compare two staged rootfs directories: files added, removed, changed, mode changes,
+    /// empty directories, size delta.
     Diff {
         /// The baseline rootfs directory (e.g. a previous `pack --no-build --output`).
         before: PathBuf,

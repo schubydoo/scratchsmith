@@ -31,7 +31,7 @@ names each one.
 
 | Input | Warned since | In 3.0 | Write this instead |
 |---|---|---|---|
-| A digest in the `--push` reference (or the `push` key), such as `ghcr.io/owner/app@sha256:…` | 2.1.0 | Refused | A tag, such as `ghcr.io/owner/app:1.0` |
+| A digest in the `--push` reference (or the `push` key), such as `ghcr.io/owner/app@sha256:…` | 2.1.0 | Refused | A tag, such as `ghcr.io/owner/app:1.0`, or the repository alone with `--push-untagged` |
 | A `diff` argument that is not a directory, such as `diff a.tar b.tar` | 2.1.0 | Refused | Two rootfs directories, such as from `pack --no-build --output` or `unpack` |
 
 A registry stores a manifest only under that manifest's own digest. A push to any other digest
