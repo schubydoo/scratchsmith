@@ -29,6 +29,12 @@ cosign verify ghcr.io/schubydoo/scratchsmith:<ver> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
+## Rebuilding a release binary
+
+The release binaries are reproducible. For every release, a CI job rebuilds both binaries from
+the tag and checks that they match the published ones byte for byte. To run the same check
+yourself, follow [REPRODUCE.md](https://github.com/schubydoo/scratchsmith/blob/main/REPRODUCE.md).
+
 ## Verifying an image you signed with `pack`
 
 The commands above verify Scratchsmith's own **release artifacts**. To sign an image Scratchsmith

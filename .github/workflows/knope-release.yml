@@ -30,6 +30,9 @@ name: Knope Release
 #   cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
 #     --certificate-identity-regexp '^https://github\.com/schubydoo/scratchsmith/\.github/workflows/knope-release\.yml@' \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+#
+# The binaries are reproducible: reproduce.yml rebuilds them from the tag and compares them
+# byte for byte with the published ones. REPRODUCE.md has the steps for a third party.
 
 on:
   pull_request:
@@ -78,29 +81,12 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
           persist-credentials: false
-      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
-        with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          cache: false
-          # build-warnings: warn clears v2's default CARGO_BUILD_WARNINGS=deny — a
-          # stray warning must not fail the release build (rustflags: "" clears the
-          # old RUSTFLAGS=-D warnings likewise).
-          rustflags: ""
-          build-warnings: warn
-      # zig is the cross linker for both musl targets.
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
-        with:
-          # renovate: datasource=github-releases depName=ziglang/zig
-          version: 0.15.1
-          use-cache: false
-      # Pinned prebuilt (not `cargo install`): cargo-zigbuild tracks zig's breaking
-      # CLI, so a skew would only surface at release time. Renovate bumps the pin.
-      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
-        with:
-          tool: cargo-zigbuild@0.24.0
+      # One recipe for the release and for reproduce.yml's rebuild: the pinned toolchain,
+      # zig, cargo-zigbuild and scripts/build-release-binary.sh. See REPRODUCE.md.
       - name: Build (static musl via zig)
-        run: cargo zigbuild --release --target ${{ matrix.target }} --bin scratchsmith
+        uses: ./.github/actions/release-build
+        with:
+          target: ${{ matrix.target }}
       - name: Package tarball
         env:
           NAME: ${{ matrix.name }}
