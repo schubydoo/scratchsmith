@@ -1174,7 +1174,8 @@ impl CpuEntry {
 }
 
 // One `Option<CpuEntry>` per entry of `lib_entries(raw, libs)`, in the same order as `build_dirs`.
-// An entry that ld.so does not search at all is a `Gap` and gets its own note instead.
+// An entry that ld.so does not search at all is a `Gap` and gets its own note instead. That
+// includes an entry expanded with the old `$LIB` value, which ld.so never names.
 // `origin_dir` is where `owner` was found, which may be a symlink's directory.
 fn cpu_entries(
     raw: &[String],
@@ -1190,7 +1191,8 @@ fn cpu_entries(
             let names_platform = entry.contains("$PLATFORM") || entry.contains("${PLATFORM}");
             let searched = !entry.is_empty()
                 && !holds_unknown_token(entry)
-                && Path::new(&expand_tokens(entry, origin_dir, root_info, lib)).is_absolute();
+                && Path::new(&expand_tokens(entry, origin_dir, root_info, lib)).is_absolute()
+                && lib == libs[0];
             (root_info.machine == goblin::elf::header::EM_X86_64 && names_platform && searched)
                 .then(|| CpuEntry {
                     owner: owner.to_path_buf(),
@@ -3712,6 +3714,40 @@ mod tests {
             );
             assert_eq!(res.hints, [want], "{entry}");
         }
+    }
+
+    #[test]
+    fn a_cpu_copy_under_the_old_lib_value_gets_no_cpu_hint() {
+        // ld.so expands `$LIB` to glibc's value only, so on a Debian layout it names neither
+        // `lib64/haswell` nor `lib64/x86_64`: a hint that points there would be wrong.
+        let hints_for = |copy: &str| {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            fs::create_dir_all(root.join("usr/lib")).unwrap();
+            std::os::unix::fs::symlink("usr/lib", root.join("lib")).unwrap();
+            touch(&root.join("usr/lib/x86_64-linux-gnu/libc.so.6"));
+            let exe = root.join("opt/app/bin/exe");
+            touch(&exe);
+            let lib = root.join("opt/app").join(copy).join("libfoo.so.1");
+            touch(&lib);
+            let mut infos = HashMap::new();
+            infos.insert(
+                canonical(&exe),
+                elf(&["libfoo.so.1"], &[], &["$ORIGIN/../$LIB/$PLATFORM"], None),
+            );
+            infos.insert(canonical(&lib), elf(&[], &[], &[], None));
+            let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+            assert_eq!(res.missing, ["libfoo.so.1"], "{copy}: {res:?}");
+            res.hints
+        };
+        assert!(hints_for("lib64/haswell").is_empty());
+        // The glibc value still gets its hint.
+        let hints = hints_for("lib/x86_64-linux-gnu/haswell");
+        assert_eq!(hints.len(), 1, "{hints:?}");
+        assert!(
+            hints[0].contains("lib/x86_64-linux-gnu/x86_64"),
+            "{hints:?}"
+        );
     }
 
     #[test]
