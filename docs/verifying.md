@@ -31,8 +31,8 @@ cosign verify ghcr.io/schubydoo/scratchsmith:<ver> \
 
 ## Rebuilding a release binary
 
-The release binaries are reproducible. For every release, a CI job rebuilds both binaries from
-the tag and checks that they match the published ones byte for byte. To run the same check
+Release binaries after v2.1.0 are reproducible. For every such release, a CI job rebuilds both
+binaries from the tag and checks that they match the published ones byte for byte. To run the same check
 yourself, follow [REPRODUCE.md](https://github.com/schubydoo/scratchsmith/blob/main/REPRODUCE.md).
 
 ## Verifying an image you signed with `pack`

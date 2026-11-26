@@ -5,8 +5,8 @@ Each release binary can be rebuilt from its tag, byte for byte. The
 both binaries from the tag and compares them with the ones in the published tarballs. This page
 shows how to run the same check yourself.
 
-It covers releases built with `.github/actions/release-build`. Tags from before that recipe
-existed can't be rebuilt this way.
+It covers releases after v2.1.0, the first ones built with `.github/actions/release-build`.
+v2.1.0 and older can't be rebuilt this way.
 
 ## What matches, and what doesn't
 
@@ -48,7 +48,8 @@ RUSTUP_TOOLCHAIN=<rust> scripts/build-release-binary.sh aarch64-unknown-linux-mu
 
 The script is the one the release uses. It builds with `--locked`, prints the tool versions and
 the binary's SHA-256, and remaps your `CARGO_HOME` out of the binary, so where you build doesn't
-change the bytes. It also overrides any `rustflags` in your Cargo config.
+change the bytes. It also overrides any `rustflags` in your Cargo config, but not a `[profile.release]` table there or a
+`CARGO_PROFILE_RELEASE_*` variable. Build without either.
 
 ## Compare
 

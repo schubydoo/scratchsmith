@@ -10,7 +10,7 @@ name: Reproduce release
 # - workflow_dispatch: re-check an existing release. Dispatch it FROM THE TAG (the "Use
 #   workflow from" picker lists tags), like release.yml, so `$/` loads that tag's recipe.
 #   Tags from before this workflow existed don't have it, so they can't be dispatched.
-# - pull_request that touches the recipe: build twice, from two directories with two
+# - pull_request that touches the recipe or the dependencies: build twice, from two directories with two
 #   CARGO_HOMEs, and compare. That proves the recipe gives the same bytes on another machine
 #   layout before a release depends on it.
 
@@ -23,6 +23,9 @@ on:
       - .github/actions/release-build/**
       - .github/workflows/reproduce.yml
       - scripts/build-release-binary.sh
+      # A dependency bump can add a crate that embeds a host path; catch it before a release.
+      - Cargo.toml
+      - Cargo.lock
 
 permissions:
   contents: read

@@ -11,10 +11,11 @@ target="${1:?usage: $0 <rust-target>, e.g. x86_64-unknown-linux-musl}"
 # Panic locations in dependency crates embed their absolute source path under CARGO_HOME,
 # so two machines with different homes would build different bytes. Remap it to a fixed
 # prefix. The workspace's own paths are already relative, and aws-lc trims its C paths.
-cargo_home="$(realpath -m "${CARGO_HOME:-$HOME/.cargo}")"
+# -s: cargo hands rustc the home as given, so make it absolute without resolving symlinks.
+cargo_home="$(realpath -m -s "${CARGO_HOME:-$HOME/.cargo}")"
 
-# RUSTFLAGS wins over every config-file rustflags, so a local ~/.cargo/config.toml can't
-# change the output. CARGO_ENCODED_RUSTFLAGS would win over RUSTFLAGS, so clear it.
+# RUSTFLAGS wins over every config-file rustflags, so rustflags in a local ~/.cargo/config.toml
+# can't change the output. A [profile.release] there still would (REPRODUCE.md says so). CARGO_ENCODED_RUSTFLAGS would win over RUSTFLAGS, so clear it.
 unset CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_RUSTFLAGS
 export RUSTFLAGS="--remap-path-prefix=${cargo_home}=/cargo"
 
