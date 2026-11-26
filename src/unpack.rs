@@ -397,9 +397,12 @@ fn apply_layer(tar_bytes: &[u8], dest: &Path, applied: &mut Applied) -> Result<u
             // (a full host path past PATH_MAX failed, TASK-251), and a symlink swapped into the
             // path after the walk cannot move the write. `chmod_fd` already relies on /proc.
             let target = Path::new(&format!("/proc/self/fd/{}", parent.as_raw_fd())).join(&name);
-            e.unpack(&target)
-                .map_err(escape_tar_err)
-                .with_context(|| format!("extracting {}", shown(image.display(), SHOWN_MAX)))?;
+            e.unpack(&target).map_err(escape_tar_err).with_context(|| {
+                format!(
+                    "extracting {} through /proc/self/fd (is /proc mounted?)",
+                    shown(image.display(), SHOWN_MAX)
+                )
+            })?;
         }
         if kind.is_dir() {
             hold_dir_mode(&parent, &name, &image, e.header().mode()?, applied)?;
