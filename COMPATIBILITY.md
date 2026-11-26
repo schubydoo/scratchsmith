@@ -11,9 +11,9 @@ A breaking change to any of these requires a new **major** version. This page is
 [Architecture → Stability](docs/architecture.md#stability) has a short summary.
 
 - **CLI surface**: the names and meaning of `pack` / `lint` / `doctor` / `index` / `graph` /
-  `diff` / `unpack` flags and positionals, and the top-level `--completions`. The contract
-  also covers their short aliases, their defaults, and whether they take a value or are
-  repeatable. It covers the accepted **enum values** too (for example
+  `diff` / `unpack` flags and positionals, and the top-level `--completions` and `--verbose`.
+  The contract also covers their short aliases, their defaults, and whether they take a value
+  or are repeatable. It covers the accepted **enum values** too (for example
   `--sbom-format cyclonedx-json`, `--scan-fail-on high`).
 - **`scratchsmith.toml`**: the config keys and their types.
 - **`--format json`**: the field names and types of the `pack`, `index`, `graph`, `diff`, and

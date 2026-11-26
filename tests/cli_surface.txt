@@ -1,5 +1,6 @@
 [scratchsmith]
   --completions  value=true  multiple=false  required=false  values=[bash,zsh,fish]
+  --verbose  value=false  multiple=false  required=false
 
 [diff]
   <after>  value=true  multiple=false  required=true

@@ -415,6 +415,24 @@ a shared dependency or a cycle does not print twice. A dependency that does not 
 shown as `(missing)`, and `graph` then exits with code 1 after it prints the tree. If the binary
 has a loader (`PT_INTERP`), the last line names it.
 
+## See each decision with `--verbose`
+
+To see why a library was picked, or where a file was staged, add `--verbose`. It works before
+or after the subcommand:
+
+```sh
+scratchsmith --verbose pack --no-build -o rootfs ./app
+scratchsmith graph --verbose ./app
+```
+
+`pack` and `graph` then print one line on standard error for each decision, each starting
+`verbose: `. The lines say which directories each object searches, the file each `DT_NEEDED`
+name resolves to (or that it is not found, or already loaded), and, for `pack`, the binary,
+interpreter, libraries and name-service files it stages, each link it makes, and the
+directories in the image's `/etc/ld.so.cache`. Standard output and every other line stay as
+they are without the flag, so `--format json` still prints only JSON. The wording of the
+`verbose: ` lines is for reading, not parsing, and can change in any release.
+
 ## Gate on libraries
 
 To enforce a library policy in CI, fail the pack on a forbidden library or a missing required

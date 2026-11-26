@@ -23,4 +23,5 @@ pub mod supplychain;
 #[cfg(test)]
 mod test_support;
 pub mod unpack;
+pub mod verbose;
 pub mod watch;

@@ -688,6 +688,7 @@ pub fn stage_default_includes(
 
     if let Some(body) = nss.nsswitch() {
         write_into(dest, Path::new("/etc/nsswitch.conf"), body.as_bytes())?;
+        crate::verbose::line(|| "wrote /etc/nsswitch.conf".to_string());
         report.staged.push(PathBuf::from("/etc/nsswitch.conf"));
     }
 
@@ -701,6 +702,7 @@ pub fn stage_default_includes(
                     let src = dir.join(name);
                     if src.exists() {
                         copy_into(&src, dest, &src)?;
+                        crate::verbose::line(|| format!("staged the NSS module {}", src.display()));
                         report.staged.push(src);
                     } else {
                         report
@@ -725,6 +727,7 @@ pub fn stage_default_includes(
             ("/etc/group", MINIMAL_GROUP),
         ] {
             write_into(dest, Path::new(path), body.as_bytes())?;
+            crate::verbose::line(|| format!("wrote {path}"));
             report.staged.push(PathBuf::from(path));
         }
     }
@@ -955,6 +958,7 @@ fn stage_files(
     let binary_real =
         std::fs::canonicalize(binary).with_context(|| format!("locating {}", binary.display()))?;
     copy_into(&binary_real, dest, &binary_real)?;
+    crate::verbose::line(|| format!("staged the binary {}", binary_real.display()));
 
     // The path the USER named is not always the real one. `pack /usr/bin/python3` follows a
     // link to python3.13, and the image then has no /usr/bin/python3 at all, which is a
@@ -970,6 +974,13 @@ fn stage_files(
         if named != binary_real && !is_staged(dest, &named) {
             let dir = named.parent().unwrap_or(Path::new("/"));
             place_symlink(dest, &named, &relative_link_value(dir, &binary_real))?;
+            crate::verbose::line(|| {
+                format!(
+                    "linked {} to the binary {}",
+                    named.display(),
+                    binary_real.display()
+                )
+            });
         }
     }
 
@@ -978,6 +989,13 @@ fn stage_files(
         Some(interp) => {
             let target = interp_target(dest, &interp.image_path)?;
             copy_into(&interp.source, dest, &target)?;
+            crate::verbose::line(|| {
+                format!(
+                    "staged the interpreter {} from {}",
+                    interp.image_path.display(),
+                    interp.source.display()
+                )
+            });
             Some(target)
         }
         None => None,
@@ -989,11 +1007,26 @@ fn stage_files(
         // On a merged-/usr host the loader has two names: PT_INTERP (`/lib64/...`) and the
         // real path libc's DT_NEEDED resolves to. One host file stays one file in the image.
         match loader.as_ref().filter(|_| is_loader_alias(resolution, lib)) {
-            Some(loader) => link_to_loader(dest, &lib.path, loader)?,
-            None => copy_into(&lib.path, dest, &lib.path)?,
+            Some(loader) => {
+                link_to_loader(dest, &lib.path, loader)?;
+                crate::verbose::line(|| {
+                    format!("linked {} to the interpreter", lib.path.display())
+                });
+            }
+            None => {
+                copy_into(&lib.path, dest, &lib.path)?;
+                crate::verbose::line(|| format!("staged {}", lib.path.display()));
+            }
         }
         if lib.path.file_name() != Some(OsStr::new(&lib.soname)) {
             symlink_soname(dest, &lib.path, &lib.soname)?;
+            crate::verbose::line(|| {
+                format!(
+                    "linked the soname `{}` to {}",
+                    lib.soname,
+                    lib.path.display()
+                )
+            });
         }
     }
 
@@ -1142,6 +1175,10 @@ fn generate_ld_cache(dest: &Path, resolution: &Resolution) -> Result<()> {
     if !cache.exists() {
         bail!("ldconfig produced no cache at {}", cache.display());
     }
+    crate::verbose::line(|| {
+        let shown: Vec<_> = dirs.iter().map(|d| d.display().to_string()).collect();
+        format!("built /etc/ld.so.cache for {}", shown.join(", "))
+    });
     Ok(())
 }
 

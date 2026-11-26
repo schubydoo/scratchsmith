@@ -464,14 +464,28 @@ pub fn resolve_with(
             if let Some(name) = parsed.and_then(|info| info.soname) {
                 loader_names.push((name, canonical(&loader)));
             }
+            crate::verbose::line(|| {
+                format!(
+                    "{} loads through the interpreter {interp}, found at {}",
+                    root_path.display(),
+                    canonical(&loader).display()
+                )
+            });
             resolution.interpreter = Some(ResolvedInterp {
                 image_path: PathBuf::from(interp),
                 source: canonical(&loader),
             });
         } else {
+            crate::verbose::line(|| format!("the interpreter {interp} is not in the sysroot"));
             resolution.missing.push(interp.clone());
         }
     }
+    crate::verbose::line(|| {
+        format!(
+            "the default library dirs are {}",
+            dirs_for_display(&sysroot.default_dirs)
+        )
+    });
 
     // Breadth-first walk. Each item carries the transitive RPATH dirs contributed
     // by its ancestors — RPATH is inherited down the tree, RUNPATH is not. The two lists are
@@ -601,6 +615,38 @@ pub fn resolve_with(
             literals.extend(inherited_literals.iter().cloned());
         }
         literals.extend(runpath_literals);
+        if !obj.needed.is_empty() {
+            crate::verbose::line(|| {
+                let hidden = !obj.rpaths.is_empty() || !inherited_rpaths.is_empty();
+                let skipped = if !searches_rpath && hidden {
+                    ", and no RPATH, because it has RUNPATH"
+                } else {
+                    ""
+                };
+                // Whole-string dirs (a `:` inside one entry) are searched after the
+                // split ones, so list them in that order.
+                let mut shown = dirs_for_display(&search);
+                if !literals.is_empty() {
+                    let whole = dirs_for_display(&literals);
+                    shown = if shown.is_empty() {
+                        format!("the whole-string dirs {whole}")
+                    } else {
+                        format!("{shown}, then the whole-string dirs {whole}")
+                    };
+                }
+                if shown.is_empty() {
+                    format!(
+                        "{} searches only the default dirs{skipped}",
+                        obj_path.display()
+                    )
+                } else {
+                    format!(
+                        "{} searches {shown} before the default dirs{skipped}",
+                        obj_path.display()
+                    )
+                }
+            });
+        }
 
         // Children inherit the RPATH view this object searched (own + ancestors'), never its
         // RUNPATH — that is the "RUNPATH is not inherited" rule. An object with RUNPATH
@@ -725,6 +771,9 @@ pub fn resolve_with(
                         );
                     }
                 }
+                crate::verbose::line(|| {
+                    format!("{} needs `{soname}`: not found", obj_path.display())
+                });
                 push_unique(&mut resolution.missing, soname.clone());
                 resolution.edges.push(DepEdge {
                     from: obj_path.clone(),
@@ -750,6 +799,14 @@ pub fn resolve_with(
             {
                 push_unique(&mut cpu_notes, note);
             }
+            crate::verbose::line(|| {
+                let how = if matched { ", already loaded" } else { "" };
+                format!(
+                    "{} needs `{soname}`: {}{how}",
+                    obj_path.display(),
+                    real.display()
+                )
+            });
             // Record the edge before the visited check, so a diamond or a repeat keeps its
             // edge even though the target is staged only once.
             resolution.edges.push(DepEdge {
@@ -1435,6 +1492,12 @@ pub(crate) fn escape_if_line_breaking(text: &str) -> std::borrow::Cow<'_, str> {
     } else {
         text.into()
     }
+}
+
+// A list of directories for a `--verbose` line.
+fn dirs_for_display(dirs: &[PathBuf]) -> String {
+    let shown: Vec<_> = dirs.iter().map(|d| d.display().to_string()).collect();
+    shown.join(", ")
 }
 
 // A readable name for an ELF `e_type`, for the refusal messages above.
