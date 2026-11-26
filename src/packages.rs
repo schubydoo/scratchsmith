@@ -109,7 +109,7 @@ impl PackagesSelection {
     }
 
     /// The record outputs that are on, as `--packages` spells them, for a message that names
-    /// what to remove. Only asked when `needs_records` holds, so `sbom` is the rest.
+    /// what to remove. Its value is used only when `needs_records` holds, so `sbom` is the rest.
     pub fn records_label(&self) -> &'static str {
         match (self.sbom, self.image) {
             (true, true) => "sbom,image",
