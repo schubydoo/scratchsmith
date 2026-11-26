@@ -688,6 +688,7 @@ pub fn stage_default_includes(
 
     if let Some(body) = nss.nsswitch() {
         write_into(dest, Path::new("/etc/nsswitch.conf"), body.as_bytes())?;
+        crate::verbose::line(|| "wrote /etc/nsswitch.conf".to_string());
         report.staged.push(PathBuf::from("/etc/nsswitch.conf"));
     }
 
@@ -726,6 +727,7 @@ pub fn stage_default_includes(
             ("/etc/group", MINIMAL_GROUP),
         ] {
             write_into(dest, Path::new(path), body.as_bytes())?;
+            crate::verbose::line(|| format!("wrote {path}"));
             report.staged.push(PathBuf::from(path));
         }
     }
@@ -1165,10 +1167,6 @@ fn generate_ld_cache(dest: &Path, resolution: &Resolution) -> Result<()> {
     }
 
     let body: String = dirs.iter().map(|d| format!("{}\n", d.display())).collect();
-    crate::verbose::line(|| {
-        let shown: Vec<_> = dirs.iter().map(|d| d.display().to_string()).collect();
-        format!("built /etc/ld.so.cache for {}", shown.join(", "))
-    });
     write_into(dest, Path::new("/etc/ld.so.conf"), body.as_bytes())?;
 
     run_ldconfig(dest)?;
@@ -1177,6 +1175,10 @@ fn generate_ld_cache(dest: &Path, resolution: &Resolution) -> Result<()> {
     if !cache.exists() {
         bail!("ldconfig produced no cache at {}", cache.display());
     }
+    crate::verbose::line(|| {
+        let shown: Vec<_> = dirs.iter().map(|d| d.display().to_string()).collect();
+        format!("built /etc/ld.so.cache for {}", shown.join(", "))
+    });
     Ok(())
 }
 

@@ -466,7 +466,7 @@ pub fn resolve_with(
             }
             crate::verbose::line(|| {
                 format!(
-                    "{} loads through the interpreter {interp}, copied from {}",
+                    "{} loads through the interpreter {interp}, found at {}",
                     root_path.display(),
                     canonical(&loader).display()
                 )
@@ -610,6 +610,11 @@ pub fn resolve_with(
             search_cpu.extend(inherited_cpu.iter().cloned());
         }
         search_cpu.extend(runpath_cpu);
+        let mut literals: Vec<PathBuf> = own_literals.clone();
+        if searches_rpath {
+            literals.extend(inherited_literals.iter().cloned());
+        }
+        literals.extend(runpath_literals);
         if !obj.needed.is_empty() {
             crate::verbose::line(|| {
                 let hidden = !obj.rpaths.is_empty() || !inherited_rpaths.is_empty();
@@ -618,25 +623,30 @@ pub fn resolve_with(
                 } else {
                     ""
                 };
-                if search.is_empty() {
+                // Whole-string dirs (a `:` inside one entry) are searched after the
+                // split ones, so list them in that order.
+                let mut shown = dirs_for_display(&search);
+                if !literals.is_empty() {
+                    let whole = dirs_for_display(&literals);
+                    shown = if shown.is_empty() {
+                        format!("the whole-string dirs {whole}")
+                    } else {
+                        format!("{shown}, then the whole-string dirs {whole}")
+                    };
+                }
+                if shown.is_empty() {
                     format!(
                         "{} searches only the default dirs{skipped}",
                         obj_path.display()
                     )
                 } else {
                     format!(
-                        "{} searches {} before the default dirs{skipped}",
-                        obj_path.display(),
-                        dirs_for_display(&search)
+                        "{} searches {shown} before the default dirs{skipped}",
+                        obj_path.display()
                     )
                 }
             });
         }
-        let mut literals: Vec<PathBuf> = own_literals.clone();
-        if searches_rpath {
-            literals.extend(inherited_literals.iter().cloned());
-        }
-        literals.extend(runpath_literals);
 
         // Children inherit the RPATH view this object searched (own + ancestors'), never its
         // RUNPATH — that is the "RUNPATH is not inherited" rule. An object with RUNPATH
