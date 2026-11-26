@@ -323,10 +323,18 @@ pub struct DiffFile {
     pub size: u64,
 }
 
+/// A path in both trees whose permission bits differ, as four octal digits (`0755`).
+#[derive(Debug, Clone, Serialize)]
+pub struct DiffMode {
+    pub path: String,
+    pub before: String,
+    pub after: String,
+}
+
 /// The difference between two staged rootfs directories (`diff` subcommand): the files
 /// added, removed, and changed, plus each side's total file size. Fields are stable so the
 /// JSON can gate CI.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct DiffReport {
     /// Files present in the second tree but not the first.
     pub added: Vec<DiffFile>,
@@ -334,6 +342,12 @@ pub struct DiffReport {
     pub removed: Vec<DiffFile>,
     /// Paths in both trees whose contents differ.
     pub changed: Vec<String>,
+    /// Regular files and directories in both trees whose permission bits differ.
+    pub mode_changed: Vec<DiffMode>,
+    /// Empty directories present in the second tree but not the first.
+    pub dirs_added: Vec<String>,
+    /// Empty directories present in the first tree but not the second.
+    pub dirs_removed: Vec<String>,
     /// Total regular-file bytes in the first tree.
     pub size_before: u64,
     /// Total regular-file bytes in the second tree.
@@ -343,7 +357,12 @@ pub struct DiffReport {
 impl DiffReport {
     /// Whether the two trees differ at all — the signal for `diff --exit-code`.
     pub fn has_changes(&self) -> bool {
-        !self.added.is_empty() || !self.removed.is_empty() || !self.changed.is_empty()
+        !self.added.is_empty()
+            || !self.removed.is_empty()
+            || !self.changed.is_empty()
+            || !self.mode_changed.is_empty()
+            || !self.dirs_added.is_empty()
+            || !self.dirs_removed.is_empty()
     }
 
     /// Human-readable rendering (the `--format text` output): `+` added, `-` removed,
@@ -373,6 +392,26 @@ impl DiffReport {
         for path in &self.changed {
             out.push_str(&format!(
                 "~ {}\n",
+                crate::resolver::escape_if_line_breaking(path)
+            ));
+        }
+        for m in &self.mode_changed {
+            out.push_str(&format!(
+                "~ {} (mode {} -> {})\n",
+                crate::resolver::escape_if_line_breaking(&m.path),
+                m.before,
+                m.after
+            ));
+        }
+        for path in &self.dirs_added {
+            out.push_str(&format!(
+                "+ {}/ (empty directory)\n",
+                crate::resolver::escape_if_line_breaking(path)
+            ));
+        }
+        for path in &self.dirs_removed {
+            out.push_str(&format!(
+                "- {}/ (empty directory)\n",
                 crate::resolver::escape_if_line_breaking(path)
             ));
         }
@@ -590,6 +629,7 @@ mod tests {
             changed: vec!["bin/app".into()],
             size_before: 100,
             size_after: 200,
+            ..Default::default()
         };
         assert!(report.has_changes());
         let text = report.to_text();
@@ -616,6 +656,7 @@ mod tests {
             changed: vec![],
             size_before: 5,
             size_after: 5,
+            ..Default::default()
         };
         assert!(!report.has_changes());
         assert!(report.to_text().contains("no changes"));
@@ -641,6 +682,7 @@ mod tests {
             changed: vec![forged.into()],
             size_before: 4,
             size_after: 10,
+            ..Default::default()
         };
         let text = report.to_text();
         assert!(
@@ -675,6 +717,7 @@ mod tests {
             changed: vec!["usr/share/locale/fr/café.mo".into()],
             size_before: 1_500_000,
             size_after: 1_499_000,
+            ..Default::default()
         };
         assert_eq!(
             diff.to_text(),
@@ -733,6 +776,7 @@ mod tests {
                 changed: vec![name.into()],
                 size_before: 4,
                 size_after: 10,
+                ..Default::default()
             };
             assert_eq!(
                 diff.to_text(),
@@ -776,6 +820,7 @@ mod tests {
             changed: vec![],
             size_before: 0,
             size_after: 1,
+            ..Default::default()
         };
         assert_eq!(report(hostile).to_text(), report(honest).to_text());
         let shown = crate::resolver::escape_if_line_breaking(hostile);
@@ -1172,6 +1217,7 @@ mod tests {
             changed: vec!["bin/app".into()],
             size_before: 100,
             size_after: 200,
+            ..Default::default()
         };
         let json = serde_json::to_value(&report).unwrap();
         let sorted_keys = |v: &serde_json::Value| {
@@ -1181,10 +1227,51 @@ mod tests {
         };
         assert_eq!(
             sorted_keys(&json),
-            ["added", "changed", "removed", "size_after", "size_before"]
+            [
+                "added",
+                "changed",
+                "dirs_added",
+                "dirs_removed",
+                "mode_changed",
+                "removed",
+                "size_after",
+                "size_before"
+            ]
         );
         assert_eq!(sorted_keys(&json["added"][0]), ["path", "size"]);
         assert_eq!(sorted_keys(&json["removed"][0]), ["path", "size"]);
+        let with_mode = DiffReport {
+            mode_changed: vec![DiffMode {
+                path: "bin/app".into(),
+                before: "0755".into(),
+                after: "0644".into(),
+            }],
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&with_mode).unwrap();
+        assert_eq!(
+            sorted_keys(&json["mode_changed"][0]),
+            ["after", "before", "path"]
+        );
+    }
+
+    #[test]
+    fn diff_report_text_shows_modes_and_empty_directories() {
+        let report = DiffReport {
+            mode_changed: vec![DiffMode {
+                path: "bin/app".into(),
+                before: "0755".into(),
+                after: "0644".into(),
+            }],
+            dirs_added: vec!["tmp".into()],
+            dirs_removed: vec!["var/old".into()],
+            ..Default::default()
+        };
+        assert!(report.has_changes());
+        assert_eq!(
+            report.to_text(),
+            "~ bin/app (mode 0755 -> 0644)\n+ tmp/ (empty directory)\n- var/old/ (empty directory)\nsize: 0 B -> 0 B (+0 B)"
+        );
     }
 
     #[test]

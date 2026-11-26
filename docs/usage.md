@@ -459,7 +459,14 @@ scratchsmith diff --exit-code old new  # exit non-zero on any difference (a CI g
 ```
 
 `diff` marks an added file with `+`, a removed file with `-`, and a changed file with `~`.
-It then prints the total size delta. `--format json` emits the same data for a machine.
+It also compares permission bits: a regular file or directory in both trees whose mode differs
+prints as `~ path (mode 0755 -> 0644)`, so a lost exec bit or a world-writable directory fails
+`--exit-code`. A symlink has no mode of its own, so only its target is compared. An empty
+directory in only one tree prints as `+ path/ (empty directory)` or `- path/ (empty directory)`.
+A directory that holds anything shows through the files in it. `diff` then prints the total
+size delta. `--format json` emits the same data for a machine, with the mode changes in
+`mode_changed` (each with `path`, `before` and `after` as four octal digits) and the empty
+directories in `dirs_added` and `dirs_removed`.
 A file name that is not valid UTF-8 is escaped whole, in both the text and the JSON output:
 its invalid bytes become `\xNN`, and a backslash, a quote or a control character in it is
 escaped too.

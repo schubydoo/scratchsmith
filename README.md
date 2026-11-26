@@ -77,7 +77,7 @@ build. It is purpose-built for the hard case and useful for the easy one.
 | **Daemonless registry push**: `--push <ref>` (no daemon, and it uses your docker credentials) | ✅ |
 | **Signing the image `pack` produces**: `--push --sign` (cosign keyless, by digest) | ✅ |
 | **Multi-arch image index**: `index` (combine per-arch pushes into one tag, daemonless) | ✅ |
-| **Rootfs diff**: `diff <a> <b>` (compare two staged rootfs directories: files added, removed and changed, plus the size delta, and `--exit-code` gates CI. To compare images, `unpack` them first) | ✅ |
+| **Rootfs diff**: `diff <a> <b>` (compare two staged rootfs directories: files added, removed and changed, mode changes and empty directories, plus the size delta, and `--exit-code` gates CI. To compare images, `unpack` them first) | ✅ |
 | **Unpack an OCI image**: `unpack <archive> <dir>` (extract the layers to audit an image you did not build) | ✅ |
 
 <!-- --8<-- [end:capabilities] -->
