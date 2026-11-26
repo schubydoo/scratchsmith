@@ -1216,6 +1216,12 @@ names each one.</p>
 <td>Refused</td>
 <td>A tag, such as <code>ghcr.io/owner/app:1.0</code></td>
 </tr>
+<tr>
+<td>A <code>diff</code> argument that is not a directory, such as <code>diff a.tar b.tar</code></td>
+<td>2.1.0</td>
+<td>Refused</td>
+<td>Two rootfs directories, such as from <code>pack --no-build --output</code> or <code>unpack</code></td>
+</tr>
 </tbody>
 </table>
 <p>A registry stores a manifest only under that manifest's own digest. A push to any other digest
@@ -1223,6 +1229,10 @@ fails at the registry, and nobody knows the right digest before the image is bui
 <code>--sign</code>, scratchsmith already signs the image by the digest that the push stored. Through
 2.0.3, a push to a digest could also crash scratchsmith when the registry answered without a
 <code>Location</code> header, as AWS ECR does. That crash is fixed, and the push still goes to the digest.</p>
+<p><code>diff</code> compares two directory trees. It reads a file argument as an empty tree, so
+<code>diff --exit-code a.tar b.tar</code> prints no changes and exits 0 for two different archives. Through
+2.0.3 it did so with no warning. To compare two OCI archives, <code>unpack</code> each one into a directory
+and compare those.</p>
 <h2 id="refused-without-a-deprecation-cycle">Refused without a deprecation cycle<a class="headerlink" href="#refused-without-a-deprecation-cycle" title="Permanent link">&para;</a></h2>
 <p>Some input was the attack itself. COMPATIBILITY.md allows a minor or patch release to refuse
 such input with no deprecation cycle, and this section lists each case.</p>

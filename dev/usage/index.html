@@ -1656,6 +1656,9 @@ both images and diff those trees, which carry the layer's modes.</p>
 <p>A file name that is not valid UTF-8 is escaped whole, in both the text and the JSON output:
 its invalid bytes become <code>\xNN</code>, and a backslash, a quote or a control character in it is
 escaped too.</p>
+<p>Both arguments must be directories. A file argument, such as an OCI archive, is read as an
+empty tree and prints a deprecation warning. 3.0 refuses it. To compare two archives, <code>unpack</code>
+each one first.</p>
 <h2 id="unpack-an-image">Unpack an image<a class="headerlink" href="#unpack-an-image" title="Permanent link">&para;</a></h2>
 <p>To audit an image you did not build, extract its OCI archive to a directory:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>scratchsmith<span class="w"> </span>unpack<span class="w"> </span>app.oci.tar<span class="w"> </span>./rootfs<span class="w">   </span><span class="c1"># apply the layers into ./rootfs</span>
