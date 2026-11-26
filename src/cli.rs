@@ -172,6 +172,9 @@ pub enum Command {
         /// Add a minimal init (tini) as pid 1 wrapping the entrypoint.
         #[arg(long)]
         init: bool,
+        /// Add an empty, world-writable /tmp (mode 1777, owned by root).
+        #[arg(long)]
+        tmp: bool,
         /// Copy a host file into the image: `SRC:DST`, or `SRC` to keep its own absolute
         /// path. Regular files only, unless --symlinks keeps a symlink as a link; repeatable.
         #[arg(long = "add-file", value_name = "SRC[:DST]")]
@@ -351,6 +354,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             ca_certs,
             tz,
             init,
+            tmp,
             add_file,
             locale,
             symlinks,
@@ -430,6 +434,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                 ca_certs: file_ca_certs,
                 tz: file_tz,
                 init: file_init,
+                tmp: file_tmp,
                 add_file: file_add_file,
                 locale: file_locale,
                 symlinks: file_symlinks,
@@ -506,6 +511,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                     ca_certs: ca_certs || file_ca_certs,
                     tz: tz || file_tz,
                     init: init || file_init,
+                    tmp: tmp || file_tmp,
                 },
                 add_files: if add_file.is_empty() {
                     file_add_file
