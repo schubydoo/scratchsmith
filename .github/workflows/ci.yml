@@ -368,7 +368,7 @@ jobs:
     # are upstream release builds, and duckdb is C++, so it also needs libstdc++ staged. The
     # nightly full list belongs to schubydoo/scratchsmith-images, not here.
     # Each tool is its project's x86_64 glibc Linux archive from its GitHub release, checked
-    # against its pinned sha256 and its build-provenance attestation.
+    # against its pinned sha256 and, for ruff and uv, its build-provenance attestation.
     name: pack real tools
     runs-on: ubuntu-latest
     timeout-minutes: 10 # new job; a local run of the three packs takes well under a minute
@@ -403,12 +403,16 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/dl" "$RUNNER_TEMP/tools"
           cd "$RUNNER_TEMP/dl"
-          # tool, GitHub repo, release URL, pinned sha256, path of the binary in the archive
+          # tool, repo whose build-provenance attestation must match (empty: none published),
+          # release URL, pinned sha256, path of the binary in the archive
           fetch() {
-            local tool=$1 repo=$2 url=$3 sha=$4 member=$5 file="${3##*/}"
+            local tool=$1 attested=$2 url=$3 sha=$4 member=$5 file="${3##*/}"
             curl -fsSL --retry 3 -o "$file" "$url"
             echo "$sha  $file" | sha256sum -c -
-            gh attestation verify "$file" --repo "$repo"
+            if [ -n "$attested" ]; then
+              gh attestation verify "$file" --repo "$attested"
+              echo "$file: attestation verified"
+            fi
             mkdir -p "x-$tool" && tar -xzf "$file" -C "x-$tool"
             install -m 0755 "x-$tool/$member" "$RUNNER_TEMP/tools/$tool"
           }
@@ -418,7 +422,9 @@ jobs:
           fetch uv astral-sh/uv \
             "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
             "$UV_SHA256" uv-x86_64-unknown-linux-gnu/uv
-          fetch duckdb duckdb/duckdb \
+          # duckdb publishes no attestation for its release archives (the API answers 404), so
+          # its sha256 pin is the whole check.
+          fetch duckdb "" \
             "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb-cli-linux-amd64.tar.gz" \
             "$DUCKDB_SHA256" duckdb
           # The job tests packing a dynamic glibc ELF, so a static or musl build would pass
