@@ -3,7 +3,8 @@
 
 use scratchsmith::image::{smoke_run, ImageConfig, Runtime};
 use scratchsmith::pack::PackOptions;
-use scratchsmith::stager::RuntimeExtras;
+use scratchsmith::resolver::{resolve, Sysroot};
+use scratchsmith::stager::{AddFile, RuntimeExtras};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Mutex;
@@ -184,6 +185,102 @@ fn tmp_stages_an_empty_sticky_tmp_without_docker() {
     let bare = tmp.path().join("bare");
     scratchsmith::pack::stage_only(bin, &bare, &PackOptions::default()).unwrap();
     assert!(!bare.join("tmp").exists());
+}
+
+#[test]
+fn add_binary_stages_the_added_elf_with_its_libraries() {
+    let Some(fixture) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let bash = Path::new("/usr/bin/bash");
+    if !bash.exists() {
+        skip_required("no /usr/bin/bash to add");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("rootfs");
+    let opts = PackOptions {
+        add_binaries: vec![AddFile::parse("/usr/bin/bash:/bin/bash").unwrap()],
+        ..Default::default()
+    };
+    scratchsmith::pack::stage_only(fixture, &out, &opts).expect("stage with --add-binary");
+    assert!(out.join("bin/bash").is_file(), "bash not staged");
+    // Every library bash needs is in the tree, at the path it was resolved to.
+    let theirs = resolve(bash, &Sysroot::new("/")).unwrap();
+    assert!(!theirs.libs.is_empty());
+    for lib in &theirs.libs {
+        let image = out.join(lib.path.strip_prefix("/").unwrap());
+        assert!(image.exists(), "{} not staged", lib.path.display());
+    }
+    // Without the flag, bash's own libraries (libtinfo on Debian and Ubuntu) do not ship.
+    let bare = tmp.path().join("bare");
+    scratchsmith::pack::stage_only(fixture, &bare, &PackOptions::default()).unwrap();
+    let id_libs = resolve(fixture, &Sysroot::new("/")).unwrap().libs;
+    for lib in theirs.libs.iter().filter(|l| !id_libs.contains(l)) {
+        assert!(!bare.join(lib.path.strip_prefix("/").unwrap()).exists());
+    }
+}
+
+#[test]
+fn add_binary_refuses_a_file_that_is_not_an_elf() {
+    let Some(fixture) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("run.sh");
+    std::fs::write(&script, b"#!/bin/sh\necho hi\n").unwrap();
+    let opts = PackOptions {
+        add_binaries: vec![AddFile {
+            src: script.clone(),
+            dst: "/run.sh".into(),
+        }],
+        ..Default::default()
+    };
+    let err =
+        scratchsmith::pack::stage_only(fixture, &tmp.path().join("rootfs"), &opts).unwrap_err();
+    let err = format!("{err:#}");
+    assert!(
+        err.contains("is not an ELF file: add it with --add-file"),
+        "{err}"
+    );
+
+    // A mistyped path is not told to use --add-file.
+    let opts = PackOptions {
+        add_binaries: vec![AddFile {
+            src: tmp.path().join("missing"),
+            dst: "/missing".into(),
+        }],
+        ..Default::default()
+    };
+    let err =
+        scratchsmith::pack::stage_only(fixture, &tmp.path().join("rootfs2"), &opts).unwrap_err();
+    let err = format!("{err:#}");
+    assert!(!err.contains("--add-file"), "{err}");
+}
+
+#[test]
+fn add_binary_copies_a_symlinked_program_whatever_symlinks_says() {
+    let Some(fixture) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let link = tmp.path().join("my-id");
+    std::os::unix::fs::symlink(fixture, &link).unwrap();
+    let out = tmp.path().join("rootfs");
+    let opts = PackOptions {
+        add_binaries: vec![AddFile {
+            src: link,
+            dst: "/bin/my-id".into(),
+        }],
+        symlinks: scratchsmith::stager::SymlinkMode::Preserve,
+        ..Default::default()
+    };
+    scratchsmith::pack::stage_only(fixture, &out, &opts).expect("stage with a linked --add-binary");
+    let meta = std::fs::symlink_metadata(out.join("bin/my-id")).unwrap();
+    assert!(meta.is_file(), "the added program is a file, not a link");
 }
 
 #[test]
@@ -604,6 +701,46 @@ fn a_tmp_image_lets_the_default_user_create_a_file_in_tmp() {
         !without.status.success(),
         "a scratch image with no --tmp has no /tmp: {without:?}"
     );
+}
+
+#[test]
+fn an_added_bash_runs_in_the_image_with_no_include() {
+    if !docker_available() {
+        skip_required("no Docker daemon");
+        return;
+    }
+    let Some(fixture) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    if !Path::new("/usr/bin/bash").exists() {
+        skip_required("no /usr/bin/bash to add");
+        return;
+    }
+    let _g = docker_lock();
+    let opts = PackOptions {
+        add_binaries: vec![AddFile::parse("/usr/bin/bash:/bin/bash").unwrap()],
+        ..Default::default()
+    };
+    let tag = scratchsmith::pack::run(fixture, &opts)
+        .expect("pack id with bash added")
+        .tag
+        .unwrap();
+    let run = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "--entrypoint",
+            "/bin/bash",
+            &tag,
+            "-c",
+            "echo ok",
+        ])
+        .output()
+        .unwrap();
+    rmi(&tag);
+    assert!(run.status.success(), "bash -c in the image: {run:?}");
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "ok");
 }
 
 #[test]

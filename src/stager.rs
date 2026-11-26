@@ -202,16 +202,21 @@ impl AddFile {
     /// `--add-file /etc/motd` mirrors the host. The split is on the LAST colon, so a
     /// source path containing one still parses as long as the destination does not.
     pub fn parse(spec: &str) -> Result<AddFile> {
+        AddFile::parse_as(spec, "--add-file")
+    }
+
+    /// [`AddFile::parse`] for the flag named `flag` (`--add-binary` takes the same spec).
+    pub fn parse_as(spec: &str, flag: &str) -> Result<AddFile> {
         let (src, dst) = spec.rsplit_once(':').unwrap_or((spec, spec));
         if src.is_empty() || dst.is_empty() {
-            bail!("--add-file '{spec}': expected SRC or SRC:DST, both non-empty");
+            bail!("{flag} '{spec}': expected SRC or SRC:DST, both non-empty");
         }
         let dst_path = Path::new(dst);
         if !dst_path.is_absolute() {
             // Name both halves: a colon inside a bare SRC splits the spec in a way the user
             // never intended, and "the image path must be absolute" alone would not show it.
             bail!(
-                "--add-file '{spec}': read '{src}' as the source and '{dst}' as the image path, \
+                "{flag} '{spec}': read '{src}' as the source and '{dst}' as the image path, \
                  but the image path must be absolute, e.g. ./app.conf:/etc/app.conf"
             );
         }
@@ -220,7 +225,7 @@ impl AddFile {
             .components()
             .any(|c| c == std::path::Component::ParentDir)
         {
-            bail!("--add-file '{spec}': the image path must not contain '..'");
+            bail!("{flag} '{spec}': the image path must not contain '..'");
         }
         Ok(AddFile {
             src: PathBuf::from(src),
@@ -241,26 +246,37 @@ impl AddFile {
 /// Entries are processed in order, and "is the target in the image" is asked at that moment,
 /// so an `--add-file` link can point at an earlier `--add-file` but not at a later one.
 pub fn stage_added_files(dest: &Path, files: &[AddFile], mode: SymlinkMode) -> Result<Vec<String>> {
+    stage_added_files_as(dest, files, mode, "--add-file")
+}
+
+/// [`stage_added_files`] for the flag named `flag`, which every message names. `--add-binary`
+/// copies its ELF files this way, after `pack` has resolved their libraries.
+pub fn stage_added_files_as(
+    dest: &Path,
+    files: &[AddFile],
+    mode: SymlinkMode,
+    flag: &str,
+) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
     for file in files {
         // symlink_metadata describes the link itself, so this runs BEFORE any decision to
         // follow it. metadata() would error on a broken link that Preserve can still honor.
         let link_md = std::fs::symlink_metadata(&file.src)
-            .with_context(|| format!("--add-file: cannot read {}", file.src.display()))?;
+            .with_context(|| format!("{flag}: cannot read {}", file.src.display()))?;
 
         if link_md.file_type().is_symlink() && mode != SymlinkMode::CopyAll {
             // A link must not take the place of a staged file either. The copy path checks
             // this too, further down, where it also reports a bad SOURCE first: "you named a
             // directory" is more useful to the user than "the destination is taken".
-            ensure_not_staged(dest, &file.dst)?;
+            ensure_not_staged(dest, &file.dst, flag)?;
             let value = std::fs::read_link(&file.src)
-                .with_context(|| format!("--add-file: reading link {}", file.src.display()))?;
+                .with_context(|| format!("{flag}: reading link {}", file.src.display()))?;
             let safe = link_target_in_image(dest, &file.dst, &value);
             match mode {
                 SymlinkMode::Preserve => {
                     if !safe {
                         warnings.push(format!(
-                            "--add-file: {} is a symlink to {}, which is not in the image, so it \
+                            "{flag}: {} is a symlink to {}, which is not in the image, so it \
                              will dangle",
                             file.dst.display(),
                             value.display()
@@ -278,7 +294,7 @@ pub fn stage_added_files(dest: &Path, files: &[AddFile], mode: SymlinkMode) -> R
                         place_symlink(dest, &file.dst, &value)?;
                     } else {
                         warnings.push(format!(
-                            "--add-file: skipped {}: it is a symlink to {}, which is not in the \
+                            "{flag}: skipped {}: it is a symlink to {}, which is not in the \
                              image",
                             file.dst.display(),
                             value.display()
@@ -296,7 +312,7 @@ pub fn stage_added_files(dest: &Path, files: &[AddFile], mode: SymlinkMode) -> R
 
         // metadata() follows symlinks, so a symlinked source stages the file it names.
         let md = std::fs::metadata(&file.src)
-            .with_context(|| format!("--add-file: cannot read {}", file.src.display()))?;
+            .with_context(|| format!("{flag}: cannot read {}", file.src.display()))?;
         if !md.is_file() {
             let kind = if md.is_dir() {
                 "a directory"
@@ -304,14 +320,14 @@ pub fn stage_added_files(dest: &Path, files: &[AddFile], mode: SymlinkMode) -> R
                 "not a regular file"
             };
             bail!(
-                "--add-file: {} is {kind}; --add-file takes regular files",
+                "{flag}: {} is {kind}; {flag} takes regular files",
                 file.src.display()
             );
         }
-        ensure_not_staged(dest, &file.dst)?;
+        ensure_not_staged(dest, &file.dst, flag)?;
         copy_into(&file.src, dest, &file.dst).with_context(|| {
             format!(
-                "--add-file: staging {} at {}",
+                "{flag}: staging {} at {}",
                 file.src.display(),
                 file.dst.display()
             )
@@ -323,10 +339,10 @@ pub fn stage_added_files(dest: &Path, files: &[AddFile], mode: SymlinkMode) -> R
 // Refuse to land on anything already there. `std::fs::copy` would truncate it without a word,
 // and on a soname symlink it writes THROUGH the link and corrupts the real library.
 // symlink_metadata sees the link itself, so both cases are caught here.
-fn ensure_not_staged(dest: &Path, image_path: &Path) -> Result<()> {
+fn ensure_not_staged(dest: &Path, image_path: &Path, flag: &str) -> Result<()> {
     if is_staged(dest, image_path) {
         bail!(
-            "--add-file: {} is already in the image; --add-file will not replace a staged \
+            "{flag}: {} is already in the image; {flag} will not replace a staged \
              file, and each image path can be given only once",
             image_path.display()
         );

@@ -27,6 +27,7 @@ file**.
 | `tmp` | `--tmp` | Add an empty `/tmp` directory, mode `1777` and owned by uid 0, so the non-root user can write there. A `--no-build` rootfs keeps the mode, owned by the user who packed it. |
 | `init` | `--init` | Add a minimal init (`tini`) as pid 1 wrapping the entrypoint. A static `tini-static` is preferred. A dynamic `tini` still packs, with a warning. |
 | `add-file` | `--add-file` | Copy a host file into the image (list). Each entry is `SRC:DST`, or a bare absolute `SRC` to keep the host path. With the default `symlinks = "copy-all"` the entry takes regular files only. A missing source, a directory, or a `DST` already in the image then fails the pack. Another `symlinks` mode changes that for a source that is itself a symlink. In an image the file lands owned by uid 0 at mode `0644`, or `0755` for an executable source. The layer writer canonicalizes modes, so do not add a secret this way. |
+| `add-binary` | `--add-binary` | Copy a host ELF into the image with the shared libraries it needs (list, same `SRC:DST` or `SRC` form as `add-file`). Its libraries are resolved with the packed binary's `ld.so` rules and staged once. An ELF for another architecture or loader fails the pack, and so does one that uses `$ORIGIN` with a `DST` outside its real directory. See [Usage](usage.md#add-a-program-with-its-libraries). |
 | `locale` | `--locale` | Stage a compiled glibc locale under `/usr/lib/locale` (list). Name it as glibc does, such as `en_US.UTF-8`. The data comes from a matching host directory under `/usr/lib/locale`. When there is none, `localedef` compiles the locale from `/usr/share/i18n`. The host `locale-archive` is never copied. Set `LANG`, `LC_ALL`, or a per-category `LC_*` entry with `--env` to select the locale. If nothing selects a staged locale, the pack warns. If a selector names a locale the pack did not stage, the pack warns as well. |
 | `symlinks` | `--symlinks` | What a symlink you name becomes in the image: `copy-all` (default), `preserve`, `copy-unsafe`, or `skip-unsafe`. Covers the packed binary path and each `add-file` source. See [Usage](usage.md) for the mode table. |
 | `include` | `--include` | Force-stage extra libraries by soname or path, for example `dlopen`'d plugins (list). |
@@ -65,8 +66,10 @@ scan = true
 scan-fail-on = "high"
 ca-certs = true
 tz = true
+tmp = true
 init = true
 add-file = ["./app.conf:/etc/app/app.conf", "/etc/motd"]
+add-binary = ["/usr/bin/bash:/bin/bash"]
 locale = ["en_US.UTF-8"]
 symlinks = "copy-all"
 include = ["libnss_myhostname.so.2"]

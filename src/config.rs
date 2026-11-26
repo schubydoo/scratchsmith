@@ -73,6 +73,9 @@ pub struct Config {
     /// Host files to copy into the image, each `SRC:DST` or bare `SRC` (`--add-file`).
     #[serde(default, rename = "add-file")]
     pub add_file: Vec<String>,
+    /// Host ELF files to copy in with their libraries, each `SRC:DST` or `SRC` (`--add-binary`).
+    #[serde(default, rename = "add-binary")]
+    pub add_binary: Vec<String>,
     /// Compiled glibc locales to stage under `/usr/lib/locale` (`--locale`).
     #[serde(default)]
     pub locale: Vec<String>,
@@ -244,6 +247,7 @@ impl Config {
             init: self.init || over.init,
             tmp: self.tmp || over.tmp,
             add_file: vec_or(self.add_file, over.add_file),
+            add_binary: vec_or(self.add_binary, over.add_binary),
             locale: vec_or(self.locale, over.locale),
             symlinks: over.symlinks.or(self.symlinks),
             include: vec_or(self.include, over.include),
@@ -297,6 +301,7 @@ mod tests {
             init = true
             tmp = true
             add-file = ["./app.conf:/etc/app.conf", "/etc/motd"]
+            add-binary = ["/usr/bin/bash:/bin/bash"]
             locale = ["en_US.UTF-8"]
             symlinks = "preserve"
             include = ["libfoo.so"]
@@ -326,6 +331,7 @@ mod tests {
                 "/etc/motd".to_string()
             ]
         );
+        assert_eq!(cfg.add_binary, vec!["/usr/bin/bash:/bin/bash".to_string()]);
         assert_eq!(cfg.locale, vec!["en_US.UTF-8".to_string()]);
         assert_eq!(cfg.symlinks, Some(crate::stager::SymlinkMode::Preserve));
         assert_eq!(cfg.include, vec!["libfoo.so".to_string()]);

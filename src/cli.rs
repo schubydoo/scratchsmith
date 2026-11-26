@@ -179,6 +179,10 @@ pub enum Command {
         /// path. Regular files only, unless --symlinks keeps a symlink as a link; repeatable.
         #[arg(long = "add-file", value_name = "SRC[:DST]")]
         add_file: Vec<String>,
+        /// Copy a host ELF into the image with the shared libraries it needs, resolved as for
+        /// the packed binary: `SRC:DST`, or `SRC` to keep its own absolute path. Repeatable.
+        #[arg(long = "add-binary", value_name = "SRC[:DST]")]
+        add_binary: Vec<String>,
         /// Stage a compiled glibc locale at /usr/lib/locale, e.g. en_US.UTF-8; repeatable.
         /// Set the locale to use with --env LANG=...
         #[arg(long = "locale", value_name = "NAME")]
@@ -356,6 +360,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             init,
             tmp,
             add_file,
+            add_binary,
             locale,
             symlinks,
             include,
@@ -436,6 +441,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                 init: file_init,
                 tmp: file_tmp,
                 add_file: file_add_file,
+                add_binary: file_add_binary,
                 locale: file_locale,
                 symlinks: file_symlinks,
                 include: file_include,
@@ -521,6 +527,14 @@ fn dispatch(cli: Cli) -> Result<()> {
                 .iter()
                 .map(|spec| crate::stager::AddFile::parse(spec).map_err(usage))
                 .collect::<Result<Vec<_>>>()?,
+                add_binaries: if add_binary.is_empty() {
+                    file_add_binary
+                } else {
+                    add_binary
+                }
+                .iter()
+                .map(|spec| crate::stager::AddFile::parse_as(spec, "--add-binary").map_err(usage))
+                .collect::<Result<Vec<_>>>()?,
                 locales: if locale.is_empty() {
                     file_locale
                 } else {
@@ -601,6 +615,21 @@ fn dispatch(cli: Cli) -> Result<()> {
             {
                 bail!(UsageError(format!(
                     "--add-file: {} is given more than once; give each image path only once",
+                    dup.dst
+                        .components()
+                        .collect::<std::path::PathBuf>()
+                        .display()
+                )));
+            }
+            // `seen` holds the --add-file paths, so this also catches one given to both flags.
+            if let Some(dup) = opts
+                .add_binaries
+                .iter()
+                .find(|f| !seen.insert(f.dst.as_path()))
+            {
+                bail!(UsageError(format!(
+                    "--add-binary: {} is given more than once, or also to --add-file; give each \
+                     image path only once",
                     dup.dst
                         .components()
                         .collect::<std::path::PathBuf>()
