@@ -530,6 +530,30 @@ fn diff_flags_drift_with_exit_code() {
 }
 
 #[test]
+fn diff_warns_on_a_file_argument_and_keeps_its_exit_code() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (a, b) = (tmp.path().join("a.tar"), tmp.path().join("b.tar"));
+    std::fs::write(&a, "one").unwrap();
+    std::fs::write(&b, "two").unwrap();
+    let out = run(&[
+        "diff",
+        "--exit-code",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+    ]);
+    // 2.x reads each file as an empty tree, so the exit code stays 0 until 3.0 refuses it.
+    assert_eq!(out.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    for name in ["a.tar", "b.tar"] {
+        assert!(
+            stderr.contains(&format!("{name} is not a directory")),
+            "{stderr}"
+        );
+    }
+    assert_eq!(stderr.matches("3.0 will refuse it").count(), 2, "{stderr}");
+}
+
+#[test]
 fn diff_counts_an_added_non_utf8_name_as_drift() {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;

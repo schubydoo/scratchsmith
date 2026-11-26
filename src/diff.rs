@@ -101,6 +101,21 @@ fn scan(root: &Path) -> Result<Tree> {
     Ok(tree)
 }
 
+// The deprecation line for an argument that exists and is not a directory. The walk reads it
+// as an empty tree, so two different files compare as no change. 3.0 refuses it. A missing
+// path is already an error, from the walk.
+fn not_a_directory(path: &Path) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    (!meta.is_dir()).then(|| {
+        format!(
+            "{} is not a directory, so diff reads it as an empty tree. This is deprecated, and \
+             3.0 will refuse it. Pass a rootfs directory, such as one from `pack --no-build \
+             --output` or `unpack`",
+            crate::resolver::escape_for_display(&path.to_string_lossy())
+        )
+    })
+}
+
 // Hash a file without holding it in memory: a sparse file from an unpacked hostile layer can
 // claim far more bytes than there is RAM.
 fn sha256_file(path: &Path) -> std::io::Result<String> {
@@ -140,6 +155,9 @@ fn report_path(path: &OsStr) -> String {
 /// `a`, and changed between them, the files and directories whose mode changed, the empty
 /// directories in only one tree, plus each side's total file size.
 pub fn build(a: &Path, b: &Path) -> Result<DiffReport> {
+    for warning in [a, b].into_iter().filter_map(not_a_directory) {
+        eprintln!("warning: {warning}");
+    }
     let old_tree = scan(a)?;
     let new_tree = scan(b)?;
     let (old, new) = (&old_tree.files, &new_tree.files);
@@ -214,6 +232,19 @@ pub fn build(a: &Path, b: &Path) -> Result<DiffReport> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn only_an_argument_that_is_not_a_directory_is_deprecated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("a.tar");
+        fs::write(&file, b"x").unwrap();
+        let line = not_a_directory(&file).expect("a file is not a directory");
+        assert!(line.contains("a.tar is not a directory"), "{line}");
+        assert!(line.contains("3.0 will refuse it"), "{line}");
+        assert_eq!(not_a_directory(tmp.path()), None);
+        // A missing path stays the walk's error, with no warning ahead of it.
+        assert_eq!(not_a_directory(&tmp.path().join("missing")), None);
+    }
 
     fn write(dir: &Path, rel: &str, body: &[u8]) {
         let p = dir.join(rel);

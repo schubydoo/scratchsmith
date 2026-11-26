@@ -479,6 +479,10 @@ A file name that is not valid UTF-8 is escaped whole, in both the text and the J
 its invalid bytes become `\xNN`, and a backslash, a quote or a control character in it is
 escaped too.
 
+Both arguments must be directories. A file argument, such as an OCI archive, is read as an
+empty tree and prints a deprecation warning. 3.0 refuses it. To compare two archives, `unpack`
+each one first.
+
 ## Unpack an image
 
 To audit an image you did not build, extract its OCI archive to a directory:
