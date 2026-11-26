@@ -3,7 +3,7 @@ name: Reproduce release
 # Rebuild each release binary from its tag and compare it byte for byte with the binary in
 # the published tarball. The build recipe is the tag's own .github/actions/release-build
 # (pinned Rust, zig, cargo-zigbuild and scripts/build-release-binary.sh), the one that
-# knope-release.yml used for the release. REPRODUCE.md has the same steps for a third party.
+# the release used (release-binaries.yml, or knope-release.yml at older tags). REPRODUCE.md has the same steps for a third party.
 #
 # - push of a `v*` tag: knope creates the tag when it publishes the release, so the tarballs
 #   are already attached. A red run means that release is not reproducible.

@@ -1,8 +1,8 @@
 name: Release binary build
 description: >-
   Install the pinned Rust, zig and cargo-zigbuild, then build one static-musl release binary
-  with scripts/build-release-binary.sh. knope-release.yml builds the published binaries with
-  it, and reproduce.yml rebuilds them with it from the release tag, so both use one recipe.
+  with scripts/build-release-binary.sh. release-binaries.yml builds the published binaries
+  with it, and reproduce.yml rebuilds them with it from the release tag, so both use one recipe.
 
 # The versions pinned here are part of the recipe: REPRODUCE.md sends a third party to this
 # file at the release tag for them. A change to any of them changes the release bytes.
