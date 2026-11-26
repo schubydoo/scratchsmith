@@ -320,7 +320,14 @@ fn deterministic_tar(root: &Path) -> Result<Vec<u8>> {
         } else if meta.is_dir() {
             header.set_entry_type(tar::EntryType::Directory);
             header.set_size(0);
-            header.set_mode(0o755);
+            // Only `--tmp` stages a sticky directory: every other directory is made with the
+            // umask's mode, so keying on the bit keeps the host's umask out of the layer.
+            let sticky = meta.permissions().mode() & 0o1000 != 0;
+            header.set_mode(if sticky {
+                crate::stager::TMP_MODE
+            } else {
+                0o755
+            });
             ar.append_data(&mut header, rel, std::io::empty())?;
         } else {
             let data = std::fs::read(&path)
@@ -769,6 +776,38 @@ mod tests {
         assert_eq!(a.diff_id, b.diff_id, "diff_id must be stable");
         assert_eq!(a.digest, b.digest, "layer digest must be stable");
         assert_eq!(a.gzip, b.gzip, "gzip bytes must be identical");
+    }
+
+    #[test]
+    fn a_sticky_directory_keeps_1777_and_every_other_directory_is_0755() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tiny_rootfs();
+        let root = tmp.path().join("root");
+        std::fs::create_dir(root.join("tmp")).unwrap();
+        std::fs::set_permissions(root.join("tmp"), std::fs::Permissions::from_mode(0o1777))
+            .unwrap();
+        // A world-writable directory without the bit is the host's umask, not --tmp.
+        std::fs::set_permissions(root.join("usr"), std::fs::Permissions::from_mode(0o777)).unwrap();
+        let tar_bytes = deterministic_tar(&root).unwrap();
+        let mut ar = tar::Archive::new(&tar_bytes[..]);
+        let modes: std::collections::BTreeMap<String, (u32, u64)> = ar
+            .entries()
+            .unwrap()
+            .map(|e| {
+                let e = e.unwrap();
+                let h = e.header();
+                let path = e.path().unwrap().to_string_lossy().into_owned();
+                (path, (h.mode().unwrap(), h.uid().unwrap()))
+            })
+            .filter(|(path, _)| !path.contains("libx"))
+            .collect();
+        assert_eq!(modes["tmp"], (0o1777, 0), "{modes:?}");
+        assert_eq!(modes["usr"], (0o755, 0), "{modes:?}");
+        assert_eq!(modes["usr/lib"], (0o755, 0), "{modes:?}");
+        assert_eq!(
+            build_layer(&root).unwrap().gzip,
+            build_layer(&root).unwrap().gzip
+        );
     }
 
     #[test]

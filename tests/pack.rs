@@ -149,6 +149,7 @@ fn runtime_extras_stage_ca_and_tz_without_docker() {
             ca_certs: true,
             tz: true,
             init: false,
+            tmp: false,
         },
         ..Default::default()
     };
@@ -158,6 +159,31 @@ fn runtime_extras_stage_ca_and_tz_without_docker() {
         "CA bundle not staged"
     );
     assert!(out.join("etc/localtime").exists(), "localtime not staged");
+}
+
+#[test]
+fn tmp_stages_an_empty_sticky_tmp_without_docker() {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("rootfs");
+    let opts = PackOptions {
+        extras: RuntimeExtras {
+            tmp: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    scratchsmith::pack::stage_only(bin, &out, &opts).expect("stage with --tmp");
+    let meta = std::fs::symlink_metadata(out.join("tmp")).unwrap();
+    assert!(meta.is_dir());
+    assert_eq!(meta.permissions().mode() & 0o7777, 0o1777);
+    assert_eq!(std::fs::read_dir(out.join("tmp")).unwrap().count(), 0);
+
+    // Without the flag there is no /tmp, as before.
+    let bare = tmp.path().join("bare");
+    scratchsmith::pack::stage_only(bin, &bare, &PackOptions::default()).unwrap();
+    assert!(!bare.join("tmp").exists());
 }
 
 #[test]
@@ -535,6 +561,49 @@ fn init_wraps_the_entrypoint_with_tini_and_still_runs() {
     assert!(run.status.success(), "tini-wrapped run failed: {run:?}");
     assert!(String::from_utf8_lossy(&run.stdout).contains("scratchsmith"));
     rmi(&tag);
+}
+
+#[test]
+fn a_tmp_image_lets_the_default_user_create_a_file_in_tmp() {
+    if !docker_available() {
+        skip_required("no Docker daemon");
+        return;
+    }
+    // touch is a dynamic glibc binary on every host that runs these tests, and it writes the
+    // file itself: a scratch image has no shell to do it.
+    let touch = Path::new("/usr/bin/touch");
+    if !touch.exists() {
+        skip_required("no /usr/bin/touch to pack");
+        return;
+    }
+    let _g = docker_lock();
+    let touch_in_tmp = |tmp: bool| {
+        let opts = PackOptions {
+            extras: RuntimeExtras {
+                tmp,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let tag = scratchsmith::pack::run(touch, &opts)
+            .expect("pack touch")
+            .tag
+            .unwrap();
+        // No --tmpfs and no --user: the image's own /tmp, as the default non-root user.
+        let run = Command::new("docker")
+            .args(["run", "--rm", &tag, "/tmp/ok"])
+            .output()
+            .unwrap();
+        rmi(&tag);
+        run
+    };
+    let with = touch_in_tmp(true);
+    assert!(with.status.success(), "touch /tmp/ok with --tmp: {with:?}");
+    let without = touch_in_tmp(false);
+    assert!(
+        !without.status.success(),
+        "a scratch image with no --tmp has no /tmp: {without:?}"
+    );
 }
 
 #[test]

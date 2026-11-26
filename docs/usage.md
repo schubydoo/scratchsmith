@@ -318,6 +318,21 @@ certificates, which you add separately with `--ca-certs`. `--nss none` also skip
 `files` also drops `/etc/passwd` and `/etc/group`. Because glibc reads them through the `files`
 module, user and group lookups do not work there.
 
+## Add a writable /tmp
+
+A scratch image has no `/tmp`, and many programs exit at startup without one. `--tmp` adds an
+empty `/tmp`, mode `1777` and owned by uid 0, the same as on a Linux host. The image's
+non-root user can then write there with no `--tmpfs` at run time.
+
+```sh
+scratchsmith pack --tmp ./app
+```
+
+The layer stays reproducible: the directory gets the same mode, owner and mtime on every
+pack. A `--no-build` rootfs has the same mode, owned by the user who ran the pack. Files
+written to `/tmp` live in the container's writable layer, so mount a `--tmpfs` instead when
+the container runs with `--read-only`.
+
 ## Add a host file
 
 `--ca-certs` and `--tz` each add one fixed file. To add any other host file, use `--add-file`.

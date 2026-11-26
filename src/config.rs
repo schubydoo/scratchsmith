@@ -67,6 +67,9 @@ pub struct Config {
     /// Add a minimal init (`tini`) as pid 1.
     #[serde(default)]
     pub init: bool,
+    /// Add an empty, world-writable `/tmp` (mode 1777).
+    #[serde(default)]
+    pub tmp: bool,
     /// Host files to copy into the image, each `SRC:DST` or bare `SRC` (`--add-file`).
     #[serde(default, rename = "add-file")]
     pub add_file: Vec<String>,
@@ -239,6 +242,7 @@ impl Config {
             ca_certs: self.ca_certs || over.ca_certs,
             tz: self.tz || over.tz,
             init: self.init || over.init,
+            tmp: self.tmp || over.tmp,
             add_file: vec_or(self.add_file, over.add_file),
             locale: vec_or(self.locale, over.locale),
             symlinks: over.symlinks.or(self.symlinks),
@@ -291,6 +295,7 @@ mod tests {
             ca-certs = true
             tz = true
             init = true
+            tmp = true
             add-file = ["./app.conf:/etc/app.conf", "/etc/motd"]
             locale = ["en_US.UTF-8"]
             symlinks = "preserve"
@@ -312,7 +317,7 @@ mod tests {
         assert_eq!(cfg.sbom_file, Some(PathBuf::from("out.json")));
         assert_eq!(cfg.sbom_format, Some(SbomFormat::SpdxJson));
         assert_eq!(cfg.scan_fail_on, Some(Severity::High));
-        assert!(cfg.ca_certs && cfg.tz && cfg.init);
+        assert!(cfg.ca_certs && cfg.tz && cfg.init && cfg.tmp);
         assert_eq!(cfg.packages.len(), 3);
         assert_eq!(
             cfg.add_file,

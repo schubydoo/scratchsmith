@@ -32,6 +32,8 @@ pub struct RuntimeExtras {
     pub tz: bool,
     /// A minimal init (`tini`) at /tini, to reap zombies / forward signals.
     pub init: bool,
+    /// An empty, world-writable /tmp (mode 1777), which many programs need to start.
+    pub tmp: bool,
 }
 
 /// Result of staging runtime extras — notably where `tini` landed, so the caller can
@@ -79,7 +81,34 @@ pub fn stage_runtime_extras(dest: &Path, extras: &RuntimeExtras) -> Result<Runti
         result.copied.push((tini, PathBuf::from("/tini")));
     }
 
+    if extras.tmp {
+        stage_tmp(dest)?;
+    }
+
     Ok(result)
+}
+
+/// The mode `--tmp` gives /tmp: world-writable with the sticky bit, as on any Linux host.
+/// The layer keeps it because the tar maps a sticky directory to exactly this mode.
+pub const TMP_MODE: u32 = 0o1777;
+
+// The mode is set explicitly, not through `create_dir`'s umask, so the rootfs a `--no-build`
+// pack writes holds the same /tmp as the image layer. A library staged from an RPATH under
+// /tmp already made it a directory, and only its mode changes. A link or file there is
+// refused rather than followed out of the tree.
+fn stage_tmp(dest: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = dest.join("tmp");
+    match tmp.symlink_metadata() {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => bail!("--tmp: the staged rootfs already has /tmp, and it is not a directory"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        }
+        Err(e) => return Err(e).with_context(|| format!("reading {}", tmp.display())),
+    }
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(TMP_MODE))
+        .with_context(|| format!("setting the mode of {}", tmp.display()))
 }
 
 // Where `--init` looks for tini. The static builds come first so that, between two
@@ -1447,6 +1476,30 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let result = stage_runtime_extras(tmp.path(), &RuntimeExtras::default()).unwrap();
         assert!(result.warnings.is_empty() && result.tini_image_path.is_none());
+    }
+
+    #[test]
+    fn tmp_keeps_a_staged_tmp_directory_and_refuses_anything_else_there() {
+        use std::os::unix::fs::PermissionsExt;
+        let extras = RuntimeExtras {
+            tmp: true,
+            ..Default::default()
+        };
+        let mode = |p: &Path| fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777;
+        // A library staged under /tmp already made the directory: it stays, with the mode.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("tmp/lib")).unwrap();
+        stage_runtime_extras(tmp.path(), &extras).unwrap();
+        assert_eq!(mode(&tmp.path().join("tmp")), TMP_MODE);
+        assert!(tmp.path().join("tmp/lib").is_dir());
+        // A link there is never followed: the host directory keeps its mode.
+        let host = tempfile::tempdir().unwrap();
+        let before = mode(host.path());
+        let linked = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(host.path(), linked.path().join("tmp")).unwrap();
+        let err = stage_runtime_extras(linked.path(), &extras).unwrap_err();
+        assert!(err.to_string().contains("not a directory"), "{err}");
+        assert_eq!(mode(host.path()), before);
     }
 
     #[test]
