@@ -362,12 +362,87 @@ jobs:
           persist-credentials: false
       - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
 
+  real-tools:
+    # Pack three real third-party tools with this PR's build and run each image once with a
+    # short piece of real work. The fixtures in tests/ are binaries we build ourselves; these
+    # are upstream release builds, and duckdb is C++, so it also needs libstdc++ staged. The
+    # nightly full list belongs to schubydoo/scratchsmith-images, not here.
+    # Each tool comes from its PyPI wheel (the projects publish their Linux binaries there),
+    # pinned by version and sha256. Bump a pin by hand: a version bump also needs the new
+    # wheel's URL and hash from PyPI.
+    name: pack real tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # new job; a local run of the three packs takes well under a minute
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          toolchain: stable
+          rustflags: ""
+      - name: Build scratchsmith
+        run: cargo build --bin scratchsmith
+      - name: Download the pinned tools
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/whl" "$RUNNER_TEMP/tools"
+          cd "$RUNNER_TEMP/whl"
+          # tool, path of the binary inside the wheel, sha256, wheel URL
+          while read -r tool member sha url; do
+            whl="${url##*/}"
+            curl -fsSL --retry 3 -o "$whl" "$url"
+            echo "$sha  $whl" | sha256sum -c -
+            python3 -I -m zipfile -e "$whl" "x-$tool"
+            install -m 0755 "x-$tool/$member" "$RUNNER_TEMP/tools/$tool"
+          done <<'EOF'
+          ruff ruff-0.17.6.data/scripts/ruff aa3b08254a732acba246891089a152c47c5733dc36b8ecb76ce8602f8326e5e4 https://files.pythonhosted.org/packages/be/48/3df7d81249fd69ee6a49519b149fb5d11e13118fd7d0e8d65329a237087b/ruff-0.17.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+          uv uv-0.13.10.data/scripts/uv 7cc9c41b43d583e34c781fd3446405b06e9c5fa2db468ce2a534d353db6429e5 https://files.pythonhosted.org/packages/8b/99/fad906311e48fce22e4db71ee4c3df29bdb17b29eb36878f52b8dcd79237/uv-0.13.10-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+          duckdb duckdb_cli/duckdb 44131cf22c717febcb9bb9f1ae117690f1e2ff6947a3154150ddf2ad40d8b31b https://files.pythonhosted.org/packages/6a/a4/402c39041ccd4a0f6fac4e63ae42215a42d11336bace1278c48541febdf8/duckdb_cli-2.0.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+          EOF
+      - name: Pack each tool
+        run: |
+          set -euo pipefail
+          for tool in ruff uv duckdb; do
+            target/debug/scratchsmith pack "$RUNNER_TEMP/tools/$tool"
+          done
+      # Each check does real work, not just --version, and fails on a wrong answer.
+      - name: "ruff: lint a file"
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/ruff" && printf 'import os\n' > "$RUNNER_TEMP/ruff/a.py"
+          out=$(docker run --rm -v "$RUNNER_TEMP/ruff:/work:ro" scratchsmith/ruff:packed \
+            check --no-cache --select F401 /work/a.py)
+          rc=$?
+          echo "$out"
+          # ruff exits 1 when it finds a problem, and this file has exactly one.
+          [ "$rc" -eq 1 ] && grep -q 'F401' <<<"$out"
+      - name: "uv: bump a project's version"
+        run: |
+          set -euo pipefail
+          proj="$RUNNER_TEMP/uv"
+          mkdir -p "$proj"
+          printf '[project]\nname = "demo"\nversion = "0.1.0"\nrequires-python = ">=3.9"\ndependencies = []\n' \
+            > "$proj/pyproject.toml"
+          # The image runs as its non-root user, so let it rewrite the mounted project.
+          chmod 0777 "$proj" && chmod 0666 "$proj/pyproject.toml"
+          docker run --rm -v "$proj:/p" scratchsmith/uv:packed \
+            --no-cache --offline version --bump minor --frozen --project /p
+          grep -qx 'version = "0.2.0"' "$proj/pyproject.toml"
+      - name: "duckdb: run a query"
+        run: |
+          set -euo pipefail
+          out=$(docker run --rm scratchsmith/duckdb:packed -csv -noheader \
+            -c "select sum(range) from range(1000000)")
+          echo "$out"
+          [ "$out" = "499999500000" ]
+
   ci-required-checks:
     # The single status branch protection requires. Add new required jobs to needs.
     # `semver` is intentionally excluded — it is informational (see its comment above).
     name: ci required checks passed
     if: always()
-    needs: [lint, msrv, test, coverage, supply-chain, completions, musl, fuzz-check]
+    needs: [lint, msrv, test, coverage, supply-chain, completions, musl, fuzz-check, real-tools]
     runs-on: ubuntu-latest
     timeout-minutes: 10 # only checks the needs results; 10-minute floor, as for the other jobs
     steps:
