@@ -24,6 +24,7 @@
 [lint]
   <binary>  value=true  multiple=false  required=true
   --fail-on  value=true  multiple=true  required=false  values=[no-pie,no-relro,partial-relro,no-nx,no-canary,no-fortify]
+  --format  value=true  multiple=false  required=false  default=text  values=[text,json]
 
 [pack]
   --add-binary  value=true  multiple=true  required=false

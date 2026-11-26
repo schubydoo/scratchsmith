@@ -210,6 +210,18 @@ impl IndexReport {
     }
 }
 
+/// The `lint --format json` report. Its fields are a v2 contract, like `PackReport`.
+#[derive(Debug, Clone, Serialize)]
+pub struct LintReport {
+    /// The binary's path as given on the command line (lossy UTF-8).
+    pub binary: String,
+    pub hardening: crate::lint::Hardening,
+    /// The `--fail-on` gates asked for, in their flag spelling, each once, in the order given.
+    pub fail_on: Vec<String>,
+    /// The gates in `fail_on` this binary fails, same spelling and order. Empty on a pass.
+    pub violations: Vec<String>,
+}
+
 /// One object in a dependency graph (`graph` subcommand): a resolved file plus the
 /// objects it directly needs, referenced by real path so every edge resolves to a node.
 #[derive(Debug, Clone, Serialize)]
@@ -1200,6 +1212,39 @@ mod tests {
             sorted_keys(&json["manifests"][0]),
             ["digest", "platform", "source"]
         );
+    }
+
+    #[test]
+    fn lint_report_schema_is_stable() {
+        // `lint --format json` is a contract (v2.1): pin the top-level and `hardening` key
+        // sets, so an added, removed or renamed field is caught here.
+        let report = LintReport {
+            binary: "./app".into(),
+            hardening: crate::lint::Hardening {
+                pie: true,
+                relro: crate::lint::Relro::Full,
+                nx: true,
+                canary: true,
+                fortify: false,
+            },
+            fail_on: vec!["no-fortify".into()],
+            violations: vec!["no-fortify".into()],
+        };
+        let json = serde_json::to_value(&report).unwrap();
+        let sorted_keys = |v: &serde_json::Value| {
+            let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            k.sort();
+            k
+        };
+        assert_eq!(
+            sorted_keys(&json),
+            ["binary", "fail_on", "hardening", "violations"]
+        );
+        assert_eq!(
+            sorted_keys(&json["hardening"]),
+            ["canary", "fortify", "nx", "pie", "relro"]
+        );
+        assert_eq!(json["hardening"]["relro"], "full");
     }
 
     #[test]

@@ -16,8 +16,8 @@ A breaking change to any of these requires a new **major** version. This page is
   or are repeatable. It covers the accepted **enum values** too (for example
   `--sbom-format cyclonedx-json`, `--scan-fail-on high`).
 - **`scratchsmith.toml`**: the config keys and their types.
-- **`--format json`**: the field names and types of the `pack`, `index`, `graph`, `diff`, and
-  `unpack` reports (the schema CI gates consume).
+- **`--format json`**: the field names and types of the `pack`, `index`, `graph`, `diff`,
+  `unpack`, and `lint` reports (the schema CI gates consume).
 - **Exit codes**: `0` on success. `2` on a usage error, which is any refusal of the command
   line. That is an argument-parse error from clap, or a refusal made after the parse. Examples
   are `--watch --format json`, `pack` with no binary, and a config value that conflicts with a
@@ -92,8 +92,8 @@ change:
 - **Config keys**: `parses_a_full_config` exercises every key, and `#[serde(deny_unknown_fields)]`
   rejects a renamed/removed key.
 - **`--format json`**: `json_report_schema_is_stable`, `index_report_schema_is_stable`,
-  `dep_graph_json_schema_is_stable`, `diff_report_schema_is_stable`, and
-  `unpack_report_schema_is_stable` pin the exact key sets.
+  `dep_graph_json_schema_is_stable`, `diff_report_schema_is_stable`,
+  `unpack_report_schema_is_stable`, and `lint_report_schema_is_stable` pin the exact key sets.
 - **Exit codes**: the exit-code tests in `tests/cli.rs` pin `0` / `2` / `1`.
   `post_parse_usage_refusals_exit_2` covers each refusal made after the parse.
 - **Library API**: a non-blocking `cargo-semver-checks` CI job surfaces `pub`-API changes as a
