@@ -5,6 +5,32 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 2.0.3 (2026-11-26)
+
+### Fixes
+
+#### A Docker Hub login kept in a credential helper is found ([#561](https://github.com/schubydoo/scratchsmith/pull/561))
+
+`--push` and `index` asked a `credsStore` or `credHelpers` helper for `docker.io`, but `docker login` stores the Docker Hub login under `https://index.docker.io/v1/`. The pass, secretservice, osxkeychain and wincred helpers match that key exactly, so they answered "not found", and the push went out anonymous. A Docker Hub reference now asks for `https://index.docker.io/v1/` first, then `docker.io`, so a login kept under either key is found.
+
+### Security
+
+#### The identity-token exchange sends the token only over https ([#563](https://github.com/schubydoo/scratchsmith/pull/563))
+
+With an identity token in the Docker config, `--push` and `index` posted the refresh token to whatever realm the registry named, plain `http` included, and followed a redirect from it with the token in the body. The realm must now be `https`. The one exception is a loopback realm for a local registry. A redirect from the token endpoint is refused, not followed. A failed exchange used to print the token host's whole answer as it was. It now shows at most 1 KiB of it, with control characters escaped. A token response is read up to 1 MiB.
+
+#### unpack refuses a layer with a `..` entry before its whiteouts run ([#567](https://github.com/schubydoo/scratchsmith/pull/567))
+
+A layer entry with a `..` part, such as `etc/../../x`, or a hard link whose target climbs above the image root, such as `../x`, was refused, but only after that layer's whiteouts had already deleted files from the unpacked tree. `unpack` now checks those names in every entry of a layer before it applies any whiteout, so a layer refused for one of them leaves the tree as the layers below it made it. It still exits `1`.
+
+#### unpack honors a whiteout whose path has a `..` part ([#564](https://github.com/schubydoo/scratchsmith/pull/564))
+
+A whiteout marker such as `etc/../etc/.wh.keep` was skipped, so `etc/keep` stayed in the unpacked tree, while Docker deletes it. `unpack` now cleans the marker's path as Docker does and deletes what it names. A rooted `..` stops at `/`, so `/../etc/.wh.keep` deletes `etc/keep` too. A relative marker whose `..` climbs above the root, such as `../.wh.x`, is refused, as Docker refuses it: the layer is not applied, and `unpack` exits `1`.
+
+#### `unpack` refuses an OCI archive with two `index.json` files ([#565](https://github.com/schubydoo/scratchsmith/pull/565))
+
+An OCI archive that held two `index.json` entries (or `index.json` and `./index.json`) was unpacked from the last one, with no warning. Two tools reading the same archive could then show two different images. `unpack` now refuses the archive, names the second entry, and exits `1`.
+
 ## 2.0.2 (2026-11-25)
 
 ### Fixes
