@@ -271,7 +271,9 @@ fn glibc_version_warnings(binary: &Path, resolution: &resolver::Resolution) -> V
 
 // One warning for each object that needs a `GLIBC_` version its named object does not
 // define, naming the highest such version. An object it names that is not staged is skipped:
-// the resolver already failed the pack on it, or it is a loader this pack did not resolve.
+// the resolver already failed the pack on it, or it is a loader this pack did not resolve. So
+// is one that defines no versions (no DT_VERDEF, or not read again): ld.so accepts any version
+// from it.
 fn glibc_gaps(
     objects: &[(PathBuf, resolver::SymbolVersions)],
     provided: &HashMap<String, Vec<String>>,
@@ -295,7 +297,7 @@ fn glibc_gaps(
             version.starts_with("GLIBC_")
                 && provided
                     .get(file)
-                    .is_some_and(|defined| !defined.contains(version))
+                    .is_some_and(|defined| !defined.is_empty() && !defined.contains(version))
         });
         // The highest numbered version names the glibc to pack on. A name with no number
         // (`GLIBC_ABI_DT_RELR`) is reported only when it is the only one missing.
@@ -306,7 +308,12 @@ fn glibc_gaps(
         };
         let staged_note = staged
             .as_ref()
-            .map(|r| format!(" (the staged glibc is {})", dotted(r)))
+            .map(|r| {
+                format!(
+                    " (the newest version the staged libc.so.6 defines is GLIBC_{})",
+                    dotted(r)
+                )
+            })
             .unwrap_or_default();
         let fix = match resolver::glibc_release(version) {
             Some(r) => format!("Pack on a host whose glibc is {} or newer", dotted(&r)),
@@ -1267,6 +1274,7 @@ mod tests {
                 defines(&["libc.so.6", "GLIBC_2.2.5", "GLIBC_2.34", "GLIBC_2.35"]),
             ),
             ("ld-linux-x86-64.so.2".to_string(), defines(&["GLIBC_2.3"])),
+            ("libplain.so.1".to_string(), Vec::new()),
         ]);
         let objects = vec![
             // Needs two versions libc lacks: named once, by the higher one.
@@ -1294,6 +1302,11 @@ mod tests {
                     ("libgone.so.1", "GLIBC_2.99"),
                 ]),
             ),
+            // ld.so accepts any version from an object that defines none.
+            (
+                PathBuf::from("/app/plain"),
+                versions(&[("libplain.so.1", "GLIBC_2.99")]),
+            ),
             // A version with no number still breaks the start.
             (
                 PathBuf::from("/app/relr"),
@@ -1305,11 +1318,11 @@ mod tests {
             warnings,
             [
                 "/app/new needs GLIBC_2.38 from libc.so.6, which the staged libc.so.6 does not \
-                 define (the staged glibc is 2.35), so the image will not start. Pack on a host \
-                 whose glibc is 2.38 or newer",
+                 define (the newest version the staged libc.so.6 defines is GLIBC_2.35), so the \
+                 image will not start. Pack on a host whose glibc is 2.38 or newer",
                 "/app/relr needs GLIBC_ABI_DT_RELR from libc.so.6, which the staged libc.so.6 \
-                 does not define (the staged glibc is 2.35), so the image will not start. Pack \
-                 on a host with a newer glibc",
+                 does not define (the newest version the staged libc.so.6 defines is \
+                 GLIBC_2.35), so the image will not start. Pack on a host with a newer glibc",
             ]
         );
         // A path is escaped: the text report prints warnings as they are.
