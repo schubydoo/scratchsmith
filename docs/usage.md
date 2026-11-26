@@ -9,6 +9,13 @@ scratchsmith pack ./app
 docker run --rm scratchsmith/app:packed --version   # image is named scratchsmith/<name>:packed (characters a tag cannot hold become -)
 ```
 
+The image gets the build host's glibc. A binary built against a newer glibc than the host's
+packs, and then fails to start with an error like ``version `GLIBC_2.38' not found``. `pack`
+reads the `GLIBC_` versions that the binary and each library need, and prints a warning on
+standard error for each one that the staged glibc does not define. The pack still succeeds,
+with the same exit code. Pack on a host whose glibc is as new as the one the binary was built
+against.
+
 The default sink loads into Docker. To load with **podman** or **nerdctl** instead (and run
 `--smoke` with it), pass `--runtime`:
 

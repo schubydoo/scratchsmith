@@ -34,6 +34,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "glibc_versions"
+path = "fuzz_targets/glibc_versions.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "analyze_hardening"
 path = "fuzz_targets/analyze_hardening.rs"
 test = false

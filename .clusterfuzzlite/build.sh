@@ -114,7 +114,7 @@ printf 'Package: libc6\nStatus: install ok installed\nArchitecture: amd64\nVersi
 # Map each target to its seed set (empty = no seed), zip, and stage in $OUT.
 seed_dir_for() {
   case "$1" in
-  parse_elf_info | analyze_hardening) printf '%s' "$elf_seed" ;;
+  parse_elf_info | glibc_versions | analyze_hardening) printf '%s' "$elf_seed" ;;
   unpack) printf '%s' "$oci_seed" ;;
   registry_parse) printf '%s' "$json_seed" ;;
   rpm_headers) printf '%s' "$rpm_seed" ;;
