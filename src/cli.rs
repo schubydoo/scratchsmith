@@ -408,7 +408,44 @@ fn dispatch(cli: Cli) -> Result<()> {
                 Some(name) => file.select_profile(name).map_err(usage)?,
                 None => file,
             };
-            let Some(binary) = binary.or(file.binary) else {
+            // Every key by name and no `..`, so a key added to `Config` fails to compile here
+            // until this pack reads it, rather than parse and do nothing.
+            let crate::config::Config {
+                binary: file_binary,
+                entrypoint: file_entrypoint,
+                cmd: file_cmd,
+                env: file_env,
+                workdir: file_workdir,
+                user: file_user,
+                label: file_label,
+                healthcheck: file_healthcheck,
+                strip: file_strip,
+                upx: file_upx,
+                smoke: file_smoke,
+                sbom: file_sbom,
+                sbom_file: file_sbom_file,
+                sbom_format: file_sbom_format,
+                scan: file_scan,
+                scan_fail_on: file_scan_fail_on,
+                ca_certs: file_ca_certs,
+                tz: file_tz,
+                init: file_init,
+                add_file: file_add_file,
+                locale: file_locale,
+                symlinks: file_symlinks,
+                include: file_include,
+                nss: file_nss,
+                packages: file_packages,
+                deny: file_deny,
+                require: file_require,
+                sign: file_sign,
+                push: file_push,
+                max_size: file_max_size,
+                runtime: file_runtime,
+                // Already applied: select_profile layered the chosen profile over the base.
+                profile: _,
+            } = file;
+            let Some(binary) = binary.or(file_binary) else {
                 bail!(UsageError(
                     "no binary to pack: pass one on the command line or set `binary` in --config"
                         .into()
@@ -419,7 +456,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             // refuse: a refusal would tighten validation, and a config can set them once for
             // packs that pass --sbom only some of the time.
             let mut notes = Vec::new();
-            if !(sbom || file.sbom) {
+            if !(sbom || file_sbom) {
                 for (cli_set, file_in, flag, key) in [
                     (
                         sbom_file.is_some(),
@@ -449,29 +486,29 @@ fn dispatch(cli: Cli) -> Result<()> {
             }
 
             let opts = crate::pack::PackOptions {
-                smoke: smoke || file.smoke,
-                strip: strip || file.strip, // either source enabling an option is enough
-                upx: upx || file.upx,
-                sbom: (sbom || file.sbom).then(|| crate::supplychain::SbomRequest {
+                smoke: smoke || file_smoke,
+                strip: strip || file_strip, // either source enabling an option is enough
+                upx: upx || file_upx,
+                sbom: (sbom || file_sbom).then(|| crate::supplychain::SbomRequest {
                     path: sbom_file
-                        .or(file.sbom_file)
+                        .or(file_sbom_file)
                         .unwrap_or_else(|| PathBuf::from("sbom.json")),
                     format: sbom_format
-                        .or(file.sbom_format)
+                        .or(file_sbom_format)
                         .unwrap_or(crate::supplychain::SbomFormat::CyclonedxJson),
                 }),
                 scan: {
-                    let fail_on = scan_fail_on.or(file.scan_fail_on);
-                    (scan || file.scan || fail_on.is_some())
+                    let fail_on = scan_fail_on.or(file_scan_fail_on);
+                    (scan || file_scan || fail_on.is_some())
                         .then_some(crate::supplychain::ScanRequest { fail_on })
                 },
                 extras: crate::stager::RuntimeExtras {
-                    ca_certs: ca_certs || file.ca_certs,
-                    tz: tz || file.tz,
-                    init: init || file.init,
+                    ca_certs: ca_certs || file_ca_certs,
+                    tz: tz || file_tz,
+                    init: init || file_init,
                 },
                 add_files: if add_file.is_empty() {
-                    file.add_file
+                    file_add_file
                 } else {
                     add_file
                 }
@@ -479,55 +516,55 @@ fn dispatch(cli: Cli) -> Result<()> {
                 .map(|spec| crate::stager::AddFile::parse(spec).map_err(usage))
                 .collect::<Result<Vec<_>>>()?,
                 locales: if locale.is_empty() {
-                    file.locale
+                    file_locale
                 } else {
                     locale
                 },
-                symlinks: symlinks.or(file.symlinks).unwrap_or_default(),
+                symlinks: symlinks.or(file_symlinks).unwrap_or_default(),
                 includes: if include.is_empty() {
-                    file.include
+                    file_include
                 } else {
                     include
                 },
                 nss: crate::stager::NssSelection::from_modules(if nss.is_empty() {
-                    &file.nss
+                    &file_nss
                 } else {
                     &nss
                 })
                 .map_err(usage)?,
-                deny: if deny.is_empty() { file.deny } else { deny },
+                deny: if deny.is_empty() { file_deny } else { deny },
                 require: if require.is_empty() {
-                    file.require
+                    file_require
                 } else {
                     require
                 },
                 image: crate::image::ImageConfig {
                     entrypoint: entrypoint
-                        .or(file.entrypoint)
+                        .or(file_entrypoint)
                         .map(|e| vec![e])
                         .unwrap_or_default(),
-                    cmd: if cmd.is_empty() { file.cmd } else { cmd },
-                    env: if env.is_empty() { file.env } else { env },
-                    workdir: workdir.or(file.workdir),
-                    user: user.or(file.user),
-                    labels: if label.is_empty() { file.label } else { label },
+                    cmd: if cmd.is_empty() { file_cmd } else { cmd },
+                    env: if env.is_empty() { file_env } else { env },
+                    workdir: workdir.or(file_workdir),
+                    user: user.or(file_user),
+                    labels: if label.is_empty() { file_label } else { label },
                     healthcheck: if healthcheck.is_empty() {
-                        file.healthcheck
+                        file_healthcheck
                     } else {
                         healthcheck
                     },
                 },
-                sign: sign || file.sign,
+                sign: sign || file_sign,
                 max_size: max_size
-                    .or(file.max_size)
+                    .or(file_max_size)
                     .map(|s| crate::report::parse_size(&s).map_err(usage))
                     .transpose()?,
-                runtime: runtime.or(file.runtime).unwrap_or_default(),
+                runtime: runtime.or(file_runtime).unwrap_or_default(),
                 notes,
                 packages: {
                     let selection =
                         crate::packages::PackagesSelection::from_outputs(if packages.is_empty() {
-                            &file.packages
+                            &file_packages
                         } else {
                             &packages
                         })
@@ -576,7 +613,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             } else if no_build {
                 // clap guarantees output is present when no_build is set.
                 crate::pack::Sink::Rootfs(output.expect("--no-build requires --output"))
-            } else if let Some(reference) = file.push {
+            } else if let Some(reference) = file_push {
                 crate::pack::Sink::Push(reference)
             } else {
                 crate::pack::Sink::DockerLoad
@@ -711,14 +748,6 @@ fn dispatch(cli: Cli) -> Result<()> {
 // Where a config boolean that came out true is set, and how to turn it off. Profiles OR
 // booleans (`select_profile`), so a profile cannot unset the base: every place it is set is
 // named. `set` is (in the base, in the selected profile).
-// The --sign refusal when a CLI sink flag took the place of a config `push`.
-fn cli_sink_sign(flag: &str, drop: &str, set_in: &str) -> String {
-    format!(
-        "--sign needs a push target, and {flag} on the command line takes the place of any \
-         `push` in the config. Drop {drop}, and pass --push, or turn signing off: {set_in}"
-    )
-}
-
 fn bool_set_in(
     key: &str,
     config: Option<&std::path::Path>,
@@ -740,6 +769,14 @@ fn bool_set_in(
         ),
         (_, None) => format!("`{key} = true` is set in {path}: remove it there"),
     }
+}
+
+// The --sign refusal when a CLI sink flag took the place of a config `push`.
+fn cli_sink_sign(flag: &str, drop: &str, set_in: &str) -> String {
+    format!(
+        "--sign needs a push target, and {flag} on the command line takes the place of any \
+         `push` in the config. Drop {drop}, and pass --push, or turn signing off: {set_in}"
+    )
 }
 
 // The `index` report: sign the pushed index if asked, else carry a digest mismatch as a
