@@ -928,7 +928,7 @@ report, a non-root image, and no Dockerfile, it is equally handy. More:
 <td>✅</td>
 </tr>
 <tr>
-<td><strong>Rootfs diff</strong>: <code>diff &lt;a&gt; &lt;b&gt;</code> (compare two staged rootfs directories: files added, removed and changed, plus the size delta, and <code>--exit-code</code> gates CI. To compare images, <code>unpack</code> them first)</td>
+<td><strong>Rootfs diff</strong>: <code>diff &lt;a&gt; &lt;b&gt;</code> (compare two staged rootfs directories: files added, removed and changed, mode changes and empty directories, plus the size delta, and <code>--exit-code</code> gates CI. To compare images, <code>unpack</code> them first)</td>
 <td>✅</td>
 </tr>
 <tr>
