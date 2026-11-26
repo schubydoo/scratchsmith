@@ -362,12 +362,124 @@ jobs:
           persist-credentials: false
       - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
 
+  real-tools:
+    # Pack three real third-party tools with this PR's build and run each image once with a
+    # short piece of real work. The fixtures in tests/ are binaries we build ourselves; these
+    # are upstream release builds, and duckdb is C++, so it also needs libstdc++ staged. The
+    # nightly full list belongs to schubydoo/scratchsmith-images, not here.
+    # Each tool is its project's x86_64 glibc Linux archive from its GitHub release, checked
+    # against its pinned sha256 and, for ruff and uv, its build-provenance attestation.
+    name: pack real tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # new job; a local run of the three packs takes well under a minute
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          toolchain: stable
+          rustflags: ""
+      - name: Build scratchsmith
+        run: cargo build --bin scratchsmith
+      - name: Download the pinned tools
+        env:
+          # Pinned by version and by the sha256 GitHub publishes for each release asset.
+          # Renovate bumps the three versions as one weekly group, and its postUpgradeTask
+          # `python3 scripts/check_binary_dep_pins.py --fix` rewrites the hashes in the same
+          # commit. binary-dep-pins.yml verifies them. A moved asset fails the sha256 -c.
+          # renovate: datasource=github-releases depName=astral-sh/ruff
+          RUFF_VERSION: "0.17.6"
+          RUFF_SHA256: "94b33791f48cd54ab35ad673a443a5c001d3e6d87effeaba9899070b700d45f3"
+          # renovate: datasource=github-releases depName=astral-sh/uv
+          UV_VERSION: "0.13.10"
+          UV_SHA256: "bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c"
+          # renovate: datasource=github-releases depName=duckdb/duckdb
+          DUCKDB_VERSION: "2.0.1"
+          DUCKDB_SHA256: "b676268be4d39e4e41a904442c9796c9914e645cc085c7505f048f2c992b5eca"
+          # gh attestation verify reads each project's public attestations through the API.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/dl" "$RUNNER_TEMP/tools"
+          cd "$RUNNER_TEMP/dl"
+          # tool, repo whose build-provenance attestation must match (empty: none published),
+          # release URL, pinned sha256, path of the binary in the archive
+          fetch() {
+            local tool=$1 attested=$2 url=$3 sha=$4 member=$5 file="${3##*/}"
+            curl -fsSL --retry 3 -o "$file" "$url"
+            echo "$sha  $file" | sha256sum -c -
+            if [ -n "$attested" ]; then
+              gh attestation verify "$file" --repo "$attested"
+              echo "$file: attestation verified"
+            fi
+            mkdir -p "x-$tool" && tar -xzf "$file" -C "x-$tool"
+            install -m 0755 "x-$tool/$member" "$RUNNER_TEMP/tools/$tool"
+          }
+          fetch ruff astral-sh/ruff \
+            "https://github.com/astral-sh/ruff/releases/download/${RUFF_VERSION}/ruff-x86_64-unknown-linux-gnu.tar.gz" \
+            "$RUFF_SHA256" ruff-x86_64-unknown-linux-gnu/ruff
+          fetch uv astral-sh/uv \
+            "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
+            "$UV_SHA256" uv-x86_64-unknown-linux-gnu/uv
+          # duckdb publishes no attestation for its release archives (the API answers 404), so
+          # its sha256 pin is the whole check.
+          fetch duckdb "" \
+            "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb-cli-linux-amd64.tar.gz" \
+            "$DUCKDB_SHA256" duckdb
+          # The job tests packing a dynamic glibc ELF, so a static or musl build would pass
+          # for the wrong reason.
+          for tool in ruff uv duckdb; do
+            readelf -l "$RUNNER_TEMP/tools/$tool" | grep -q 'ld-linux-x86-64.so.2' \
+              || { echo "::error::$tool is not a dynamic glibc binary"; exit 1; }
+          done
+      - name: Pack each tool
+        run: |
+          set -euo pipefail
+          for tool in ruff uv duckdb; do
+            target/debug/scratchsmith pack "$RUNNER_TEMP/tools/$tool"
+          done
+      # Each check does real work, not just --version, and fails on a wrong answer.
+      - name: "ruff: lint a file"
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ruff" && printf 'import os\n' > "$RUNNER_TEMP/ruff/a.py"
+          # The runner's bash has -e, so catch the expected exit 1 instead of stopping on it.
+          rc=0
+          out=$(docker run --rm -v "$RUNNER_TEMP/ruff:/work:ro" scratchsmith/ruff:packed \
+            check --no-cache --select F401 /work/a.py) || rc=$?
+          echo "$out"
+          # ruff exits 1 when it finds a problem, and this file has exactly one.
+          [ "$rc" -eq 1 ]
+          grep -q 'F401' <<<"$out"
+      - name: "uv: bump a project's version"
+        run: |
+          set -euo pipefail
+          proj="$RUNNER_TEMP/uv"
+          mkdir -p "$proj"
+          printf '[project]\nname = "demo"\nversion = "0.1.0"\nrequires-python = ">=3.9"\ndependencies = []\n' \
+            > "$proj/pyproject.toml"
+          # The image runs as its non-root user, so let it rewrite the mounted project.
+          chmod 0777 "$proj" && chmod 0666 "$proj/pyproject.toml"
+          # uv puts its throwaway cache in /tmp, and a scratch image has no /tmp. Give it one
+          # until pack can stage one itself (TASK-225).
+          docker run --rm --tmpfs /tmp -v "$proj:/p" scratchsmith/uv:packed \
+            --no-cache --offline version --bump minor --frozen --project /p
+          grep -qx 'version = "0.2.0"' "$proj/pyproject.toml"
+      - name: "duckdb: run a query"
+        run: |
+          set -euo pipefail
+          out=$(docker run --rm scratchsmith/duckdb:packed -csv -noheader \
+            -c "select sum(range) from range(1000000)")
+          echo "$out"
+          [ "$out" = "499999500000" ]
+
   ci-required-checks:
     # The single status branch protection requires. Add new required jobs to needs.
     # `semver` is intentionally excluded — it is informational (see its comment above).
     name: ci required checks passed
     if: always()
-    needs: [lint, msrv, test, coverage, supply-chain, completions, musl, fuzz-check]
+    needs: [lint, msrv, test, coverage, supply-chain, completions, musl, fuzz-check, real-tools]
     runs-on: ubuntu-latest
     timeout-minutes: 10 # only checks the needs results; 10-minute floor, as for the other jobs
     steps:
