@@ -1,31 +1,55 @@
 //! Compare two staged rootfs directories (`diff` subcommand): the files added, removed,
-//! and changed between them, plus the total size delta. An image-drift regression gate.
+//! and changed between them, the modes that changed, the empty directories in only one tree,
+//! plus the total size delta. An image-drift regression gate.
 //! Pairs with `unpack` — an OCI image extracted to a directory is diffed the same way.
 
 use crate::image::hex;
-use crate::report::{DiffFile, DiffReport};
+use crate::report::{DiffFile, DiffMode, DiffReport};
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 // One file's identity for comparison: its size and a content fingerprint (sha256 for a
-// regular file, the link target's raw bytes for a symlink). Directories carry no content of
-// their own.
+// regular file, the link target's raw bytes for a symlink), and its permission bits. A
+// symlink has no mode of its own on Linux, so it carries none.
 struct Entry {
     size: u64,
     fingerprint: Vec<u8>,
+    mode: Option<u32>,
 }
 
-// Walk `root` and fingerprint every regular file and symlink, keyed by path relative to
-// `root`. Symlinks are compared by target, never followed. Keys and targets stay raw bytes:
+// One tree: its regular files and symlinks, and its directories with their permission bits.
+// `unpack` strips setuid and setgid, so a mode is the only permission signal left to compare.
+#[derive(Default)]
+struct Tree {
+    files: BTreeMap<OsString, Entry>,
+    dirs: BTreeMap<OsString, u32>,
+}
+
+impl Tree {
+    // A directory with nothing under it. Keys sort by byte, so the first key at or after
+    // `dir/` is under it if any is.
+    fn is_empty_dir(&self, dir: &OsStr) -> bool {
+        let prefix = OsString::from_vec([dir.as_bytes(), b"/"].concat());
+        let under = |map_key: Option<&OsString>| {
+            map_key.is_some_and(|k| k.as_bytes().starts_with(prefix.as_bytes()))
+        };
+        !under(self.files.range(prefix.clone()..).next().map(|(k, _)| k))
+            && !under(self.dirs.range(prefix.clone()..).next().map(|(k, _)| k))
+    }
+}
+
+// Walk `root`, fingerprint every regular file and symlink and record every directory's mode,
+// keyed by path relative to `root`. Symlinks are compared by target, never followed. Keys and targets stay raw bytes:
 // a lossy conversion would merge two names that differ only in non-UTF-8 bytes. An `OsString`
 // key sorts by bytes, as the old `String` key did; a `PathBuf` would sort by component.
-fn scan(root: &Path) -> Result<BTreeMap<OsString, Entry>> {
-    let mut map = BTreeMap::new();
+fn scan(root: &Path) -> Result<Tree> {
+    let mut tree = Tree::default();
     for entry in walkdir::WalkDir::new(root).follow_links(false) {
         // walkdir's error, and every path below, can carry a file name out of an image
         // someone else built, so each is escaped before it reaches the terminal.
@@ -51,26 +75,30 @@ fn scan(root: &Path) -> Result<BTreeMap<OsString, Entry>> {
         })?;
         if meta.file_type().is_symlink() {
             let target = std::fs::read_link(entry.path())?;
-            map.insert(
+            tree.files.insert(
                 rel,
                 Entry {
                     size: 0,
                     fingerprint: [b"symlink:", target.as_os_str().as_bytes()].concat(),
+                    mode: None,
                 },
             );
         } else if meta.is_file() {
             let fingerprint = sha256_file(entry.path())
                 .with_context(|| format!("reading {}", shown(entry.path())))?;
-            map.insert(
+            tree.files.insert(
                 rel,
                 Entry {
                     size: meta.len(),
                     fingerprint: fingerprint.into_bytes(),
+                    mode: Some(meta.permissions().mode() & 0o7777),
                 },
             );
+        } else if meta.is_dir() {
+            tree.dirs.insert(rel, meta.permissions().mode() & 0o7777);
         }
     }
-    Ok(map)
+    Ok(tree)
 }
 
 // Hash a file without holding it in memory: a sparse file from an unpacked hostile layer can
@@ -109,14 +137,16 @@ fn report_path(path: &OsStr) -> String {
 }
 
 /// Compare two staged rootfs directories, reporting the files added in `b`, removed from
-/// `a`, and changed between them, plus each side's total file size.
+/// `a`, and changed between them, the files and directories whose mode changed, the empty
+/// directories in only one tree, plus each side's total file size.
 pub fn build(a: &Path, b: &Path) -> Result<DiffReport> {
-    let old = scan(a)?;
-    let new = scan(b)?;
+    let old_tree = scan(a)?;
+    let new_tree = scan(b)?;
+    let (old, new) = (&old_tree.files, &new_tree.files);
 
     let mut added = Vec::new();
     let mut changed = Vec::new();
-    for (path, entry) in &new {
+    for (path, entry) in new {
         match old.get(path) {
             None => added.push(DiffFile {
                 path: report_path(path),
@@ -135,10 +165,46 @@ pub fn build(a: &Path, b: &Path) -> Result<DiffReport> {
         })
         .collect();
 
+    let mode = |m: u32| format!("{m:04o}");
+    let file_modes = new.iter().filter_map(|(path, entry)| {
+        let (before, after) = (old.get(path)?.mode?, entry.mode?);
+        Some((path, before, after))
+    });
+    let dir_modes = new_tree
+        .dirs
+        .iter()
+        .filter_map(|(path, &after)| Some((path, *old_tree.dirs.get(path)?, after)));
+    // Byte order across files and directories, as the other lists are.
+    let mut mode_changed: Vec<_> = file_modes
+        .chain(dir_modes)
+        .filter(|(_, before, after)| before != after)
+        .collect();
+    mode_changed.sort_by(|x, y| x.0.cmp(y.0));
+    let mode_changed = mode_changed
+        .into_iter()
+        .map(|(path, before, after)| DiffMode {
+            path: report_path(path),
+            before: mode(before),
+            after: mode(after),
+        })
+        .collect();
+    // An empty directory in only one tree. A directory that holds anything shows through what
+    // it holds.
+    let lone_empty_dirs = |tree: &Tree, other: &Tree| -> Vec<String> {
+        tree.dirs
+            .keys()
+            .filter(|path| !other.dirs.contains_key(*path) && tree.is_empty_dir(path))
+            .map(|path| report_path(path))
+            .collect()
+    };
+
     Ok(DiffReport {
         added,
         removed,
         changed,
+        mode_changed,
+        dirs_added: lone_empty_dirs(&new_tree, &old_tree),
+        dirs_removed: lone_empty_dirs(&old_tree, &new_tree),
         size_before: old.values().map(|e| e.size).sum(),
         size_after: new.values().map(|e| e.size).sum(),
     })
@@ -191,6 +257,89 @@ mod tests {
             report.size_after,
             ("same".len() + "new-libc-longer".len() + "brand new".len()) as u64
         );
+    }
+
+    fn chmod(path: &Path, mode: u32) {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[test]
+    fn a_lost_exec_bit_is_a_mode_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        write(&a, "bin/app", b"same");
+        write(&b, "bin/app", b"same");
+        chmod(&a.join("bin/app"), 0o755);
+        chmod(&b.join("bin/app"), 0o644);
+        let report = build(&a, &b).unwrap();
+        assert!(report.changed.is_empty(), "{:?}", report.changed);
+        assert_eq!(report.mode_changed.len(), 1);
+        let m = &report.mode_changed[0];
+        assert_eq!(
+            (m.path.as_str(), m.before.as_str(), m.after.as_str()),
+            ("bin/app", "0755", "0644")
+        );
+        assert!(report.has_changes());
+    }
+
+    #[test]
+    fn a_world_writable_directory_is_a_mode_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        write(&a, "srv/data", b"x");
+        write(&b, "srv/data", b"x");
+        chmod(&a.join("srv"), 0o755);
+        chmod(&b.join("srv"), 0o777);
+        let report = build(&a, &b).unwrap();
+        let modes: Vec<_> = report
+            .mode_changed
+            .iter()
+            .map(|m| (m.path.as_str(), m.before.as_str(), m.after.as_str()))
+            .collect();
+        assert_eq!(modes, [("srv", "0755", "0777")]);
+    }
+
+    #[test]
+    fn a_symlink_has_no_mode_to_compare() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        for root in [&a, &b] {
+            fs::create_dir_all(root).unwrap();
+            std::os::unix::fs::symlink("target", root.join("link")).unwrap();
+        }
+        assert!(!build(&a, &b).unwrap().has_changes());
+    }
+
+    #[test]
+    fn an_empty_directory_in_one_tree_is_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        write(&a, "bin/app", b"x");
+        write(&b, "bin/app", b"x");
+        fs::create_dir_all(a.join("var/old")).unwrap();
+        fs::create_dir_all(b.join("tmp")).unwrap();
+        // Nested: only the empty leaf is listed, since it implies its parents.
+        fs::create_dir_all(b.join("run/lock")).unwrap();
+        let report = build(&a, &b).unwrap();
+        assert_eq!(report.dirs_added, ["run/lock", "tmp"]);
+        assert_eq!(report.dirs_removed, ["var/old"]);
+        assert!(report.added.is_empty() && report.removed.is_empty());
+        assert!(report.has_changes());
+    }
+
+    #[test]
+    fn a_new_directory_with_files_shows_through_its_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        fs::create_dir_all(&a).unwrap();
+        write(&b, "etc/app.conf", b"x");
+        // `x-1` sorts between `x` and `x/` by byte, and must not count as under `x`.
+        fs::create_dir_all(b.join("x")).unwrap();
+        write(&b, "x-1/file", b"y");
+        let report = build(&a, &b).unwrap();
+        assert_eq!(report.dirs_added, ["x"]);
+        let added: Vec<_> = report.added.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(added, ["etc/app.conf", "x-1/file"]);
     }
 
     #[test]
@@ -326,7 +475,7 @@ mod tests {
         full[..4].copy_from_slice(b"head");
         full[SIZE as usize - 4..].copy_from_slice(b"tail");
 
-        let entry = &scan(tmp.path()).unwrap()[OsStr::new("big")];
+        let entry = &scan(tmp.path()).unwrap().files[OsStr::new("big")];
         assert_eq!(entry.size, SIZE);
         assert_eq!(entry.fingerprint, hex(Sha256::digest(&full)).into_bytes());
     }
