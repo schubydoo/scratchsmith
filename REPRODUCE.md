@@ -5,7 +5,7 @@ Each release binary can be rebuilt from its tag, byte for byte. The
 both binaries from the tag and compares them with the ones in the published tarballs. This page
 shows how to run the same check yourself.
 
-It covers releases after v2.1.0, the first ones built with `.github/actions/release-build`.
+It covers v2.2.0 and later, the releases built with `.github/actions/release-build`.
 v2.1.0 and older can't be rebuilt this way.
 
 ## What matches, and what doesn't
@@ -18,6 +18,9 @@ CI rebuilds on an x86_64 Linux host, for both targets (arm64 is cross-compiled w
 the setup this page describes.
 
 ## What you need
+
+An x86_64 Linux machine with `git`, [rustup](https://rustup.rs) and the GNU coreutils (the build
+script uses GNU `realpath` and `sha256sum`). macOS and Windows aren't covered.
 
 The exact versions are part of the recipe. Read them from
 `.github/actions/release-build/action.yml` **at the release tag**:
