@@ -40,9 +40,10 @@ fails at the registry, and nobody knows the right digest before the image is bui
 2.0.3, a push to a digest could also crash scratchsmith when the registry answered without a
 `Location` header, as AWS ECR does. That crash is fixed, and the push still goes to the digest.
 
-`diff` compares two directory trees. Through 2.0.3 it read a file argument as an empty tree, so
-`diff --exit-code a.tar b.tar` printed no changes and exited 0 for two different archives. To
-compare two OCI archives, `unpack` each one into a directory and compare those.
+`diff` compares two directory trees. It reads a file argument as an empty tree, so
+`diff --exit-code a.tar b.tar` prints no changes and exits 0 for two different archives. Through
+2.0.3 it did so with no warning. To compare two OCI archives, `unpack` each one into a directory
+and compare those.
 
 ## Refused without a deprecation cycle
 
