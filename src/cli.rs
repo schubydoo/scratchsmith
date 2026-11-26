@@ -565,27 +565,10 @@ fn dispatch(cli: Cli) -> Result<()> {
                 )));
             }
 
-            // clap refuses --smoke --no-build, so a smoke here came from the config. pack refuses
-            // it too; this says where it is set, because a profile cannot turn it off.
-            if no_build && opts.smoke {
-                bail!(UsageError(format!(
-                    "--smoke needs a built image, so it isn't supported with --no-build. {}, or \
-                     drop --no-build and -o",
-                    bool_set_in("smoke", config.as_deref(), profile.as_deref(), smoke_set)
-                )));
-            }
-
             // An explicit CLI delivery sink always wins; `push` from the config/profile is only
             // the default when no CLI sink flag was given — otherwise a `[profile.ci]` `push`
             // would silently override `--oci-archive`/`--no-build` and turn a local pack into a
             // registry publish.
-            // For the --sign refusal below: a CLI sink beats a config `push`, so setting one
-            // there would not help. The second part is what to drop: -o needs --no-build.
-            let cli_sink = if oci_archive.is_some() {
-                Some(("--oci-archive", "--oci-archive"))
-            } else {
-                no_build.then_some(("--no-build", "--no-build and -o"))
-            };
             let sink = if let Some(reference) = push {
                 crate::pack::Sink::Push(reference)
             } else if let Some(archive) = oci_archive {
@@ -606,21 +589,33 @@ fn dispatch(cli: Cli) -> Result<()> {
                     .with_context(|| format!("invalid image reference {reference:?}"))
                     .map_err(usage)?;
             }
-            // Signing needs a registry image (cosign signs by digest); a profile that set `sign`
-            // without a push target would otherwise be silently dropped. clap ties --sign to
-            // --push, so a sign here came from the config, and the advice says where.
-            if opts.sign && !matches!(sink, crate::pack::Sink::Push(_)) {
-                let set_in = bool_set_in("sign", config.as_deref(), profile.as_deref(), sign_set);
-                bail!(UsageError(match cli_sink {
-                    Some((flag, drop)) => format!(
-                        "--sign needs a push target, and {flag} on the command line takes the \
-                         place of any `push` in the config. Drop {drop}, and pass --push, or \
-                         turn signing off: {set_in}"
+            // Every sink and --watch rule, before any staging. clap catches the flag pairs it
+            // can; what reaches here came from the config, so two refusals name where it is set.
+            if let Some(conflict) = sink.conflict(&opts, watch, matches!(format, Format::Json)) {
+                use crate::pack::{Conflict, Sink};
+                bail!(UsageError(match conflict {
+                    // A profile cannot turn a base `smoke` off, so the advice says where it is.
+                    Conflict::SmokeNoBuild => format!(
+                        "--smoke needs a built image, so it isn't supported with --no-build. {}, \
+                         or drop --no-build and -o",
+                        bool_set_in("smoke", config.as_deref(), profile.as_deref(), smoke_set)
                     ),
-                    None => format!(
-                        "--sign needs a push target. Pass --push or set `push` in the config, \
-                         or turn signing off: {set_in}"
-                    ),
+                    // A CLI sink beats a config `push`, so setting one there would not help. The
+                    // second part is what to drop: -o needs --no-build.
+                    Conflict::SignWithoutPush => {
+                        let set_in =
+                            bool_set_in("sign", config.as_deref(), profile.as_deref(), sign_set);
+                        match &sink {
+                            Sink::OciArchive(_) => {
+                                cli_sink_sign("--oci-archive", "--oci-archive", &set_in)
+                            }
+                            Sink::Rootfs(_) => {
+                                cli_sink_sign("--no-build", "--no-build and -o", &set_in)
+                            }
+                            _ => format!("{conflict}: {set_in}"),
+                        }
+                    }
+                    other => other.to_string(),
                 }));
             }
             let pack_once = || -> Result<()> {
@@ -633,20 +628,6 @@ fn dispatch(cli: Cli) -> Result<()> {
             };
             if !watch {
                 return pack_once();
-            }
-            // clap rejects `--watch --push`; this catches a `push` that came from the config.
-            // A watch packs on every save, and a registry is not the place for each of those.
-            if matches!(sink, crate::pack::Sink::Push(_)) {
-                bail!(UsageError(
-                    "--watch cannot push: it packs again on every change. Pass --oci-archive, \
-                     remove `push` from the config/profile, or drop --watch"
-                        .into()
-                ));
-            }
-            // One JSON document per pack on stdout is a stream shape nobody has chosen yet.
-            // Refusing it now keeps that choice open; allowing it later is additive.
-            if matches!(format, Format::Json) {
-                bail!(UsageError("--watch prints a text report for each pack; it cannot be used with --format json".into()));
             }
             crate::watch::run(&binary, pack_once)
         }
@@ -730,6 +711,14 @@ fn dispatch(cli: Cli) -> Result<()> {
 // Where a config boolean that came out true is set, and how to turn it off. Profiles OR
 // booleans (`select_profile`), so a profile cannot unset the base: every place it is set is
 // named. `set` is (in the base, in the selected profile).
+// The --sign refusal when a CLI sink flag took the place of a config `push`.
+fn cli_sink_sign(flag: &str, drop: &str, set_in: &str) -> String {
+    format!(
+        "--sign needs a push target, and {flag} on the command line takes the place of any \
+         `push` in the config. Drop {drop}, and pass --push, or turn signing off: {set_in}"
+    )
+}
+
 fn bool_set_in(
     key: &str,
     config: Option<&std::path::Path>,
