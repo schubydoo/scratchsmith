@@ -748,14 +748,6 @@ fn dispatch(cli: Cli) -> Result<()> {
 // Where a config boolean that came out true is set, and how to turn it off. Profiles OR
 // booleans (`select_profile`), so a profile cannot unset the base: every place it is set is
 // named. `set` is (in the base, in the selected profile).
-// The --sign refusal when a CLI sink flag took the place of a config `push`.
-fn cli_sink_sign(flag: &str, drop: &str, set_in: &str) -> String {
-    format!(
-        "--sign needs a push target, and {flag} on the command line takes the place of any \
-         `push` in the config. Drop {drop}, and pass --push, or turn signing off: {set_in}"
-    )
-}
-
 fn bool_set_in(
     key: &str,
     config: Option<&std::path::Path>,
@@ -777,6 +769,14 @@ fn bool_set_in(
         ),
         (_, None) => format!("`{key} = true` is set in {path}: remove it there"),
     }
+}
+
+// The --sign refusal when a CLI sink flag took the place of a config `push`.
+fn cli_sink_sign(flag: &str, drop: &str, set_in: &str) -> String {
+    format!(
+        "--sign needs a push target, and {flag} on the command line takes the place of any \
+         `push` in the config. Drop {drop}, and pass --push, or turn signing off: {set_in}"
+    )
 }
 
 // The `index` report: sign the pushed index if asked, else carry a digest mismatch as a
