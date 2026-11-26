@@ -82,6 +82,10 @@ fn post_parse_usage_refusals_exit_2() {
     let rootfs = rootfs.to_str().unwrap();
     let profiles = cfg("profiles.toml", "[profile.ci]\nstrip = true\n");
     let sign = cfg("sign.toml", &format!("binary = \"{bin}\"\nsign = true\n"));
+    let untagged = cfg(
+        "untagged.toml",
+        &format!("binary = \"{bin}\"\npush-untagged = true\n"),
+    );
     let push = cfg(
         "push.toml",
         &format!("binary = \"{bin}\"\npush = \"localhost:5000/x:1\"\n"),
@@ -161,6 +165,11 @@ fn post_parse_usage_refusals_exit_2() {
             "--sign needs a push target",
         ),
         (
+            "push-untagged from the config with no push target",
+            vec!["pack", "--config", &untagged, "--oci-archive", archive],
+            "--push-untagged needs a push target",
+        ),
+        (
             "--watch with push from the config",
             vec!["pack", "--watch", "--config", &push],
             "--watch cannot push",
@@ -219,6 +228,22 @@ fn post_parse_usage_refusals_exit_2() {
             "--add-binary with a relative image path",
             vec!["pack", "--add-binary", "/usr/bin/bash:bin/bash", bin],
             "--add-binary '/usr/bin/bash:bin/bash': read",
+        ),
+        (
+            "--push-untagged with a tag in the reference",
+            vec![
+                "pack",
+                "--push",
+                "localhost:5000/x:1",
+                "--push-untagged",
+                bin,
+            ],
+            "drop `:1` from localhost:5000/x:1",
+        ),
+        (
+            "--push-untagged without --push",
+            vec!["pack", "--push-untagged", bin],
+            "--push <REF>",
         ),
         (
             "add-file with one image path twice from the config",

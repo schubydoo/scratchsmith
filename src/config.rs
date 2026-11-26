@@ -101,6 +101,9 @@ pub struct Config {
     /// Sign the pushed image with cosign (needs a push target).
     #[serde(default)]
     pub sign: bool,
+    /// Push by digest only, with no tag (`--push-untagged`; needs a push target).
+    #[serde(default, rename = "push-untagged")]
+    pub push_untagged: bool,
     /// Push target registry reference.
     pub push: Option<String>,
     /// Fail the pack if the packed image (staged rootfs) exceeds this size, e.g. `"12MB"`.
@@ -264,6 +267,7 @@ impl Config {
             deny: vec_or(self.deny, over.deny),
             require: vec_or(self.require, over.require),
             sign: self.sign || over.sign,
+            push_untagged: self.push_untagged || over.push_untagged,
             push: over.push.or(self.push),
             max_size: over.max_size.or(self.max_size),
             runtime: over.runtime.or(self.runtime),
@@ -310,6 +314,7 @@ mod tests {
             deny = ["libssl.so.3"]
             require = ["libc.so.6"]
             sign = true
+            push-untagged = true
             push = "ghcr.io/me/tool:latest"
             max-size = "12MB"
             runtime = "podman"
@@ -319,6 +324,7 @@ mod tests {
         assert_eq!(cfg.binary, Some(PathBuf::from("/usr/bin/tool")));
         assert_eq!(cfg.cmd, vec!["--serve".to_string()]);
         assert!(cfg.strip && cfg.upx && cfg.smoke && cfg.sbom && cfg.sign && cfg.scan);
+        assert!(cfg.push_untagged);
         assert_eq!(cfg.sbom_file, Some(PathBuf::from("out.json")));
         assert_eq!(cfg.sbom_format, Some(SbomFormat::SpdxJson));
         assert_eq!(cfg.scan_fail_on, Some(Severity::High));

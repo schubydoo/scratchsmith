@@ -111,6 +111,11 @@ pub enum Command {
         /// generated. Requires --push (cosign signs a registry image by digest).
         #[arg(long, requires = "push")]
         sign: bool,
+        /// Push the image by its digest only, creating or moving no image tag. The --push
+        /// reference then names just the repository, with no tag. Requires --push. With --sign,
+        /// cosign still stores its signature under a `sha256-<hex>` tag.
+        #[arg(long = "push-untagged", requires = "push")]
+        push_untagged: bool,
         /// Image entrypoint (defaults to the packed binary's path).
         #[arg(long, value_name = "PATH")]
         entrypoint: Option<String>,
@@ -339,6 +344,7 @@ fn dispatch(cli: Cli) -> Result<()> {
             oci_archive,
             push,
             sign,
+            push_untagged,
             entrypoint,
             cmd,
             env,
@@ -450,6 +456,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                 deny: file_deny,
                 require: file_require,
                 sign: file_sign,
+                push_untagged: file_push_untagged,
                 push: file_push,
                 max_size: file_max_size,
                 runtime: file_runtime,
@@ -575,6 +582,7 @@ fn dispatch(cli: Cli) -> Result<()> {
                     },
                 },
                 sign: sign || file_sign,
+                push_untagged: push_untagged || file_push_untagged,
                 max_size: max_size
                     .or(file_max_size)
                     .map(|s| crate::report::parse_size(&s).map_err(usage))
@@ -660,6 +668,9 @@ fn dispatch(cli: Cli) -> Result<()> {
                     .parse::<oci_client::Reference>()
                     .with_context(|| format!("invalid image reference {reference:?}"))
                     .map_err(usage)?;
+                if opts.push_untagged {
+                    crate::registry::untagged_reference(reference).map_err(usage)?;
+                }
             }
             // Every sink and --watch rule, before any staging. clap catches the flag pairs it
             // can; what reaches here came from the config, so two refusals name where it is set.

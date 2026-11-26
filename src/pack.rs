@@ -767,6 +767,8 @@ pub struct PackOptions {
     pub image: ImageConfig,
     /// Sign the pushed image with cosign (and attest the SBOM, if any). `--push` only.
     pub sign: bool,
+    /// Push the manifest by its digest only, creating or moving no tag. `--push` only.
+    pub push_untagged: bool,
     /// Fail the pack if the fully-staged rootfs exceeds this many bytes (`--max-size`).
     pub max_size: Option<u64>,
     /// Container engine for the docker-load sink and `--smoke` run (`--runtime`). Ignored by
@@ -808,6 +810,8 @@ pub enum Conflict {
     SmokePush,
     /// `sign` without [`Sink::Push`]: cosign signs a pushed image by its digest.
     SignWithoutPush,
+    /// `push_untagged` without [`Sink::Push`]: only a push has a tag to leave alone.
+    UntaggedWithoutPush,
     /// `--watch` with [`Sink::Push`]: a registry is not the place for a pack on every save.
     WatchPush,
     /// `--watch` with `--format json`: one JSON document per pack is a stream shape nobody
@@ -822,6 +826,7 @@ impl std::fmt::Display for Conflict {
             Self::SmokeOciArchive => "--smoke needs a running image, so it isn't supported with --oci-archive; load the archive (docker load / skopeo) and run it separately, or drop --smoke",
             Self::SmokePush => "--smoke needs a running image, so it isn't supported with --push; pull the pushed image and run it separately, or drop --smoke",
             Self::SignWithoutPush => "--sign needs a push target. Pass --push or set `push` in the config, or turn signing off",
+            Self::UntaggedWithoutPush => "--push-untagged needs a push target. Pass --push or set `push` in the config, or remove `push-untagged = true`",
             Self::WatchPush => "--watch cannot push: it packs again on every change. Pass --oci-archive, remove `push` from the config/profile, or drop --watch",
             Self::WatchJson => "--watch prints a text report for each pack; it cannot be used with --format json",
         })
@@ -838,6 +843,8 @@ impl Sink {
             Some(Conflict::SmokeNoBuild)
         } else if opts.sign && !push {
             Some(Conflict::SignWithoutPush)
+        } else if opts.push_untagged && !push {
+            Some(Conflict::UntaggedWithoutPush)
         } else if watch && push {
             Some(Conflict::WatchPush)
         } else if watch && json {
@@ -1322,10 +1329,23 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<(Delive
     }
     // The push returns the pushed image's digest when the registry reports one; a plain push
     // never fails on a missing or mismatched digest — only signing, which needs it, does.
-    let (digest_ref, ms) = timed(|| crate::registry::push_to_registry(&s.tree, reference, &s.cfg))?;
+    let (outcome, ms) = timed(|| {
+        crate::registry::push_to_registry(&s.tree, reference, &s.cfg, opts.push_untagged)
+    })?;
+    let crate::registry::Pushed {
+        digest: digest_ref,
+        by_digest,
+    } = outcome;
     s.clock.timings.deliver_ms = Some(ms);
+    // An untagged push has no reference but its digest, so that is what the report names, and
+    // what a signing failure names as the image to sign by hand.
+    let pushed = if opts.push_untagged {
+        by_digest
+    } else {
+        reference.to_string()
+    };
     let signed = if opts.sign {
-        let (signed, ms) = timed(|| sign_pushed(reference, digest_ref, opts))?;
+        let (signed, ms) = timed(|| sign_pushed(&pushed, digest_ref, opts))?;
         s.clock.timings.sign_ms = Some(ms);
         Some(signed)
     } else {
@@ -1336,7 +1356,6 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<(Delive
         }
         None
     };
-    let pushed = reference.to_string();
     Ok((Delivered::Push { pushed, signed }, s.into_common()))
 }
 
@@ -1733,8 +1752,20 @@ mod tests {
             sign: true,
             ..Default::default()
         };
+        let untagged = PackOptions {
+            push_untagged: true,
+            ..Default::default()
+        };
         let none = PackOptions::default();
         let cases = [
+            (&push, &untagged, false, false, None),
+            (
+                &archive,
+                &untagged,
+                false,
+                false,
+                Some(Conflict::UntaggedWithoutPush),
+            ),
             (&rootfs, &smoke, false, false, Some(Conflict::SmokeNoBuild)),
             (
                 &archive,

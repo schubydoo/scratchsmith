@@ -23,13 +23,18 @@ pub fn push_to_registry(
     staged: &StagedTree,
     reference: &str,
     cfg: &ImageConfig,
-) -> Result<PushedDigest> {
+    untagged: bool,
+) -> Result<Pushed> {
     // Everything cheap first. Building the image stages and gzips the whole rootfs, so a bad
     // reference, a broken credential helper or a missing trust store used to surface only
     // after all of that work — where `index` reports the same failures instantly.
-    let reference: Reference = reference
-        .parse()
-        .with_context(|| format!("invalid image reference {reference:?}"))?;
+    let reference: Reference = if untagged {
+        untagged_reference(reference)?
+    } else {
+        reference
+            .parse()
+            .with_context(|| format!("invalid image reference {reference:?}"))?
+    };
     if let Some(digest) = reference.digest() {
         eprintln!("warning: {}", digest_push_deprecation(digest));
     }
@@ -51,6 +56,23 @@ pub fn push_to_registry(
     // The manifest `push` builds itself when given `None`, built here so its digest is known.
     let manifest = OciImageManifest::build(&layers, &config, None);
     let pushed_digest = manifest_digest(&OciManifest::Image(manifest.clone()))?;
+    // An untagged push PUTs the manifest under its own digest, which names no tag. The digest
+    // goes where the tag would, as `manifest_target` does for a digest reference.
+    let target = if untagged {
+        Reference::with_tag(
+            reference.registry().to_string(),
+            reference.repository().to_string(),
+            pushed_digest.clone(),
+        )
+    } else {
+        manifest_target(&reference)
+    };
+    let by_digest = format!(
+        "{}/{}@{}",
+        reference.registry(),
+        reference.repository(),
+        pushed_digest
+    );
 
     // oci-client is async; run one scoped current-thread runtime for the identity-token
     // exchange (if any) and the push, rather than making the whole CLI async.
@@ -63,13 +85,7 @@ pub fn push_to_registry(
         // The pack report is the single user-facing line (like the other sinks); don't
         // print here too.
         let pushed = client
-            .push(
-                &manifest_target(&reference),
-                &layers,
-                config,
-                &auth,
-                Some(manifest),
-            )
+            .push(&target, &layers, config, &auth, Some(manifest))
             .await
             .with_context(|| format!("pushing to {reference}"))?;
         Ok::<_, anyhow::Error>(digest_ref_from(
@@ -78,7 +94,48 @@ pub fn push_to_registry(
             &pushed_digest,
         ))
     })?;
-    Ok(digest_ref)
+    Ok(Pushed {
+        digest: digest_ref,
+        by_digest,
+    })
+}
+
+/// What [`push_to_registry`] pushed.
+#[derive(Debug)]
+pub struct Pushed {
+    /// What the registry said about the pushed manifest's digest.
+    pub digest: PushedDigest,
+    /// `registry/repo@sha256:…` for the manifest scratchsmith PUT.
+    pub by_digest: String,
+}
+
+/// Parse a `--push-untagged` reference, which names a repository and nothing else. oci-client
+/// reads a bare `app` as `app:latest`, so a tag the user wrote is found in the text: it is a
+/// `:` after the last `/` (a registry port comes before the first one).
+pub fn untagged_reference(raw: &str) -> Result<Reference> {
+    let reference: Reference = raw
+        .parse()
+        .with_context(|| format!("invalid image reference {raw:?}"))?;
+    let shown = crate::resolver::escape_for_display(raw);
+    if reference.digest().is_some() {
+        bail!(
+            "--push-untagged pushes by the image's own digest, so the --push reference names a \
+             repository with no digest: {shown}"
+        );
+    }
+    if raw
+        .rsplit('/')
+        .next()
+        .is_some_and(|last| last.contains(':'))
+    {
+        bail!(
+            "--push-untagged pushes no tag, so the --push reference names a repository with no \
+             tag: drop `:{}` from {shown}, or drop --push-untagged (or `push-untagged` in the config) \
+             to push to that tag",
+            crate::resolver::escape_for_display(reference.tag().unwrap_or_default())
+        );
+    }
+    Ok(reference)
 }
 
 /// A per-arch image that went into an index, for the report.
@@ -1321,8 +1378,14 @@ mod tests {
         let push = |answer| {
             let server = mock_registry(answer, Vec::new());
             let host = server.address().to_string();
-            let got = push_to_registry(&staged, &format!("{host}/app:1"), &ImageConfig::default())
-                .expect("the push itself succeeds whatever digest the registry reports");
+            let got = push_to_registry(
+                &staged,
+                &format!("{host}/app:1"),
+                &ImageConfig::default(),
+                false,
+            )
+            .expect("the push itself succeeds whatever digest the registry reports")
+            .digest;
             (got, host, received_manifest_digest(&server))
         };
         // A tag-based `Location` names no digest, so the bytes put are signed (TASK-232).
@@ -1900,6 +1963,61 @@ mod tests {
         }
         let tagged: Reference = "ghcr.io/owner/app:1.0".parse().unwrap();
         assert_eq!(manifest_target(&tagged), tagged);
+    }
+
+    #[test]
+    fn an_untagged_reference_names_a_repository_and_nothing_else() {
+        for ok in ["ghcr.io/owner/app", "localhost:5000/app", "app"] {
+            let r = untagged_reference(ok).unwrap_or_else(|e| panic!("{ok}: {e:#}"));
+            assert_eq!(r.digest(), None, "{ok}");
+        }
+        // `:latest` written out is a tag the user asked for, though a bare name parses the same.
+        for (tagged, tag) in [
+            ("ghcr.io/owner/app:1.0", "1.0"),
+            ("app:latest", "latest"),
+            ("localhost:5000/app:1", "1"),
+        ] {
+            let err = format!("{:#}", untagged_reference(tagged).unwrap_err());
+            assert!(err.contains(&format!("drop `:{tag}`")), "{tagged}: {err}");
+        }
+        let digest = format!("ghcr.io/owner/app@sha256:{}", "a".repeat(64));
+        let err = format!("{:#}", untagged_reference(&digest).unwrap_err());
+        assert!(err.contains("with no digest"), "{err}");
+        assert!(untagged_reference("Bad/Ref").is_err());
+    }
+
+    #[test]
+    fn an_untagged_push_puts_the_manifest_under_its_digest_and_no_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("app"), b"app").unwrap();
+        let staged = StagedTree {
+            root,
+            entrypoint: "/app".into(),
+            loader: None,
+        };
+        for answer in [ManifestAnswer::Honest, ManifestAnswer::NoLocation] {
+            let server = mock_registry(answer, Vec::new());
+            let host = server.address().to_string();
+            let got = push_to_registry(
+                &staged,
+                &format!("{host}/app"),
+                &ImageConfig::default(),
+                true,
+            )
+            .expect("an untagged push succeeds");
+            let put = received_manifest_digest(&server);
+            let requests = block_on(server.received_requests()).unwrap();
+            let paths: Vec<_> = requests
+                .iter()
+                .filter(|r| r.method.as_str() == "PUT" && r.url.path().contains("/manifests/"))
+                .map(|r| r.url.path().to_string())
+                .collect();
+            assert_eq!(paths, [format!("/v2/app/manifests/{put}")]);
+            assert_eq!(got.by_digest, format!("{host}/app@{put}"));
+            assert_eq!(got.digest.for_signing().unwrap(), got.by_digest);
+        }
     }
 
     #[test]

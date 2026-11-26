@@ -36,6 +36,7 @@ file**.
 | `deny` | `--deny` | If this library ships, the pack fails (list). Resolved libraries, the loader, and NSS modules are all in scope, matched by soname or staged file name. This is a CI policy gate. Read sonames from `scratchsmith graph`. |
 | `require` | `--require` | If this library does not ship, the pack fails (list). Same scope as `deny`. |
 | `sign` | `--sign` | cosign-sign the pushed image (keyless, by digest). Requires a push target. |
+| `push-untagged` | `--push-untagged` | Push the image by its digest only, creating or moving no image tag (`sign` still adds cosign's `sha256-<hex>` signature tags). The push reference then names just the repository. Needs a push target, like `sign`. See [Usage](usage.md#quick-start). |
 | `push` | `--push` | Push the image straight to this registry reference, daemonless. A sink on the command line (`--push`, `--oci-archive` or `--no-build`) replaces this key. If the file also sets `sign`, `--oci-archive` or `--no-build` leaves it no push target, and the pack fails with exit code 2. |
 | `max-size` | `--max-size` | If the packed image exceeds this size, the pack fails. The packed image is the fully-staged rootfs: payload + NSS includes + runtime extras + added files + locales + the `--packages image` records. Write the size as `12MB`, `512KiB`, or a bare byte count (K/M/G are ×1000, Ki/Mi/Gi are ×1024). |
 | `runtime` | `--runtime` | Container engine for the default load sink and the `--smoke` run: `docker` (default), `podman`, or `nerdctl`. The daemonless sinks (`--oci-archive`, `--push`) never invoke a runtime, so this is ignored there. |
@@ -79,6 +80,7 @@ deny = ["libssl.so.3"]
 require = ["libseccomp.so.2"]
 sign = true
 push = "ghcr.io/you/app:latest"
+# push-untagged = true        # needs a `push` reference with no tag, so not this one
 max-size = "50MB"
 runtime = "docker"
 ```
