@@ -287,23 +287,20 @@ fn bundled_files(
 //
 // `manager` is a parameter so each of those is testable on any host. It is a function, so
 // `--packages none` probes nothing: "looks nothing up" includes the probe.
+//
+// Returns the selection the rest of the pack goes by, beside the owners: the retry above can
+// turn `sbom` off, and the records staged later must follow that.
 fn lookup_owners(
     files: &[(PathBuf, PathBuf)],
     conventions: &[(&str, PathBuf)],
-    selection: &mut PackagesSelection,
+    selection: PackagesSelection,
     manager: impl FnOnce() -> Option<packages::Manager>,
     warnings: &mut Vec<String>,
-) -> Result<Option<Owners>> {
+) -> Result<(PackagesSelection, Option<Owners>)> {
     if !selection.any() {
-        return Ok(None);
+        return Ok((selection, None));
     }
-    let asked: &str = if selection.sbom && selection.image {
-        "sbom,image"
-    } else if selection.image {
-        "image"
-    } else {
-        "sbom"
-    };
+    let asked = selection.records_label();
     let Some(manager) = manager() else {
         if selection.requires_records() {
             bail!(
@@ -318,17 +315,25 @@ fn lookup_owners(
                     .to_string(),
             );
         }
-        return Ok(None);
+        return Ok((selection, None));
     };
-    let mut found = packages::owners(manager, files, conventions, selection.needs_records());
+    let found = packages::owners(manager, files, conventions, selection.needs_records());
     // Only an explicit selection has `image`, so this is the default `sbom`. Any failure
     // retries once without the records, also when the text report has no `report`: rpm 4.11
     // then succeeds and stays quiet, and every other failure fails again and warns below.
-    if found.is_err() && selection.sbom && !selection.explicit {
-        selection.sbom = false;
-        found = packages::owners(manager, files, conventions, false);
-    }
-    match found {
+    let (selection, found) = if found.is_err() && selection.sbom && !selection.explicit {
+        let without = PackagesSelection {
+            sbom: false,
+            ..selection
+        };
+        (
+            without,
+            packages::owners(manager, files, conventions, false),
+        )
+    } else {
+        (selection, found)
+    };
+    let owners = match found {
         Ok(owners) => {
             // Not asked is not the same as not owned, and the two look alike in the list.
             if !owners.unasked.is_empty() {
@@ -345,18 +350,19 @@ fn lookup_owners(
                         .join(", ")
                 ));
             }
-            Ok(Some(owners))
+            Some(owners)
         }
         Err(err) if selection.requires_records() => {
-            Err(err.context(format!("--packages {asked}: the package lookup failed")))
+            return Err(err.context(format!("--packages {asked}: the package lookup failed")));
         }
         Err(err) => {
             // The package manager's own words can quote a path back, so they are escaped.
             let cause = format!("{err:#}");
             warnings.push(format!("package lookup failed: {}", cause.escape_debug()));
-            Ok(None)
+            None
         }
-    }
+    };
+    Ok((selection, owners))
 }
 
 // `--packages sbom` has two readers, syft (`--sbom`) and grype (`--scan`). With neither on,
@@ -369,22 +375,25 @@ fn lookup_owners(
 // Only `sbom` is ever cleared here. The report reads `report` alone, so `report_packages`
 // gives the same answer for this selection and for `opts.packages`.
 fn drop_unread_sbom(
-    mut selection: PackagesSelection,
+    selection: PackagesSelection,
     reads_tree: bool,
     warnings: &mut Vec<String>,
 ) -> PackagesSelection {
-    if selection.sbom && !reads_tree {
-        if selection.explicit {
-            warnings.push(
-                "--packages sbom: neither --sbom nor --scan is on, so nothing reads the package \
-                 records and this output does nothing. Add --sbom or --scan, or remove sbom \
-                 from --packages"
-                    .to_string(),
-            );
-        }
-        selection.sbom = false;
+    if !selection.sbom || reads_tree {
+        return selection;
     }
-    selection
+    if selection.explicit {
+        warnings.push(
+            "--packages sbom: neither --sbom nor --scan is on, so nothing reads the package \
+             records and this output does nothing. Add --sbom or --scan, or remove sbom from \
+             --packages"
+                .to_string(),
+        );
+    }
+    PackagesSelection {
+        sbom: false,
+        ..selection
+    }
 }
 
 // The report's `packages` field. `None` (JSON `null`) is "not reported": the output is off,
@@ -766,11 +775,11 @@ fn finish_staging(
             Vec::new()
         };
     let reads_tree = opts.sbom.is_some() || opts.scan.is_some();
-    let mut selection = drop_unread_sbom(opts.packages, reads_tree, warnings);
-    let found = lookup_owners(
+    let selection = drop_unread_sbom(opts.packages, reads_tree, warnings);
+    let (selection, found) = lookup_owners(
         &bundled,
         &conventions,
-        &mut selection,
+        selection,
         packages::manager,
         warnings,
     )?;
@@ -779,13 +788,8 @@ fn finish_staging(
     // `--packages image`: the records are image content, so they land before the size gate.
     let owners = found.as_ref().filter(|o| !o.packages.is_empty());
     if let (true, Some(owners)) = (selection.image, owners) {
-        let asked = if selection.sbom {
-            "sbom,image"
-        } else {
-            "image"
-        };
         let records = packages::stage_records(dest, owners, &added)
-            .map_err(|err| records_refused(err, asked))?;
+            .map_err(|err| records_refused(err, selection.records_label()))?;
         if records.berkeley_db() {
             warnings.push(
                 "--packages image: this host's rpm database is a Berkeley DB, and rpm writes \
@@ -821,7 +825,7 @@ fn finish_staging(
                     ));
                     None
                 }
-                Err(err) => return Err(records_refused(err, "sbom")),
+                Err(err) => return Err(records_refused(err, selection.records_label())),
             }
         }
         _ => None,
@@ -1308,8 +1312,8 @@ mod tests {
         // No dpkg and no rpm on this "host", whatever the real one has.
         let lookup = |selection: &PackagesSelection| {
             let mut warnings = Vec::new();
-            let result = lookup_owners(&[], &[], &mut selection.clone(), || None, &mut warnings);
-            (result, warnings)
+            let result = lookup_owners(&[], &[], *selection, || None, &mut warnings);
+            (result.map(|(_, owners)| owners), warnings)
         };
 
         // The default is on for every pack with a JSON report, `--sbom` or `--scan`: it must
@@ -1326,8 +1330,8 @@ mod tests {
         // Off is off, down to the probe: `none` must not even ask whether dpkg is there.
         let mut warnings = Vec::new();
         let probe = || -> Option<packages::Manager> { panic!("--packages none probed the host") };
-        let result = lookup_owners(&[], &[], &mut select(&[Off]), probe, &mut warnings);
-        assert!(matches!(result, Ok(None)) && warnings.is_empty());
+        let result = lookup_owners(&[], &[], select(&[Off]), probe, &mut warnings);
+        assert!(matches!(result, Ok((_, None))) && warnings.is_empty());
         // An explicit report cannot be filled, and says so, and the pack goes on.
         let (result, warnings) = lookup(&select(&[Report]));
         assert!(matches!(result, Ok(None)));
