@@ -1257,6 +1257,12 @@ fn signing_path(dir: &Path) -> std::ffi::OsString {
 // A mock registry for repository `app` that accepts any blob and manifest, so a push
 // succeeds with no Docker daemon. A manifest PUT answers with its own digest.
 fn mock_registry() -> (tokio::runtime::Runtime, wiremock::MockServer) {
+    mock_registry_with(true)
+}
+
+// As `mock_registry`, but with `location: false` a manifest PUT answers 201 with no
+// `Location`, as AWS ECR does.
+fn mock_registry_with(location: bool) -> (tokio::runtime::Runtime, wiremock::MockServer) {
     use sha2::Digest;
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, ResponseTemplate};
@@ -1282,14 +1288,19 @@ fn mock_registry() -> (tokio::runtime::Runtime, wiremock::MockServer) {
         }
         Mock::given(method("PUT"))
             .and(path_regex("^/v2/app/manifests/"))
-            .respond_with(|req: &wiremock::Request| {
+            .respond_with(move |req: &wiremock::Request| {
                 let hex: String = sha2::Sha256::digest(&req.body)
                     .iter()
                     .map(|b| format!("{b:02x}"))
                     .collect();
                 let digest = format!("sha256:{hex}");
-                ResponseTemplate::new(201)
-                    .insert_header("Location", format!("/v2/app/manifests/{digest}").as_str())
+                let created = ResponseTemplate::new(201);
+                if location {
+                    created
+                        .insert_header("Location", format!("/v2/app/manifests/{digest}").as_str())
+                } else {
+                    created
+                }
             })
             .mount(&server)
             .await;
@@ -1300,6 +1311,50 @@ fn mock_registry() -> (tokio::runtime::Runtime, wiremock::MockServer) {
 
 fn received(rt: &tokio::runtime::Runtime, server: &wiremock::MockServer) -> usize {
     rt.block_on(server.received_requests()).unwrap().len()
+}
+
+#[test]
+fn a_digest_in_push_warns_and_never_panics_when_the_registry_sends_no_location() {
+    // TASK-241. oci-client 0.18.0 panicked on a push to a digest when the manifest PUT came
+    // back with no `Location`. The push still goes to the digest, and it warns.
+    let Some(bin) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let (rt, server) = mock_registry_with(false);
+    let host = server.address().to_string();
+    let tmp = tempfile::tempdir().unwrap();
+    let digest = format!("sha256:{}", "0".repeat(64));
+    for reference in [format!("{host}/app@{digest}"), format!("{host}/app:1")] {
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["pack", "--packages", "none", "--push"])
+            .arg(&reference)
+            .arg(bin)
+            .env("HOME", tmp.path())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{reference}: {stderr}");
+        assert!(!stderr.contains("panicked"), "{reference}: {stderr}");
+        let warned = stderr.contains(&format!(
+            "warning: a digest in the --push reference ({digest}) is deprecated"
+        ));
+        assert_eq!(warned, reference.contains('@'), "{reference}: {stderr}");
+    }
+    let manifests: Vec<String> = rt
+        .block_on(server.received_requests())
+        .unwrap()
+        .iter()
+        .filter(|r| r.method.as_str() == "PUT" && r.url.path().starts_with("/v2/app/manifests/"))
+        .map(|r| r.url.path().to_string())
+        .collect();
+    assert_eq!(
+        manifests,
+        [
+            format!("/v2/app/manifests/{digest}"),
+            "/v2/app/manifests/1".to_string()
+        ]
+    );
 }
 
 #[test]

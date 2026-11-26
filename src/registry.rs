@@ -30,6 +30,9 @@ pub fn push_to_registry(
     let reference: Reference = reference
         .parse()
         .with_context(|| format!("invalid image reference {reference:?}"))?;
+    if let Some(digest) = reference.digest() {
+        eprintln!("warning: {}", digest_push_deprecation(digest));
+    }
 
     // `registry()` is the Docker-config key (e.g. `docker.io`); `resolve_registry()` is the
     // real endpoint we talk HTTP to (e.g. `registry-1.docker.io`). Look creds up by the
@@ -60,7 +63,13 @@ pub fn push_to_registry(
         // The pack report is the single user-facing line (like the other sinks); don't
         // print here too.
         let pushed = client
-            .push(&reference, &layers, config, &auth, Some(manifest))
+            .push(
+                &manifest_target(&reference),
+                &layers,
+                config,
+                &auth,
+                Some(manifest),
+            )
             .await
             .with_context(|| format!("pushing to {reference}"))?;
         Ok::<_, anyhow::Error>(digest_ref_from(
@@ -196,7 +205,7 @@ pub fn push_index(target: &str, sources: &[String]) -> Result<IndexOutcome> {
         let index = build_index(&children)?;
         let pushed_digest = manifest_digest(&OciManifest::ImageIndex(index.clone()))?;
         let url = client
-            .push_manifest_list(&target_ref, &auth, index)
+            .push_manifest_list(&manifest_target(&target_ref), &auth, index)
             .await
             .with_context(|| format!("pushing the image index to {target}"))?;
         let entries = children
@@ -368,6 +377,33 @@ fn build_index(children: &[Child]) -> Result<OciImageIndex> {
         "manifests": manifests,
     });
     serde_json::from_value(index).context("assembling the OCI image index")
+}
+
+// The deprecation line for a `--push` reference that names a digest. A registry stores a
+// manifest under its own digest, so a push to any other digest fails there, and one to the
+// right digest needs a digest nobody knows before the build. 3.0 refuses it (TASK-254).
+fn digest_push_deprecation(digest: &str) -> String {
+    format!(
+        "a digest in the --push reference ({}) is deprecated, and 3.0 will refuse it. Push to \
+         a tag instead",
+        crate::resolver::escape_for_display(digest)
+    )
+}
+
+// The reference to hand oci-client for the manifest PUT. When a push to a digest gets no
+// `Location` back, oci-client 0.18.0 panics (src/client.rs:1873, "The manifest URL always ends
+// with the image tag suffix"): its fallback strips the tag, not the digest, off the URL. With
+// the digest as the tag, the URL is the same (`/v2/<repo>/manifests/<digest>`) and the
+// fallback strips what the URL ends with.
+fn manifest_target(reference: &Reference) -> Reference {
+    match reference.digest() {
+        Some(digest) => Reference::with_tag(
+            reference.registry().to_string(),
+            reference.repository().to_string(),
+            digest.to_string(),
+        ),
+        None => reference.clone(),
+    }
 }
 
 // Build a by-digest reference (`registry/repo@sha256:…`) for `pushed`, the digest of the
@@ -1844,6 +1880,34 @@ mod tests {
         );
         assert!(format!("{err:#}").contains("probing"), "{err:#}");
         quiet.join().unwrap();
+    }
+
+    // TASK-241: a digest becomes the tag, so oci-client builds the same manifest URL and its
+    // no-`Location` fallback cannot panic. Registry and repository stay as written.
+    #[test]
+    fn a_digest_reference_pushes_its_manifest_under_the_digest_as_the_tag() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        for written in [
+            format!("ghcr.io/owner/app@{digest}"),
+            format!("ghcr.io/owner/app:1.0@{digest}"),
+        ] {
+            let r: Reference = written.parse().unwrap();
+            let target = manifest_target(&r);
+            assert_eq!(target.registry(), "ghcr.io", "{written}");
+            assert_eq!(target.repository(), "owner/app", "{written}");
+            assert_eq!(target.tag(), Some(digest.as_str()), "{written}");
+            assert_eq!(target.digest(), None, "{written}");
+        }
+        let tagged: Reference = "ghcr.io/owner/app:1.0".parse().unwrap();
+        assert_eq!(manifest_target(&tagged), tagged);
+    }
+
+    #[test]
+    fn the_digest_deprecation_names_the_digest_and_the_way_out() {
+        let line = digest_push_deprecation("sha256:abc");
+        assert!(line.contains("(sha256:abc) is deprecated"), "{line}");
+        assert!(line.contains("3.0 will refuse it"), "{line}");
+        assert!(line.contains("Push to a tag instead"), "{line}");
     }
 
     #[test]

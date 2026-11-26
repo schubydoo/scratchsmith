@@ -26,8 +26,18 @@ tolerance prints one warning line to standard error, and the exit code stays the
 
 ## Deprecated input shapes
 
-No input shape is deprecated now. Version 2.0.0 removed the 1.x deprecations, and the list
-[Removed in 2.0.0](#removed-in-200) names each one.
+Version 2.0.0 removed the 1.x deprecations, and the list [Removed in 2.0.0](#removed-in-200)
+names each one.
+
+| Input | Warned since | In 3.0 | Write this instead |
+|---|---|---|---|
+| A digest in the `--push` reference (or the `push` key), such as `ghcr.io/owner/app@sha256:…` | 2.1.0 | Refused | A tag, such as `ghcr.io/owner/app:1.0` |
+
+A registry stores a manifest only under that manifest's own digest. A push to any other digest
+fails at the registry, and nobody knows the right digest before the image is built. With
+`--sign`, scratchsmith already signs the image by the digest that the push stored. Through
+2.0.3, a push to a digest could also crash scratchsmith when the registry answered without a
+`Location` header, as AWS ECR does. That crash is fixed, and the push still goes to the digest.
 
 ## Refused without a deprecation cycle
 
