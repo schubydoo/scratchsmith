@@ -523,6 +523,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#rebuilding-a-release-binary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rebuilding a release binary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#verifying-an-image-you-signed-with-pack" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -703,6 +714,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#rebuilding-a-release-binary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rebuilding a release binary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#verifying-an-image-you-signed-with-pack" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -758,6 +780,10 @@ to download it, because <code>gh attestation verify</code> reads the attestation
 <a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/schubydoo/scratchsmith/\.github/workflows/release\.yml@refs/tags/'</span><span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
 </code></pre></div>
+<h2 id="rebuilding-a-release-binary">Rebuilding a release binary<a class="headerlink" href="#rebuilding-a-release-binary" title="Permanent link">&para;</a></h2>
+<p>Release binaries after v2.1.0 are reproducible. For every such release, a CI job rebuilds both
+binaries from the tag and checks that they match the published ones byte for byte. To run the same check
+yourself, follow <a href="https://github.com/schubydoo/scratchsmith/blob/main/REPRODUCE.md">REPRODUCE.md</a>.</p>
 <h2 id="verifying-an-image-you-signed-with-pack">Verifying an image you signed with <code>pack</code><a class="headerlink" href="#verifying-an-image-you-signed-with-pack" title="Permanent link">&para;</a></h2>
 <p>The commands above verify Scratchsmith's own <strong>release artifacts</strong>. To sign an image Scratchsmith
 <em>builds</em> for you, <code>pack --push --sign</code> cosign-signs the pushed image by digest (keyless), and
