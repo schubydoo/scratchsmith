@@ -82,6 +82,10 @@ fn post_parse_usage_refusals_exit_2() {
     let rootfs = rootfs.to_str().unwrap();
     let profiles = cfg("profiles.toml", "[profile.ci]\nstrip = true\n");
     let sign = cfg("sign.toml", &format!("binary = \"{bin}\"\nsign = true\n"));
+    let untagged = cfg(
+        "untagged.toml",
+        &format!("binary = \"{bin}\"\npush-untagged = true\n"),
+    );
     let push = cfg(
         "push.toml",
         &format!("binary = \"{bin}\"\npush = \"localhost:5000/x:1\"\n"),
@@ -159,6 +163,11 @@ fn post_parse_usage_refusals_exit_2() {
             "sign from the config with no push target",
             vec!["pack", "--config", &sign, "--oci-archive", archive],
             "--sign needs a push target",
+        ),
+        (
+            "push-untagged from the config with no push target",
+            vec!["pack", "--config", &untagged, "--oci-archive", archive],
+            "--push-untagged needs a push target",
         ),
         (
             "--watch with push from the config",
