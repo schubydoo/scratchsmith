@@ -515,6 +515,10 @@ above the image root or a malformed PAX record, and exits `1` before that layer 
 any file. A layer may hold at most 2 GiB once decompressed, and
 all layers together at most 16 GiB. A layer that the manifest lists twice counts twice.
 
+`unpack` writes each entry relative to the directory that holds it, so an entry deeper than
+the host's path limit (4096 bytes) unpacks. It reaches that directory through `/proc`, which a
+container runtime mounts by default. Without `/proc`, `unpack` fails and names the entry.
+
 `unpack` clears the setuid and setgid bits on every file and directory it writes. An untrusted
 image cannot then plant a setuid program owned by the user who unpacks it. `unpack` prints one
 warning line on standard error for each path in the final image that had one of those bits.
