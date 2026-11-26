@@ -64,7 +64,7 @@ cosign verify-attestation "$IMAGE" --type cyclonedx \
 ```
 
 With `--sbom-format spdx-json`, use `--type spdxjson`. Pass a tag only if you trust it not to
-move. The digest reference that the pack printed (`signed ...@sha256:...`, or the `pushed` field
+move. The digest reference that the pack printed (`signed ...@sha256:...`, or the `signed` field
 in `--format json`) pins the exact image. To read the attested SBOM, drop the `> /dev/null` and
 decode its payload:
 
@@ -73,5 +73,6 @@ cosign verify-attestation "$IMAGE" --type cyclonedx <identity flags as above> \
   | jq -r .payload | base64 -d | jq .predicate
 ```
 
-Scratchsmith's `push-auth-smoke` workflow runs exactly this check against an image it packs,
+Scratchsmith's `push-auth-smoke` workflow runs the same `cosign verify` and
+`cosign verify-attestation` checks, with its own workflow identity, against an image it packs,
 pushes to GHCR and signs.
