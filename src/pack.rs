@@ -614,11 +614,84 @@ pub fn pack(binary: &Path, opts: &PackOptions, sink: Sink) -> Result<PackReport>
     if let Some(conflict) = sink.conflict(opts, false, false) {
         bail!(crate::cli::UsageError(conflict.to_string()));
     }
-    match sink {
+    let (delivered, common) = match sink {
         Sink::Rootfs(dir) => to_rootfs(binary, &dir, opts),
         Sink::DockerLoad => to_docker(binary, opts),
         Sink::OciArchive(out) => to_oci_archive(binary, opts, &out),
         Sink::Push(reference) => to_push(binary, opts, &reference),
+    }?;
+    Ok(report(delivered, common))
+}
+
+/// What a sink delivered, with only the fields that sink sets. The report's four delivery
+/// fields hold exactly one value, and `signed` and `smoke_ok` only on the sink that can set
+/// them, because no other shape of this enum exists.
+enum Delivered {
+    Rootfs {
+        staged_dir: String,
+    },
+    /// `smoked` is true when the smoke-run started the binary. A failed smoke-run is an error,
+    /// so the report's `smoke_ok` is never `Some(false)`.
+    DockerLoad {
+        tag: String,
+        smoked: bool,
+    },
+    OciArchive {
+        archive: String,
+    },
+    Push {
+        pushed: String,
+        signed: Option<String>,
+    },
+}
+
+/// The report fields that every sink fills the same way.
+struct Common {
+    entrypoint: String,
+    interpreter: Option<String>,
+    size: SizeReport,
+    warnings: Vec<String>,
+    sbom: Option<String>,
+    scan: Option<ScanSummary>,
+    packages: Option<Vec<Package>>,
+    clock: Clock,
+}
+
+// The one place a PackReport is built. The --format json shape is a v1.0 contract, so the
+// fields keep their order and meaning: the JSON for every sink is unchanged.
+fn report(delivered: Delivered, c: Common) -> PackReport {
+    let (mut tag, mut archive, mut pushed, mut staged_dir) = (None, None, None, None);
+    let (mut smoke_ok, mut signed) = (None, None);
+    match delivered {
+        Delivered::Rootfs { staged_dir: dir } => staged_dir = Some(dir),
+        Delivered::DockerLoad { tag: t, smoked } => {
+            tag = Some(t);
+            smoke_ok = smoked.then_some(true);
+        }
+        Delivered::OciArchive { archive: a } => archive = Some(a),
+        Delivered::Push {
+            pushed: p,
+            signed: s,
+        } => {
+            pushed = Some(p);
+            signed = s;
+        }
+    }
+    PackReport {
+        tag,
+        archive,
+        pushed,
+        staged_dir,
+        entrypoint: c.entrypoint,
+        interpreter: c.interpreter,
+        size: c.size,
+        warnings: c.warnings,
+        smoke_ok,
+        sbom: c.sbom,
+        scan: c.scan,
+        signed,
+        timings: c.clock.finish(),
+        packages: c.packages,
     }
 }
 
@@ -821,7 +894,7 @@ pub fn stage_only(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<P
     pack(binary, opts, Sink::Rootfs(out_dir.to_path_buf()))
 }
 
-fn to_rootfs(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<PackReport> {
+fn to_rootfs(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<(Delivered, Common)> {
     check_output_dir(out_dir)?;
     let StagedRootfs {
         tree,
@@ -835,22 +908,20 @@ fn to_rootfs(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<PackRe
     let Finished {
         owners, sbom, scan, ..
     } = finish_staging(out_dir, opts, &mut warnings, &mut clock.timings, bundled)?;
-    Ok(PackReport {
-        tag: None,
-        archive: None,
-        pushed: None,
-        staged_dir: Some(tree.root.display().to_string()),
+    let delivered = Delivered::Rootfs {
+        staged_dir: tree.root.display().to_string(),
+    };
+    let common = Common {
         entrypoint: tree.entrypoint.display().to_string(),
         interpreter,
         size,
         warnings,
-        smoke_ok: None,
         sbom,
         scan,
-        signed: None,
-        timings: clock.finish(),
         packages: report_packages(&opts.packages, owners),
-    })
+        clock,
+    };
+    Ok((delivered, common))
 }
 
 // The shared prep for every image sink: resolve → stage → runtime extras → SBOM →
@@ -870,6 +941,22 @@ struct StagedImage {
     /// The report's `packages` field, ready to move into it.
     packages: Option<Vec<Package>>,
     clock: Clock,
+}
+
+impl StagedImage {
+    // The common report fields. The temp dir goes with it: delivery is done by now.
+    fn into_common(self) -> Common {
+        Common {
+            entrypoint: self.tree.entrypoint.display().to_string(),
+            interpreter: self.interpreter,
+            size: self.size,
+            warnings: self.warnings,
+            sbom: self.sbom,
+            scan: self.scan,
+            packages: self.packages,
+            clock: self.clock,
+        }
+    }
 }
 
 fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
@@ -935,12 +1022,12 @@ pub fn run(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
     pack(binary, opts, Sink::DockerLoad)
 }
 
-fn to_docker(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
+fn to_docker(binary: &Path, opts: &PackOptions) -> Result<(Delivered, Common)> {
     let mut s = stage_for_image(binary, opts)?;
     let ((), ms) = timed(|| image::load_into_docker(&s.tree, &s.tag, &s.cfg, opts.runtime))?;
     s.clock.timings.deliver_ms = Some(ms);
 
-    let mut smoke_ok = None;
+    let mut smoked = false;
     if opts.smoke {
         let (outcome, ms) =
             timed(|| image::smoke_run(opts.runtime, &s.tag, &[], SMOKE_TIMEOUT_SECS))?;
@@ -951,55 +1038,26 @@ fn to_docker(binary: &Path, opts: &PackOptions) -> Result<PackReport> {
                 outcome.stderr.trim()
             );
         }
-        smoke_ok = Some(true);
+        smoked = true;
     }
-
-    Ok(PackReport {
-        tag: Some(s.tag),
-        archive: None,
-        pushed: None,
-        staged_dir: None,
-        entrypoint: s.tree.entrypoint.display().to_string(),
-        size: s.size,
-        warnings: s.warnings,
-        smoke_ok,
-        sbom: s.sbom,
-        scan: s.scan,
-        interpreter: s.interpreter,
-        signed: None,
-        timings: s.clock.finish(),
-        packages: s.packages,
-    })
+    let tag = s.tag.clone();
+    Ok((Delivered::DockerLoad { tag, smoked }, s.into_common()))
 }
 
 /// Pack `binary` into a daemonless OCI-archive tarball at `out`. No Docker daemon is
 /// contacted; `docker load` / `skopeo copy oci-archive:<out>` accept the result.
-fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<PackReport> {
+fn to_oci_archive(binary: &Path, opts: &PackOptions, out: &Path) -> Result<(Delivered, Common)> {
     let mut s = stage_for_image(binary, opts)?;
     let ((), ms) = timed(|| image::write_oci_archive(&s.tree, &s.tag, &s.cfg, out))?;
     s.clock.timings.deliver_ms = Some(ms);
-    Ok(PackReport {
-        tag: None,
-        archive: Some(out.display().to_string()),
-        pushed: None,
-        staged_dir: None,
-        entrypoint: s.tree.entrypoint.display().to_string(),
-        size: s.size,
-        warnings: s.warnings,
-        smoke_ok: None,
-        sbom: s.sbom,
-        scan: s.scan,
-        interpreter: s.interpreter,
-        signed: None,
-        timings: s.clock.finish(),
-        packages: s.packages,
-    })
+    let archive = out.display().to_string();
+    Ok((Delivered::OciArchive { archive }, s.into_common()))
 }
 
 /// Pack `binary` and push it straight to a registry reference — no Docker daemon.
 /// Credentials come from the local Docker config; every blob is uploaded (oci-client 0.18
 /// makes no HEAD check first).
-fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackReport> {
+fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<(Delivered, Common)> {
     let mut s = stage_for_image(binary, opts)?;
     // After staging, so a bad binary or option is reported first; before the push, which
     // would make the image public.
@@ -1022,22 +1080,8 @@ fn to_push(binary: &Path, opts: &PackOptions, reference: &str) -> Result<PackRep
         }
         None
     };
-    Ok(PackReport {
-        tag: None,
-        archive: None,
-        pushed: Some(reference.to_string()),
-        staged_dir: None,
-        entrypoint: s.tree.entrypoint.display().to_string(),
-        size: s.size,
-        warnings: s.warnings,
-        smoke_ok: None,
-        sbom: s.sbom,
-        scan: s.scan,
-        interpreter: s.interpreter,
-        signed,
-        timings: s.clock.finish(),
-        packages: s.packages,
-    })
+    let pushed = reference.to_string();
+    Ok((Delivered::Push { pushed, signed }, s.into_common()))
 }
 
 // cosign-sign the pushed image by digest, and — if an SBOM was generated — attach it as a
@@ -1114,6 +1158,67 @@ fn path_component(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_delivery_fills_only_its_own_report_fields() {
+        let common = || Common {
+            entrypoint: "/app".into(),
+            interpreter: None,
+            size: SizeReport::default(),
+            warnings: Vec::new(),
+            sbom: None,
+            scan: None,
+            packages: None,
+            clock: Clock {
+                started: Instant::now(),
+                timings: Timings::default(),
+            },
+        };
+        // (tag, archive, pushed, staged_dir, smoke_ok, signed) for each delivery.
+        let fields = |r: PackReport| {
+            (
+                r.tag,
+                r.archive,
+                r.pushed,
+                r.staged_dir,
+                r.smoke_ok,
+                r.signed,
+            )
+        };
+        let s = |v: &str| Some(v.to_string());
+        let rootfs = Delivered::Rootfs {
+            staged_dir: "out".into(),
+        };
+        assert_eq!(
+            fields(report(rootfs, common())),
+            (None, None, None, s("out"), None, None)
+        );
+        for (smoked, smoke_ok) in [(false, None), (true, Some(true))] {
+            let docker = Delivered::DockerLoad {
+                tag: "app:1".into(),
+                smoked,
+            };
+            assert_eq!(
+                fields(report(docker, common())),
+                (s("app:1"), None, None, None, smoke_ok, None)
+            );
+        }
+        let archive = Delivered::OciArchive {
+            archive: "x.tar".into(),
+        };
+        assert_eq!(
+            fields(report(archive, common())),
+            (None, s("x.tar"), None, None, None, None)
+        );
+        let push = Delivered::Push {
+            pushed: "r/x:1".into(),
+            signed: s("r/x@sha256:0"),
+        };
+        assert_eq!(
+            fields(report(push, common())),
+            (None, None, s("r/x:1"), None, None, s("r/x@sha256:0"))
+        );
+    }
 
     #[test]
     fn each_sink_refuses_what_it_cannot_honour_in_the_cli_order() {
