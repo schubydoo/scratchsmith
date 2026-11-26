@@ -5,6 +5,28 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 2.2.0 (2026-11-26)
+
+### Features
+
+#### Release binaries are reproducible ([#596](https://github.com/schubydoo/scratchsmith/pull/596))
+
+Each release binary can now be rebuilt from its tag, byte for byte. A CI job rebuilds both binaries for every release and compares them with the published ones, and `REPRODUCE.md` shows how to run the same check yourself. The release build now uses a pinned Rust toolchain and `--locked`, and it remaps the build machine's Cargo home out of the binary.
+
+#### Release provenance is SLSA Build Level 3 ([#597](https://github.com/schubydoo/scratchsmith/pull/597))
+
+The release binaries are now built and attested inside a reusable workflow, `release-binaries.yml`, so their SLSA provenance meets Build Level 3. `gh attestation verify` takes `--signer-workflow schubydoo/scratchsmith/.github/workflows/release-binaries.yml` to check that the provenance came from that workflow. `docs/verifying.md` has the full command.
+
+### Fixes
+
+#### `--sign` and `--push-untagged` take a `push` target from the config ([#600](https://github.com/schubydoo/scratchsmith/pull/600))
+
+With `push` set in `scratchsmith.toml`, `pack --sign` and `pack --push-untagged` failed with exit 2 and asked for `--push`, though the config's `push` is the push target. They now use it, as the docs say. With no push target anywhere, both flags still fail with exit 2, and the message now says to drop the flag.
+
+#### The docs show how to verify an image that `pack --sign` signed ([#594](https://github.com/schubydoo/scratchsmith/pull/594))
+
+`docs/verifying.md` now has a `cosign verify` and `cosign verify-attestation` recipe for images that `pack --push --sign` signs and `--sbom --sign` attests. It names the identity and issuer to pass for a GitHub Actions signer and for a terminal signer, the `--type` for each SBOM format, and how to read the attested SBOM.
+
 ## 2.1.0 (2026-11-26)
 
 ### Features
