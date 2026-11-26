@@ -107,7 +107,7 @@ scratchsmith lint --format json --fail-on no-fortify ./app     # the same report
 (the gates asked for) and `violations` (the gates this binary fails). Gates use the `--fail-on`
 spelling, each listed once in the order given, so a CI script can feed a violation back to the
 flag. The report prints in full before a failing gate exits `1`. `canary` and `fortify` mean the
-binary imports the guard or a `*_chk` wrapper, so a stripped static binary reads `false`.
+binary imports the guard or a `*_chk` wrapper, so a static binary reads `false`.
 
 `--smoke` runs the image once and fails the pack only when the binary could not start: a
 missing library or loader, or an entrypoint the runtime could not exec. An app that starts and

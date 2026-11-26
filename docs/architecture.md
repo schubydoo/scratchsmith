@@ -53,8 +53,8 @@ stable contract. A breaking change to any of them requires a new major version:
   `unpack` flags, and the top-level `--completions` and `--verbose`. New flags arrive in minor
   releases. A removed or renamed flag, or a changed default, is a major change.
 - **`scratchsmith.toml`**: the configuration keys and their types (the [Configuration](configuration.md) reference).
-- **`--format json`**: the field names and types of the `pack`, `index`, `graph`, `diff`, and `unpack`
-  reports (the schema CI gates consume). Each is pinned by a golden test, so a change is always deliberate.
+- **`--format json`**: the field names and types of the `pack`, `index`, `graph`, `diff`, `unpack`,
+  and `lint` reports (the schema CI gates consume). Each is pinned by a golden test, so a change is always deliberate.
 - **Exit codes**: `0` on success. `2` on a usage error: an argument-parse error, or a command line
   that scratchsmith refuses after the parse, such as `--watch --format json` or `pack` with no
   binary. `1` on any other failure, such as a failed pack. Before 2.0.0, a refusal made after the
