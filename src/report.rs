@@ -332,7 +332,8 @@ pub struct DiffMode {
 }
 
 /// The difference between two staged rootfs directories (`diff` subcommand): the files
-/// added, removed, and changed, plus each side's total file size. Fields are stable so the
+/// added, removed, and changed, the files and directories whose mode changed, the empty
+/// directories in only one tree, plus each side's total file size. Fields are stable so the
 /// JSON can gate CI.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct DiffReport {
@@ -366,7 +367,8 @@ impl DiffReport {
     }
 
     /// Human-readable rendering (the `--format text` output): `+` added, `-` removed,
-    /// `~` changed, then the size delta.
+    /// `~` changed or a mode change, `+ dir/` or `- dir/` an empty directory, then the size
+    /// delta.
     pub fn to_text(&self) -> String {
         let mut out = String::new();
         if !self.has_changes() {

@@ -467,6 +467,14 @@ A directory that holds anything shows through the files in it. `diff` then print
 size delta. `--format json` emits the same data for a machine, with the mode changes in
 `mode_changed` (each with `path`, `before` and `after` as four octal digits) and the empty
 directories in `dirs_added` and `dirs_removed`.
+
+A staged rootfs keeps the modes from the host: a directory gets its mode from the umask, and a
+file keeps the mode of its source. The image layer rewrites them, to `0755` for a directory and
+`0755` or `0644` for a file by its exec bit. So two staged trees from builders with different
+umasks, or with a binary at `0775` on one and `0755` on the other, differ in mode although their
+images are the same. Stage both builds on one builder, or compare the modes that ship: `unpack`
+both images and diff those trees, which carry the layer's modes.
+
 A file name that is not valid UTF-8 is escaped whole, in both the text and the JSON output:
 its invalid bytes become `\xNN`, and a backslash, a quote or a control character in it is
 escaped too.

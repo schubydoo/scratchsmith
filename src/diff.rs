@@ -1,5 +1,6 @@
 //! Compare two staged rootfs directories (`diff` subcommand): the files added, removed,
-//! and changed between them, plus the total size delta. An image-drift regression gate.
+//! and changed between them, the modes that changed, the empty directories in only one tree,
+//! plus the total size delta. An image-drift regression gate.
 //! Pairs with `unpack` — an OCI image extracted to a directory is diffed the same way.
 
 use crate::image::hex;
@@ -43,8 +44,8 @@ impl Tree {
     }
 }
 
-// Walk `root` and fingerprint every regular file and symlink, keyed by path relative to
-// `root`. Symlinks are compared by target, never followed. Keys and targets stay raw bytes:
+// Walk `root`, fingerprint every regular file and symlink and record every directory's mode,
+// keyed by path relative to `root`. Symlinks are compared by target, never followed. Keys and targets stay raw bytes:
 // a lossy conversion would merge two names that differ only in non-UTF-8 bytes. An `OsString`
 // key sorts by bytes, as the old `String` key did; a `PathBuf` would sort by component.
 fn scan(root: &Path) -> Result<Tree> {
