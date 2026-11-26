@@ -32,12 +32,18 @@ names each one.
 | Input | Warned since | In 3.0 | Write this instead |
 |---|---|---|---|
 | A digest in the `--push` reference (or the `push` key), such as `ghcr.io/owner/app@sha256:…` | 2.1.0 | Refused | A tag, such as `ghcr.io/owner/app:1.0` |
+| A `diff` argument that is not a directory, such as `diff a.tar b.tar` | 2.1.0 | Refused | Two rootfs directories, such as from `pack --no-build --output` or `unpack` |
 
 A registry stores a manifest only under that manifest's own digest. A push to any other digest
 fails at the registry, and nobody knows the right digest before the image is built. With
 `--sign`, scratchsmith already signs the image by the digest that the push stored. Through
 2.0.3, a push to a digest could also crash scratchsmith when the registry answered without a
 `Location` header, as AWS ECR does. That crash is fixed, and the push still goes to the digest.
+
+`diff` compares two directory trees. It reads a file argument as an empty tree, so
+`diff --exit-code a.tar b.tar` prints no changes and exits 0 for two different archives. Through
+2.0.3 it did so with no warning. To compare two OCI archives, `unpack` each one into a directory
+and compare those.
 
 ## Refused without a deprecation cycle
 
