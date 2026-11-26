@@ -372,7 +372,9 @@ the detail.
 libraries it needs, so it fails in the image with `error while loading shared libraries`.
 `--add-binary` takes the same `SRC[:DST]` form and also resolves the program's libraries,
 with the same `ld.so` rules as the packed binary. `$ORIGIN` in its RPATH or RUNPATH names the
-directory of the added file on the host.
+real directory of the added file on the host, and ld.so reads it from the program's directory
+in the image. So the pack fails when a program that uses `$ORIGIN` is given a `DST` in another
+directory, and the message names the `DST` to use.
 
 ```sh
 scratchsmith pack --add-binary /usr/bin/bash:/bin/bash ./app
@@ -380,8 +382,9 @@ scratchsmith pack --add-binary /usr/bin/bash:/bin/bash ./app
 
 A library that the packed binary needs too is staged once. The image's `ld.so.cache`,
 `--deny` and `--require`, `--strip`, the SBOM and `--packages` all cover the added libraries.
-The added program itself is copied like an `--add-file` entry, so the same rules apply to it,
-including `--symlinks`. One image has one loader, so the pack fails when the added ELF is
+The added program itself is copied like an `--add-file` entry, so the same destination rules
+apply to it. It is always copied as a file, whatever `--symlinks` says, so a symlinked `SRC`
+brings its target's content. One image has one loader, so the pack fails when the added ELF is
 built for another architecture or names another program interpreter than the packed binary.
 A static ELF, or a shared library, names none and is accepted. A file that is not an ELF
 fails too: add it with `--add-file`.

@@ -241,7 +241,46 @@ fn add_binary_refuses_a_file_that_is_not_an_elf() {
     let err =
         scratchsmith::pack::stage_only(fixture, &tmp.path().join("rootfs"), &opts).unwrap_err();
     let err = format!("{err:#}");
-    assert!(err.contains("use --add-file for a non-ELF file"), "{err}");
+    assert!(
+        err.contains("is not an ELF file: add it with --add-file"),
+        "{err}"
+    );
+
+    // A mistyped path is not told to use --add-file.
+    let opts = PackOptions {
+        add_binaries: vec![AddFile {
+            src: tmp.path().join("missing"),
+            dst: "/missing".into(),
+        }],
+        ..Default::default()
+    };
+    let err =
+        scratchsmith::pack::stage_only(fixture, &tmp.path().join("rootfs2"), &opts).unwrap_err();
+    let err = format!("{err:#}");
+    assert!(!err.contains("--add-file"), "{err}");
+}
+
+#[test]
+fn add_binary_copies_a_symlinked_program_whatever_symlinks_says() {
+    let Some(fixture) = small_fixture() else {
+        skip_required("no id binary to pack");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let link = tmp.path().join("my-id");
+    std::os::unix::fs::symlink(fixture, &link).unwrap();
+    let out = tmp.path().join("rootfs");
+    let opts = PackOptions {
+        add_binaries: vec![AddFile {
+            src: link,
+            dst: "/bin/my-id".into(),
+        }],
+        symlinks: scratchsmith::stager::SymlinkMode::Preserve,
+        ..Default::default()
+    };
+    scratchsmith::pack::stage_only(fixture, &out, &opts).expect("stage with a linked --add-binary");
+    let meta = std::fs::symlink_metadata(out.join("bin/my-id")).unwrap();
+    assert!(meta.is_file(), "the added program is a file, not a link");
 }
 
 #[test]

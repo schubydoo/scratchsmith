@@ -255,9 +255,19 @@ fn add_binary_libs(
 ) -> Result<()> {
     for add in added {
         let shown = add.src.display().to_string().escape_debug().to_string();
-        let info = resolver::read_elf_info(&add.src)
-            .with_context(|| format!("--add-binary {shown} (use --add-file for a non-ELF file)"))?;
+        let info = resolver::read_elf_info(&add.src).map_err(|e| {
+            // The hint only fits a file that was read and is not an ELF at all: a missing
+            // path or a damaged ELF has its own fix.
+            if is_readable_non_elf(&add.src) {
+                e.context(format!(
+                    "--add-binary {shown} is not an ELF file: add it with --add-file"
+                ))
+            } else {
+                e.context(format!("--add-binary {shown}"))
+            }
+        })?;
         added_binary_fits(main, &info, &shown)?;
+        origin_fits(&info, add, &shown)?;
         let theirs = resolver::resolve(&add.src, &Sysroot::new("/"))
             .with_context(|| format!("--add-binary {shown}"))?;
         merge_resolution(resolution, theirs);
@@ -301,6 +311,43 @@ fn added_binary_fits(
                 theirs.escape_debug()
             );
         }
+    }
+    Ok(())
+}
+
+fn is_readable_non_elf(path: &Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let read = file.read(&mut magic).unwrap_or(0);
+    path.is_file() && magic[..read] != *b"\x7fELF"
+}
+
+// The resolver expands `$ORIGIN` against the added file's real host directory, and its
+// libraries stage at their host paths. ld.so expands it against the directory the program
+// sits in inside the image. So an ELF that searches through `$ORIGIN` must land in its real
+// directory, or the libraries found at pack time are not the ones ld.so looks for at run time.
+fn origin_fits(info: &resolver::ElfInfo, add: &AddFile, shown: &str) -> Result<()> {
+    let uses_origin = info
+        .rpaths
+        .iter()
+        .chain(&info.runpaths)
+        .chain(&info.needed)
+        .any(|p| p.contains("$ORIGIN") || p.contains("${ORIGIN}"));
+    if !uses_origin {
+        return Ok(());
+    }
+    let real = std::fs::canonicalize(&add.src)
+        .with_context(|| format!("--add-binary {shown}: resolving its real path"))?;
+    if add.dst.parent() != real.parent() {
+        bail!(
+            "--add-binary {shown} finds libraries through `$ORIGIN`, which ld.so reads from \
+             the program's own directory in the image. Stage it in its real directory, as \
+             `--add-binary {shown}:{}`, so the libraries found for it are the ones it loads",
+            real.display().to_string().escape_debug()
+        );
     }
     Ok(())
 }
@@ -927,10 +974,13 @@ fn finish_staging(
         &opts.add_files,
         opts.symlinks,
     )?);
+    // The program is always copied as a file, whatever `--symlinks` says: a link left in its
+    // place could dangle or be skipped, and the libraries resolved for its target would then
+    // ship without the program they serve.
     warnings.extend(stager::stage_added_files_as(
         dest,
         &opts.add_binaries,
-        opts.symlinks,
+        stager::SymlinkMode::CopyAll,
         "--add-binary",
     )?);
     stager::stage_locales(dest, &opts.locales)?;
@@ -1483,6 +1533,57 @@ mod tests {
         };
         let err = format!("{:#}", fits(&musl).unwrap_err());
         assert!(err.contains("musl"), "{err}");
+    }
+
+    #[test]
+    fn an_added_binary_that_uses_origin_must_stay_in_its_real_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = std::fs::canonicalize(tmp.path())
+            .unwrap()
+            .join("opt/tool/bin");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("tool");
+        std::fs::write(&src, b"elf").unwrap();
+        let add = |dst: &Path| AddFile {
+            src: src.clone(),
+            dst: dst.to_path_buf(),
+        };
+        let plain = resolver::read_elf_info(Path::new("/usr/bin/id")).unwrap();
+        let moved = add(Path::new("/usr/local/bin/tool"));
+        // No `$ORIGIN`: any destination works.
+        assert!(origin_fits(&plain, &moved, "t").is_ok());
+        for origin in ["$ORIGIN/../lib", "${ORIGIN}/../lib"] {
+            let info = resolver::ElfInfo {
+                runpaths: vec![origin.to_string()],
+                ..plain.clone()
+            };
+            let err = origin_fits(&info, &moved, "t").unwrap_err().to_string();
+            assert!(
+                err.contains(&format!("`--add-binary t:{}`", src.display())),
+                "{err}"
+            );
+            // Its real directory, under another name, is fine.
+            assert!(origin_fits(&info, &add(&dir.join("tool2")), "t").is_ok());
+        }
+        let rpath = resolver::ElfInfo {
+            rpaths: vec!["$ORIGIN".to_string()],
+            ..plain.clone()
+        };
+        assert!(origin_fits(&rpath, &moved, "t").is_err());
+    }
+
+    #[test]
+    fn the_add_file_hint_is_only_for_a_file_that_is_not_an_elf() {
+        let tmp = tempfile::tempdir().unwrap();
+        let script = tmp.path().join("run.sh");
+        std::fs::write(&script, b"#!/bin/sh\n").unwrap();
+        assert!(is_readable_non_elf(&script));
+        let empty = tmp.path().join("empty");
+        std::fs::write(&empty, b"").unwrap();
+        assert!(is_readable_non_elf(&empty));
+        assert!(!is_readable_non_elf(Path::new("/usr/bin/id")));
+        assert!(!is_readable_non_elf(&tmp.path().join("missing")));
+        assert!(!is_readable_non_elf(tmp.path()));
     }
 
     #[test]
