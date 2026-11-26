@@ -204,6 +204,23 @@ fn post_parse_usage_refusals_exit_2() {
             "/etc/x is given more than once",
         ),
         (
+            "--add-binary on an image path --add-file already takes",
+            vec![
+                "pack",
+                "--add-file",
+                "./a.conf:/bin/x",
+                "--add-binary",
+                "/usr/bin/bash:/bin//x",
+                bin,
+            ],
+            "/bin/x is given more than once, or also to --add-file",
+        ),
+        (
+            "--add-binary with a relative image path",
+            vec!["pack", "--add-binary", "/usr/bin/bash:bin/bash", bin],
+            "--add-binary '/usr/bin/bash:bin/bash': read",
+        ),
+        (
             "add-file with one image path twice from the config",
             vec!["pack", "--config", &dup_add_file],
             "/etc/x is given more than once",

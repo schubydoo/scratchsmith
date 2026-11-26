@@ -61,7 +61,7 @@ build. It is purpose-built for the hard case and useful for the easy one.
 | Symbol strip (`--strip`), UPX compression (`--upx`), size report, smoke-run (`--smoke`) | ✅ |
 | Image **size budget**: `--max-size <SIZE>` (if the staged image exceeds the budget, the build fails) | ✅ |
 | Runtime extras: CA certs (`--ca-certs`), timezone (`--tz`), init/tini (`--init`), writable `/tmp` (`--tmp`) | ✅ |
-| **Add host files**: `--add-file SRC[:DST]` (copy any host file into the image) | ✅ |
+| **Add host files**: `--add-file SRC[:DST]` (copy any host file into the image), `--add-binary SRC[:DST]` (a program with its libraries) | ✅ |
 | **Locale data**: `--locale NAME` (stage one compiled glibc locale, never the host archive) | ✅ |
 | **Symlink modes**: `--symlinks` (keep a named symlink as a link, or flatten it) | ✅ |
 | Image metadata: `--entrypoint`, `--cmd`, `--env`, `--workdir`, `--user`, labels (`--label`), `HEALTHCHECK` (`--healthcheck`) | ✅ |

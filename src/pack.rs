@@ -193,7 +193,9 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
     }
 
     // Resolve against the host root for now; a pinned sysroot is future work.
-    let resolution = resolver::resolve_with_includes(binary, &Sysroot::new("/"), &opts.includes)?;
+    let mut resolution =
+        resolver::resolve_with_includes(binary, &Sysroot::new("/"), &opts.includes)?;
+    add_binary_libs(&info, &mut resolution, &opts.add_binaries)?;
     resolution.print_notes();
     if !resolution.missing.is_empty() {
         resolution.print_hints();
@@ -202,7 +204,11 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
             resolver::missing_for_display(&resolution.missing)
         );
     }
-    warnings.extend(glibc_version_warnings(binary, &resolution));
+    warnings.extend(glibc_version_warnings(
+        binary,
+        &opts.add_binaries,
+        &resolution,
+    ));
     clock.timings.resolve_ms = millis(clock.started);
     let staging = Instant::now();
     let (tree, default_includes) =
@@ -237,12 +243,97 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
     })
 }
 
+// `--add-binary`: each added ELF is resolved on its own, by the same ld.so rules as the packed
+// binary (`$ORIGIN` names the added file's own directory), and its libraries join the
+// resolution. So a library both need stages once, and everything that reads the resolution
+// covers the added ones too: ld.so.cache, `--deny`/`--require`, `--strip` and the package
+// records. One image has one loader, so an ELF for another loader or machine is refused.
+fn add_binary_libs(
+    main: &resolver::ElfInfo,
+    resolution: &mut resolver::Resolution,
+    added: &[AddFile],
+) -> Result<()> {
+    for add in added {
+        let shown = add.src.display().to_string().escape_debug().to_string();
+        let info = resolver::read_elf_info(&add.src)
+            .with_context(|| format!("--add-binary {shown} (use --add-file for a non-ELF file)"))?;
+        added_binary_fits(main, &info, &shown)?;
+        let theirs = resolver::resolve(&add.src, &Sysroot::new("/"))
+            .with_context(|| format!("--add-binary {shown}"))?;
+        merge_resolution(resolution, theirs);
+    }
+    Ok(())
+}
+
+fn added_binary_fits(
+    main: &resolver::ElfInfo,
+    added: &resolver::ElfInfo,
+    shown: &str,
+) -> Result<()> {
+    resolver::ensure_glibc(added).with_context(|| format!("--add-binary {shown}"))?;
+    if (added.machine, added.is_64) != (main.machine, main.is_64) {
+        let arch = |i: &resolver::ElfInfo| {
+            format!(
+                "{} {}-bit",
+                goblin::elf::header::machine_to_str(i.machine),
+                if i.is_64 { 64 } else { 32 }
+            )
+        };
+        bail!(
+            "--add-binary {shown} is built for {}, and the packed binary for {}. One image \
+             runs one architecture, so add a build of {shown} for {}",
+            arch(added),
+            arch(main),
+            arch(main)
+        );
+    }
+    // A static ELF, or a shared library, has no PT_INTERP and runs under any loader.
+    if let Some(theirs) = &added.interpreter {
+        if added.interpreter != main.interpreter {
+            let ours = main.interpreter.as_deref().map_or_else(
+                || "no interpreter (it is static)".to_string(),
+                |i| format!("`{}`", i.escape_debug()),
+            );
+            bail!(
+                "--add-binary {shown} loads through `{}`, and the packed binary through {ours}. \
+                 The image stages one loader, so add a build of {shown} that uses the packed \
+                 binary's loader",
+                theirs.escape_debug()
+            );
+        }
+    }
+    Ok(())
+}
+
+// Fold an added ELF's resolution into the packed binary's. The libraries stage at their own
+// host paths, so one real path is one file in the image: keep the first.
+fn merge_resolution(into: &mut resolver::Resolution, theirs: resolver::Resolution) {
+    for lib in theirs.libs {
+        if !into.libs.iter().any(|l| l.path == lib.path) {
+            into.libs.push(lib);
+        }
+    }
+    for name in theirs.missing {
+        if !into.missing.contains(&name) {
+            into.missing.push(name);
+        }
+    }
+    into.edges.extend(theirs.edges);
+    into.hints.extend(theirs.hints);
+    into.notes.extend(theirs.notes);
+    into.arch_warnings.extend(theirs.arch_warnings);
+}
+
 // Resolution matches sonames, not symbol versions, so a binary built against a newer glibc
 // than this host's resolves, stages and packs, and then ld.so refuses to start it ("version
 // `GLIBC_2.38' not found"). Read the `GLIBC_` versions that the binary and each staged library
 // need, and warn for each one the staged object it names does not define. A warning, not a
 // failure: failing would change the exit code, which the v2 line keeps.
-fn glibc_version_warnings(binary: &Path, resolution: &resolver::Resolution) -> Vec<String> {
+fn glibc_version_warnings(
+    binary: &Path,
+    added: &[AddFile],
+    resolution: &resolver::Resolution,
+) -> Vec<String> {
     // An object that cannot be read here was read by the resolver a moment ago, so this is
     // rare, and the pack does not depend on it: say nothing rather than fail.
     let read = |path: &Path| {
@@ -252,6 +343,7 @@ fn glibc_version_warnings(binary: &Path, resolution: &resolver::Resolution) -> V
             .unwrap_or_default()
     };
     let mut objects = vec![(binary.to_path_buf(), read(binary))];
+    objects.extend(added.iter().map(|a| (a.src.clone(), read(&a.src))));
     let mut provided = HashMap::new();
     for lib in &resolution.libs {
         let versions = read(&lib.path);
@@ -609,6 +701,9 @@ pub struct PackOptions {
     /// Host files to copy into the image (`--add-file SRC[:DST]`), beyond the fixed paths
     /// `--ca-certs` / `--tz` stage.
     pub add_files: Vec<AddFile>,
+    /// ELF files to copy into the image with their shared libraries (`--add-binary
+    /// SRC[:DST]`). Each is resolved like the packed binary, and copied like an `--add-file`.
+    pub add_binaries: Vec<AddFile>,
     /// What a symlink the user named becomes in the image: the packed binary's own path,
     /// and each `--add-file` source (`--symlinks`). Defaults to the historical flattening.
     pub symlinks: stager::SymlinkMode,
@@ -832,6 +927,12 @@ fn finish_staging(
         &opts.add_files,
         opts.symlinks,
     )?);
+    warnings.extend(stager::stage_added_files_as(
+        dest,
+        &opts.add_binaries,
+        opts.symlinks,
+        "--add-binary",
+    )?);
     stager::stage_locales(dest, &opts.locales)?;
     warnings.extend(locale_env_warning(&opts.locales, &opts.image.env));
     // Everything a package can own is in the tree now, so this is where the owners are
@@ -851,6 +952,7 @@ fn finish_staging(
     bundled.extend(
         opts.add_files
             .iter()
+            .chain(&opts.add_binaries)
             .filter(|f| staged_meta(&f.dst).is_some_and(|m| m.is_file()))
             .map(|f| {
                 let host = std::fs::canonicalize(&f.src).unwrap_or_else(|_| f.src.clone());
@@ -879,7 +981,12 @@ fn finish_staging(
         warnings,
     )?;
     // A record must never land on a file the user added in this pack.
-    let added: Vec<PathBuf> = opts.add_files.iter().map(|f| f.dst.clone()).collect();
+    let added: Vec<PathBuf> = opts
+        .add_files
+        .iter()
+        .chain(&opts.add_binaries)
+        .map(|f| f.dst.clone())
+        .collect();
     // `--packages image`: the records are image content, so they land before the size gate.
     let owners = found.as_ref().filter(|o| !o.packages.is_empty());
     if let (true, Some(owners)) = (selection.image, owners) {
@@ -1335,10 +1442,86 @@ mod tests {
     }
 
     #[test]
+    fn an_added_binary_must_match_the_packed_binarys_loader_and_machine() {
+        let main = resolver::read_elf_info(Path::new("/usr/bin/id")).unwrap();
+        let fits = |added: &resolver::ElfInfo| added_binary_fits(&main, added, "/x");
+        assert!(fits(&main).is_ok());
+        // A static ELF, or a shared library, names no loader and fits any image.
+        let static_elf = resolver::ElfInfo {
+            interpreter: None,
+            ..main.clone()
+        };
+        assert!(fits(&static_elf).is_ok());
+        let other_loader = resolver::ElfInfo {
+            interpreter: Some("/opt/glibc/ld.so".to_string()),
+            ..main.clone()
+        };
+        let err = fits(&other_loader).unwrap_err().to_string();
+        assert!(
+            err.contains("loads through `/opt/glibc/ld.so`, and the packed binary through `"),
+            "{err}"
+        );
+        let other_machine = resolver::ElfInfo {
+            machine: if main.machine == goblin::elf::header::EM_AARCH64 {
+                goblin::elf::header::EM_X86_64
+            } else {
+                goblin::elf::header::EM_AARCH64
+            },
+            ..main.clone()
+        };
+        let err = fits(&other_machine).unwrap_err().to_string();
+        assert!(err.contains("One image runs one architecture"), "{err}");
+        let other_class = resolver::ElfInfo {
+            is_64: !main.is_64,
+            ..main.clone()
+        };
+        assert!(fits(&other_class).is_err());
+        // musl stays out of scope through --add-binary too.
+        let musl = resolver::ElfInfo {
+            interpreter: Some("/lib/ld-musl-x86_64.so.1".to_string()),
+            ..main.clone()
+        };
+        let err = format!("{:#}", fits(&musl).unwrap_err());
+        assert!(err.contains("musl"), "{err}");
+    }
+
+    #[test]
+    fn an_added_binarys_libraries_join_the_resolution_once() {
+        let lib = |soname: &str, path: &str| resolver::ResolvedLib {
+            soname: soname.to_string(),
+            path: PathBuf::from(path),
+        };
+        let mut into = resolver::Resolution {
+            libs: vec![lib("libc.so.6", "/lib/libc.so.6")],
+            missing: vec!["libgone.so.1".to_string()],
+            ..Default::default()
+        };
+        let theirs = resolver::Resolution {
+            libs: vec![
+                lib("libc.so.6", "/lib/libc.so.6"),
+                lib("libtinfo.so.6", "/lib/libtinfo.so.6"),
+            ],
+            missing: vec!["libgone.so.1".to_string(), "libnew.so.2".to_string()],
+            notes: vec!["a note".to_string()],
+            ..Default::default()
+        };
+        merge_resolution(&mut into, theirs);
+        assert_eq!(
+            into.libs,
+            [
+                lib("libc.so.6", "/lib/libc.so.6"),
+                lib("libtinfo.so.6", "/lib/libtinfo.so.6")
+            ]
+        );
+        assert_eq!(into.missing, ["libgone.so.1", "libnew.so.2"]);
+        assert_eq!(into.notes, ["a note"]);
+    }
+
+    #[test]
     fn a_binary_built_for_this_hosts_glibc_packs_with_no_version_warning() {
         let resolution = resolver::resolve(Path::new("/usr/bin/id"), &Sysroot::new("/")).unwrap();
         assert_eq!(
-            glibc_version_warnings(Path::new("/usr/bin/id"), &resolution),
+            glibc_version_warnings(Path::new("/usr/bin/id"), &[], &resolution),
             Vec::<String>::new()
         );
     }
@@ -1359,7 +1542,7 @@ mod tests {
         let binary = dir.path().join("id");
         std::fs::write(&binary, &bytes).unwrap();
         let resolution = resolver::resolve(Path::new("/usr/bin/id"), &Sysroot::new("/")).unwrap();
-        let warnings = glibc_version_warnings(&binary, &resolution);
+        let warnings = glibc_version_warnings(&binary, &[], &resolution);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         // From libc.so.6 on most hosts, but the loader is the other glibc object it can name.
         let expected = format!("{} needs GLIBC_2.99 from ", binary.display());
