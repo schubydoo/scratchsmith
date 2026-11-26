@@ -873,11 +873,11 @@ build. It is purpose-built for the hard case and useful for the easy one.</p>
   local engine for convenience: <code>docker</code> by default, or <code>--runtime podman|nerdctl</code> for those.
   You can also go daemon-free entirely with <code>--push &lt;ref&gt;</code> (straight to a registry),
   <code>--oci-archive &lt;file&gt;</code> (an OCI archive), or <code>--no-build --output</code> (a rootfs).</li>
-<li><strong>Signing the image <code>pack</code> produces needs <code>--push</code>.</strong> <code>pack --push --sign</code> cosign-signs the
-  pushed image by digest (keyless). <code>--sbom --sign</code> attaches the SBOM as a signed attestation.
-  Both apply only to the registry-push sink, because cosign signs a registry image. Release
-  <em>artifacts</em> are separately cosign-signed with SLSA provenance
-  (<a href="../verifying/">Verifying releases</a>).</li>
+<li><strong>Signing the image <code>pack</code> produces needs a push target (<code>--push</code> or <code>push</code> in the config).</strong>
+  <code>pack --push --sign</code> cosign-signs the pushed image by digest (keyless). <code>--sbom --sign</code>
+  attaches the SBOM as a signed attestation. Both apply only to the registry-push sink, because
+  cosign signs a registry image. Release <em>artifacts</em> are separately cosign-signed with SLSA
+  provenance (<a href="../verifying/">Verifying releases</a>).</li>
 </ul>
 
 
