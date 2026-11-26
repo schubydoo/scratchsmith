@@ -837,6 +837,11 @@ file</strong>.</p>
 <td>Add the resolved local timezone (<code>/etc/localtime</code>).</td>
 </tr>
 <tr>
+<td><code>tmp</code></td>
+<td><code>--tmp</code></td>
+<td>Add an empty <code>/tmp</code> directory, mode <code>1777</code> and owned by uid 0, so the non-root user can write there. A <code>--no-build</code> rootfs keeps the mode, owned by the user who packed it.</td>
+</tr>
+<tr>
 <td><code>init</code></td>
 <td><code>--init</code></td>
 <td>Add a minimal init (<code>tini</code>) as pid 1 wrapping the entrypoint. A static <code>tini-static</code> is preferred. A dynamic <code>tini</code> still packs, with a warning.</td>
