@@ -64,5 +64,5 @@ cmp scratchsmith-v<ver>-linux-amd64/scratchsmith target/x86_64-unknown-linux-mus
 Do the same for `linux-arm64` with `target/aarch64-unknown-linux-musl/release/scratchsmith`.
 
 If the bytes differ, check the versions first: `rustc -V`, `zig version` and
-`cargo zigbuild --version` from the script's output must match the ones pinned at the tag. If they
+`cargo-zigbuild --version` from the script's output must match the ones pinned at the tag. If they
 match and the bytes still differ, please [open an issue](https://github.com/schubydoo/scratchsmith/issues).

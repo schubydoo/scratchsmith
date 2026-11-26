@@ -22,7 +22,7 @@ export RUSTFLAGS="--remap-path-prefix=${cargo_home}=/cargo"
 rustc -V
 cargo -V
 zig version
-cargo zigbuild --version
+cargo-zigbuild --version
 
 cargo zigbuild --locked --release --target "$target" --bin scratchsmith
 
