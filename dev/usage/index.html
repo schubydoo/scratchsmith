@@ -1169,6 +1169,12 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>scratchsmith/app:packed<span class="w"> </span>--version<span class="w">   </span><span class="c1"># image is named scratchsmith/&lt;name&gt;:packed (characters a tag cannot hold become -)</span>
 </code></pre></div>
+<p>The image gets the build host's glibc. A binary built against a newer glibc than the host's
+packs, and then fails to start with an error like <code>version `GLIBC_2.38' not found</code>. <code>pack</code>
+reads the <code>GLIBC_</code> versions that the binary and each library need, and prints a warning on
+standard error for each one that the staged glibc does not define. The pack still succeeds,
+with the same exit code. Pack on a host whose glibc is as new as the one the binary was built
+against.</p>
 <p>The default sink loads into Docker. To load with <strong>podman</strong> or <strong>nerdctl</strong> instead (and run
 <code>--smoke</code> with it), pass <code>--runtime</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--runtime<span class="w"> </span>podman<span class="w"> </span>./app
