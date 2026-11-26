@@ -1283,7 +1283,7 @@ parseable. A failed cosign run is reported with its exit status, and its own mes
 (the gates asked for) and <code>violations</code> (the gates this binary fails). Gates use the <code>--fail-on</code>
 spelling, each listed once in the order given, so a CI script can feed a violation back to the
 flag. The report prints in full before a failing gate exits <code>1</code>. <code>canary</code> and <code>fortify</code> mean the
-binary imports the guard or a <code>*_chk</code> wrapper, so a stripped static binary reads <code>false</code>.</p>
+binary imports the guard or a <code>*_chk</code> wrapper, so a static binary reads <code>false</code>.</p>
 <p><code>--smoke</code> runs the image once and fails the pack only when the binary could not start: a
 missing library or loader, or an entrypoint the runtime could not exec. An app that starts and
 exits with an error passes, unless the code is 126 or 127, which shells use for a command
