@@ -1276,7 +1276,14 @@ parseable. A failed cosign run is reported with its exit status, and its own mes
 <a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--scan<span class="w"> </span>--scan-fail-on<span class="w"> </span>high<span class="w"> </span>./app<span class="w">    </span><span class="c1"># grype vuln scan; fail the build on a high+ CVE</span>
 <a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--strip<span class="w"> </span>--max-size<span class="w"> </span>8MB<span class="w"> </span>./app<span class="w">        </span><span class="c1"># fail the build if the staged image exceeds 8 MB</span>
 <a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>scratchsmith<span class="w"> </span>lint<span class="w"> </span>--fail-on<span class="w"> </span>no-pie<span class="w"> </span>--fail-on<span class="w"> </span>no-relro<span class="w"> </span>./app<span class="w">   </span><span class="c1"># hardening gate for CI</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>scratchsmith<span class="w"> </span>lint<span class="w"> </span>--format<span class="w"> </span>json<span class="w"> </span>--fail-on<span class="w"> </span>no-fortify<span class="w"> </span>./app<span class="w">     </span><span class="c1"># the same report as JSON</span>
 </code></pre></div>
+<p><code>lint --format json</code> prints one object: <code>binary</code> (the path as given), <code>hardening</code> (<code>pie</code>, <code>nx</code>,
+<code>canary</code> and <code>fortify</code> as booleans, <code>relro</code> as <code>"full"</code>, <code>"partial"</code> or <code>"none"</code>), <code>fail_on</code>
+(the gates asked for) and <code>violations</code> (the gates this binary fails). Gates use the <code>--fail-on</code>
+spelling, each listed once in the order given, so a CI script can feed a violation back to the
+flag. The report prints in full before a failing gate exits <code>1</code>. <code>canary</code> and <code>fortify</code> mean the
+binary imports the guard or a <code>*_chk</code> wrapper, so a stripped static binary reads <code>false</code>.</p>
 <p><code>--smoke</code> runs the image once and fails the pack only when the binary could not start: a
 missing library or loader, or an entrypoint the runtime could not exec. An app that starts and
 exits with an error passes, unless the code is 126 or 127, which shells use for a command
