@@ -4,15 +4,17 @@
 # GitHub's `$/` self-repository `uses:` syntax and reports it as an invalid action
 # reference. The syntax is deliberate: it pins a local action to the checked-out ref and
 # is immune to runtime filesystem substitution, so the message is suppressed here rather
-# than the syntax reverted. This repo uses only the composite-action form: `uses: $/` at the
-# repo root (action-selftest.yml) and `uses: $/.github/actions/<name>` for the release
-# composites (release.yml, knope-release.yml, reproduce.yml). There are no `$/`
-# reusable-workflow calls, so one pattern covers both, because `\$/.*` matches a subpath as
-# well as the bare root.
+# than the syntax reverted. This repo uses it in two forms, and each has its own message:
+# - composite actions: `uses: $/` at the repo root (action-selftest.yml) and
+#   `uses: $/.github/actions/<name>` for the release composites (release.yml,
+#   release-binaries.yml, reproduce.yml). `\$/.*` matches a subpath as well as the bare root.
+# - one reusable-workflow call: knope-release.yml's `uses: $/.github/workflows/release-binaries.yml`.
 #
 # Suppressing the format error also silences actionlint's call validation for those steps
 # (input-name typos, missing required inputs); the action-selftest exercises the inputs
-# end-to-end instead.
+# end-to-end instead. For the reusable-workflow call it also skips the check of its inputs and
+# outputs, so keep knope-release.yml's `with:` and `needs.binaries.outputs` in step with
+# release-binaries.yml's `workflow_call` by hand.
 #
 # Remove this file once rhysd/actionlint issue 711 ships `$/` support and the pinned
 # actionlint is bumped past it.
@@ -20,3 +22,4 @@ paths:
   .github/workflows/**/*.{yaml,yml}:
     ignore:
       - 'specifying action "\$/.*" in invalid format because ref is missing'
+      - 'reusable workflow call "\$/.*" at "uses" is not following the format'

@@ -1,6 +1,7 @@
 # Verifying releases
 
-Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation.
+Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation, at Build
+Level 3 for new releases.
 Each release also ships a CycloneDX SBOM of Scratchsmith's own dependency graph. That file is
 `scratchsmith-v<ver>.cdx.json`, and it is listed in `checksums.txt`, so the signature and
 provenance cover it too. It reflects the full `Cargo.lock` graph, so it includes build- and
@@ -12,9 +13,17 @@ to download it, because `gh attestation verify` reads the attestation from GitHu
 Replace `<ver>` with the bare version you downloaded, no leading `v` (the tarball adds the
 `v` prefix, but the image tag does not).
 
+The provenance is Build Level 3 because the binaries are built and attested inside a reusable
+workflow, `release-binaries.yml`, which signs the provenance with its own identity. The release
+workflow that calls it can't add steps to its jobs. `--signer-workflow` checks for that identity, so
+a provenance signed by any other workflow in the repository fails the check. A release whose tag
+has no `.github/workflows/release-binaries.yml` carries Build Level 2 provenance, signed by
+`knope-release.yml`. For those, leave out `--signer-workflow`.
+
 ```sh
-# SLSA provenance — the simplest, ref-agnostic check
-gh attestation verify scratchsmith-v<ver>-linux-amd64.tar.gz --repo schubydoo/scratchsmith
+# SLSA Build L3 provenance — the simplest, ref-agnostic check
+gh attestation verify scratchsmith-v<ver>-linux-amd64.tar.gz --repo schubydoo/scratchsmith \
+  --signer-workflow schubydoo/scratchsmith/.github/workflows/release-binaries.yml
 
 # Checksums signature (one cosign signature covers every tarball through its hash)
 cosign verify-blob checksums.txt \

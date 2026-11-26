@@ -1,0 +1,204 @@
+name: Release binaries (SLSA Build L3)
+
+# Reusable workflow: build the two static-musl release tarballs, the release SBOM and
+# checksums.txt, and attest their SLSA build provenance. knope-release.yml calls it and then
+# signs, stages and publishes what it returns.
+#
+# Why a reusable workflow: actions/attest in an ordinary job is SLSA Build L2. When the build
+# and the attestation run in a reusable workflow, the provenance is signed with THIS file's
+# identity (the Sigstore certificate's Build Signer URI), not the caller's. The caller passes
+# only a commit (checked against github.sha, which the provenance records) and cannot add
+# steps to these jobs, so the provenance describes this recipe and nothing else. Only the
+# attest job holds an OIDC token. That isolation is Build L3. Verify it with:
+#   gh attestation verify <tarball> --repo schubydoo/scratchsmith \
+#     --signer-workflow schubydoo/scratchsmith/.github/workflows/release-binaries.yml
+#
+# This replaces slsa-github-generator for TASK-069: the generator must be referenced by tag and
+# fails when pinned by SHA, and this repo SHA-pins every action. Here every action stays
+# SHA-pinned, and the reusable workflow is called with `$/`, so it runs at the caller's commit.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to build (the release squash commit on main).
+        type: string
+        required: true
+    outputs:
+      artifact:
+        description: Name of the artifact with the tarballs, SBOM, checksums.txt and provenance bundle.
+        value: ${{ jobs.attest.outputs.artifact }}
+
+permissions:
+  contents: read
+
+jobs:
+  # No signing identity here: the build steps never see an OIDC token.
+  build:
+    name: Build ${{ matrix.name }} binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      # One target's failure must not cancel the others.
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            name: linux-amd64
+          - target: aarch64-unknown-linux-musl
+            name: linux-arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      # The provenance records the caller run's commit (github.sha), not inputs.ref, so refuse
+      # to build anything else. On a merged release PR the two match (v2.1.0's provenance names
+      # its squash commit).
+      - name: Check inputs.ref is the commit the provenance records
+        run: |
+          [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "::error::inputs.ref is not github.sha, the commit the provenance records"; exit 1; }
+      # One recipe for the release and for reproduce.yml's rebuild: the pinned toolchain,
+      # zig, cargo-zigbuild and scripts/build-release-binary.sh. See REPRODUCE.md.
+      - name: Build (static musl via zig)
+        uses: $/.github/actions/release-build
+        with:
+          target: ${{ matrix.target }}
+      - name: Package tarball
+        env:
+          NAME: ${{ matrix.name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # Version from the bumped [package] line (line-anchored, so a dependency
+          # `version = "..."` pin can't shadow it); names the tarball to match the
+          # tag knope will create (v${VERSION}).
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) : ;;
+            *) echo "::error::could not parse package version from Cargo.toml (got '${version}')"; exit 1 ;;
+          esac
+          pkg="scratchsmith-v${version}-${NAME}"
+          mkdir -p "dist/${pkg}"
+          cp "target/${TARGET}/release/scratchsmith" "dist/${pkg}/scratchsmith"
+          cp LICENSE README.md "dist/${pkg}/"
+          tar -C dist -czf "dist/${pkg}.tar.gz" "${pkg}"
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.name }}
+          path: dist/scratchsmith-*-${{ matrix.name }}.tar.gz
+          # Fail loudly on a name mismatch rather than staging a subset of arches.
+          if-no-files-found: error
+          retention-days: 1
+
+  # Still no signing identity: syft is a downloaded third-party binary, so the SBOM and
+  # checksums are made in a job that never sees an OIDC token.
+  assemble:
+    name: SBOM + checksums
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      # The provenance records the caller run's commit (github.sha), not inputs.ref, so refuse
+      # to build anything else. On a merged release PR the two match (v2.1.0's provenance names
+      # its squash commit).
+      - name: Check inputs.ref is the commit the provenance records
+        run: |
+          [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "::error::inputs.ref is not github.sha, the commit the provenance records"; exit 1; }
+      - name: Fetch built tarballs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-*
+          path: artifacts
+      - name: Install syft (release SBOM generator)
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      - name: Assemble, SBOM and checksum
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          # download-artifact laid each tarball under artifacts/dist-<name>/.
+          find artifacts -name 'scratchsmith-*.tar.gz' -exec cp {} release/ \;
+          # The matrix ships two arches; anything else means an upload went missing.
+          count=$(find release -name 'scratchsmith-*.tar.gz' | wc -l)
+          [ "$count" -eq 2 ] || { echo "::error::expected 2 tarballs, found ${count}"; exit 1; }
+          # Release SBOM — scratchsmith's OWN Rust dependency graph (CycloneDX, via
+          # syft). Sourced from Cargo.lock on purpose: the shipped binary is stripped
+          # (profile.release strip=true), so a binary scan is empty; the lockfile is
+          # the faithful, arch-independent dep record (one SBOM covers both arches).
+          # Named to match the tag knope creates (v${version}); it rides checksums.txt,
+          # so the provenance below and the caller's cosign signature cover it.
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) : ;;
+            *) echo "::error::could not parse package version from Cargo.toml (got '${version}')"; exit 1 ;;
+          esac
+          syft scan file:Cargo.lock -o "cyclonedx-json=release/scratchsmith-v${version}.cdx.json"
+          # syft exits 0 even when a cataloger finds nothing; assert the SBOM actually
+          # captured components so a broken scan can't publish a hollow SBOM.
+          components=$(jq '.components | length' "release/scratchsmith-v${version}.cdx.json")
+          [ "${components:-0}" -gt 0 ] || { echo "::error::SBOM has no components — syft scan of Cargo.lock produced nothing"; exit 1; }
+          cd release
+          sha256sum scratchsmith-*.tar.gz scratchsmith-*.cdx.json > checksums.txt
+      - name: Upload the release set
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-unattested
+          path: release/
+          if-no-files-found: error
+          retention-days: 1
+
+  # The only job with a signing identity: no checkout, no third-party tool, just attest the
+  # files that assemble produced and check the result.
+  attest:
+    name: Provenance
+    needs: assemble
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # Sigstore certificate for the provenance
+      attestations: write # store the attestation on GitHub
+    outputs:
+      artifact: release-attested
+    steps:
+      - name: Fetch the release set
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-unattested
+          path: release
+      - name: SLSA build provenance
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: release/checksums.txt
+      # Fail closed: check the bundle the way a user will, signer workflow included, so a
+      # provenance that does not name this file as its signer never reaches a release.
+      - name: Verify the provenance names this workflow as its signer
+        env:
+          BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [ -s "$BUNDLE" ] || { echo "::error::no provenance bundle produced"; exit 1; }
+          cp "$BUNDLE" release/scratchsmith.intoto.jsonl
+          for f in release/scratchsmith-*.tar.gz release/scratchsmith-*.cdx.json; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" \
+              --bundle release/scratchsmith.intoto.jsonl \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release-binaries.yml"
+          done
+      - name: Upload the attested set
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-attested
+          path: release/
+          if-no-files-found: error
+          retention-days: 1

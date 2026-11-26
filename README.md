@@ -134,8 +134,8 @@ top. The full key reference and the layering rules are in
 
 ## Verifying releases
 
-Every release is keyless-signed with cosign, carries a SLSA build-provenance attestation, and
-ships a CycloneDX SBOM of its own dependency graph. The exact `gh attestation` and
+Every release is keyless-signed with cosign, carries a SLSA build-provenance attestation (Build Level
+3 for new releases, Level 2 for older ones), and ships a CycloneDX SBOM of its own dependency graph. The exact `gh attestation` and
 `cosign verify` commands are in **[Verifying releases](docs/verifying.md)**.
 Release binaries after v2.1.0 are reproducible: **[REPRODUCE.md](REPRODUCE.md)** shows how to
 rebuild one from its tag and compare it byte for byte.
