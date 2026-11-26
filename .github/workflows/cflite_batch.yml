@@ -7,7 +7,7 @@
 # so coverage compounds across runs. Needs schubydoo/scratchsmith-fuzz-corpus and a
 # FUZZ_STORAGE_TOKEN PAT (write). If the secret is unset the job still runs (fuzzes from seed);
 # it just does not accumulate. fuzz-seconds is the budget for the WHOLE run, split evenly across
-# the targets: 2400 over 8 targets is 300 s each. ci.yml's `fuzz harness check` fails when the
+# the targets: 2700 over 9 targets is 300 s each. ci.yml's `fuzz harness check` fails when the
 # share drops under 300 s, so a PR that adds a target also raises this.
 # Docs: https://google.github.io/clusterfuzzlite/
 name: ClusterFuzzLite batch fuzzing
@@ -48,7 +48,7 @@ jobs:
         uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          fuzz-seconds: 2400
+          fuzz-seconds: 2700
           mode: batch
           sanitizer: ${{ matrix.sanitizer }}
           output-sarif: true
