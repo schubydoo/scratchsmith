@@ -118,4 +118,4 @@ jobs:
           fi
       - name: Note the kept package
         if: always() && inputs.keep_package
-        run: echo "::notice::keep_package is set, so $PUSH_REF stays in GHCR. Delete the package by hand when done."
+        run: echo "::notice::keep_package is set, so cleanup was skipped. If this run pushed $PUSH_REF, it stays in GHCR. Delete the package by hand when done."
