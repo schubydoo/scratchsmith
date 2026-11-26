@@ -592,6 +592,89 @@ fn a_colon_separated_search_path_resolves_like_the_loader() {
 }
 
 #[test]
+fn lib_token_in_a_search_path_resolves_like_the_loader() {
+    // RUNPATH `$ORIGIN/../$LIB`, with libfoo only in the directory the host glibc names by
+    // `$LIB`: `lib/x86_64-linux-gnu` on Debian and Ubuntu, `lib64` on Fedora. The rule under
+    // test reads that name from where libc.so.6 sits, so the test reads it the same way, and
+    // the real loader checks it.
+    if !cc_available() {
+        skip_required("no C compiler");
+        return;
+    }
+    let defaults = [
+        "/lib64",
+        "/usr/lib64",
+        "/lib",
+        "/usr/lib",
+        "/lib/x86_64-linux-gnu",
+        "/usr/lib/x86_64-linux-gnu",
+        "/lib/aarch64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
+    ];
+    let libc = defaults
+        .iter()
+        .map(|d| Path::new(d).join("libc.so.6"))
+        .find(|libc| libc.is_file())
+        .expect("a glibc host has libc.so.6 in a default dir");
+    let real = std::fs::canonicalize(libc).unwrap();
+    let parent = real.parent().unwrap().strip_prefix("/").unwrap();
+    let lib_dir = parent.strip_prefix("usr").unwrap_or(parent);
+
+    let bin = env!("CARGO_BIN_EXE_scratchsmith");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let libs = dir.join("app").join(lib_dir);
+    std::fs::create_dir_all(&libs).unwrap();
+    std::fs::create_dir_all(dir.join("app/bin")).unwrap();
+    std::fs::write(dir.join("foo.c"), "int foo(void){return 42;}").unwrap();
+    std::fs::write(
+        dir.join("main.c"),
+        "extern int foo(void); int main(void){return foo()==42?0:1;}",
+    )
+    .unwrap();
+    let p = |path: &Path| path.to_str().unwrap().to_string();
+    let lib = libs.join("libfoo.so");
+    cc(&["-shared", "-fPIC", "-o", &p(&lib), &p(&dir.join("foo.c"))]);
+    let app = dir.join("app/bin/app");
+    cc(&[
+        "-Wl,--enable-new-dtags",
+        "-Wl,-rpath,$ORIGIN/../$LIB",
+        "-o",
+        &p(&app),
+        &p(&dir.join("main.c")),
+        &format!("-L{}", libs.display()),
+        "-lfoo",
+    ]);
+    // The real loader is the reference: if this fails, the rule read the wrong `$LIB`.
+    let run = Command::new(&app)
+        .current_dir("/")
+        .env_remove("LD_LIBRARY_PATH")
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "the loader runs it with `$LIB` = {}",
+        lib_dir.display()
+    );
+
+    let graph = Command::new(bin)
+        .args(["graph", &p(&app)])
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&graph.stderr);
+    assert!(graph.status.success(), "graph: {stderr}");
+
+    let rootfs = dir.join("rootfs");
+    let pack = Command::new(bin)
+        .args(["pack", "-n", "-o", &p(&rootfs), &p(&app)])
+        .output()
+        .expect("run");
+    let stderr = String::from_utf8_lossy(&pack.stderr);
+    assert!(pack.status.success(), "pack: {stderr}");
+    assert!(walk_contains(&rootfs, "libfoo.so"));
+}
+
+#[test]
 fn a_library_in_a_directory_named_with_a_colon_still_packs() {
     // RUNPATH `$ORIGIN/x:y` with libfoo in a directory literally named `x:y`. ld.so splits the
     // string and misses it, but the staged ld.so.cache lists `x:y`, so a 1.9 image of this

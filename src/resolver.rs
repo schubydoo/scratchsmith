@@ -43,7 +43,7 @@ pub struct ElfInfo {
     pub runpaths: Vec<String>,
     /// DT_SONAME: this object's own soname, if it declares one.
     pub soname: Option<String>,
-    /// 64-bit ELF. Drives `$LIB` expansion (lib64 vs lib) during resolution.
+    /// 64-bit ELF. Picks the fallback value of `$LIB` (lib64 vs lib) during resolution.
     pub is_64: bool,
     /// ELF machine (`e_machine`). Drives `$PLATFORM` and the default lib triplet.
     pub machine: u16,
@@ -414,6 +414,7 @@ pub fn resolve_with(
     // the binary's own DT_NEEDED, so the count of those tells the two apart below.
     let declared_needed = root_info.needed.len();
     root_info.needed.extend(includes.iter().cloned());
+    let libs = lib_values(sysroot, &root_info, source);
 
     let mut resolution = Resolution::default();
 
@@ -561,16 +562,16 @@ pub fn resolve_with(
                         goblin::elf::header::machine_to_str(root_info.machine),
                         entry.escape_debug(),
                         printable(&obj_path),
-                        expand_tokens(entry, origin_dir, &root_info).escape_debug()
+                        expand_tokens(entry, origin_dir, &root_info, &libs[0]).escape_debug()
                     );
                 }
             }
         }
-        let own_rpaths = build_dirs(used_rpaths, origin_dir, &sysroot.root, &root_info);
-        let runpath_dirs = build_dirs(&obj.runpaths, origin_dir, &sysroot.root, &root_info);
+        let own_rpaths = build_dirs(used_rpaths, origin_dir, &sysroot.root, &root_info, &libs);
+        let runpath_dirs = build_dirs(&obj.runpaths, origin_dir, &sysroot.root, &root_info, &libs);
         // Index for index with the dirs above, so a hit in `search` names its entry.
-        let own_rpath_gaps = entry_gaps(used_rpaths, "RPATH", &obj_path, &root_info);
-        let runpath_gaps = entry_gaps(&obj.runpaths, "RUNPATH", &obj_path, &root_info);
+        let own_rpath_gaps = entry_gaps(used_rpaths, "RPATH", &obj_path, &root_info, &libs);
+        let runpath_gaps = entry_gaps(&obj.runpaths, "RUNPATH", &obj_path, &root_info, &libs);
         let own_rpath_cpu = cpu_entries(
             used_rpaths,
             "RPATH",
@@ -578,6 +579,7 @@ pub fn resolve_with(
             origin_dir,
             sysroot,
             &root_info,
+            &libs,
         );
         let runpath_cpu = cpu_entries(
             &obj.runpaths,
@@ -586,9 +588,17 @@ pub fn resolve_with(
             origin_dir,
             sysroot,
             &root_info,
+            &libs,
         );
-        let own_literals = literal_dirs(used_rpaths, origin_dir, &sysroot.root, &root_info);
-        let runpath_literals = literal_dirs(&obj.runpaths, origin_dir, &sysroot.root, &root_info);
+        let own_literals =
+            literal_dirs(used_rpaths, origin_dir, &sysroot.root, &root_info, &libs[0]);
+        let runpath_literals = literal_dirs(
+            &obj.runpaths,
+            origin_dir,
+            &sysroot.root,
+            &root_info,
+            &libs[0],
+        );
 
         // Search order: RPATH (own, then ancestors' — transitive) -> RUNPATH (this
         // object only) -> the whole-string fallbacks, in the same order -> default dirs.
@@ -985,22 +995,23 @@ impl Gap {
     }
 }
 
-// One `Option<Gap>` per entry of `search_entries(raw)`, in the same order as `build_dirs`.
+// One `Option<Gap>` per entry of `lib_entries(raw, libs)`, in the same order as `build_dirs`.
 fn entry_gaps(
     raw: &[String],
     tag: &'static str,
     owner: &Path,
     root_info: &ElfInfo,
+    libs: &[String],
 ) -> Vec<Option<Gap>> {
     let origin_dir = owner.parent().unwrap_or(Path::new("/"));
-    search_entries(raw)
-        .map(|entry| {
+    lib_entries(raw, libs)
+        .map(|(entry, lib)| {
             let kind = if entry.is_empty() {
                 // `search_entries` drops an empty entry of a list, so this is a whole string.
                 GapKind::Empty
             } else if holds_unknown_token(entry) {
                 GapKind::Token
-            } else if !Path::new(&expand_tokens(entry, origin_dir, root_info)).is_absolute() {
+            } else if !Path::new(&expand_tokens(entry, origin_dir, root_info, lib)).is_absolute() {
                 GapKind::Relative
             } else {
                 return None;
@@ -1083,7 +1094,7 @@ impl CpuEntry {
     }
 }
 
-// One `Option<CpuEntry>` per entry of `search_entries(raw)`, in the same order as `build_dirs`.
+// One `Option<CpuEntry>` per entry of `lib_entries(raw, libs)`, in the same order as `build_dirs`.
 // An entry that ld.so does not search at all is a `Gap` and gets its own note instead.
 // `origin_dir` is where `owner` was found, which may be a symlink's directory.
 fn cpu_entries(
@@ -1093,13 +1104,14 @@ fn cpu_entries(
     origin_dir: &Path,
     sysroot: &Sysroot,
     root_info: &ElfInfo,
+    libs: &[String],
 ) -> Vec<Option<CpuEntry>> {
-    search_entries(raw)
-        .map(|entry| {
+    lib_entries(raw, libs)
+        .map(|(entry, lib)| {
             let names_platform = entry.contains("$PLATFORM") || entry.contains("${PLATFORM}");
             let searched = !entry.is_empty()
                 && !holds_unknown_token(entry)
-                && Path::new(&expand_tokens(entry, origin_dir, root_info)).is_absolute();
+                && Path::new(&expand_tokens(entry, origin_dir, root_info, lib)).is_absolute();
             (root_info.machine == goblin::elf::header::EM_X86_64 && names_platform && searched)
                 .then(|| CpuEntry {
                     owner: owner.to_path_buf(),
@@ -1107,12 +1119,7 @@ fn cpu_entries(
                     entry: entry.to_owned(),
                     dirs: X86_64_CPU_PLATFORMS
                         .iter()
-                        .map(|&p| {
-                            (
-                                p,
-                                entry_dir_as(entry, origin_dir, &sysroot.root, root_info, p),
-                            )
-                        })
+                        .map(|&p| (p, entry_dir_as(entry, origin_dir, &sysroot.root, p, lib)))
                         .collect(),
                 })
         })
@@ -1229,20 +1236,61 @@ fn cpu_copy_note(
 // Expand ld.so tokens in a search path against the object that owns it. `$ORIGIN`
 // is the owning object's directory — not the top binary's — which is the whole
 // point of the token; expanding it wrong is a classic staging bug.
-fn expand_tokens(raw: &str, origin_dir: &Path, root: &ElfInfo) -> String {
-    expand_tokens_as(raw, origin_dir, root, root.platform())
+fn expand_tokens(raw: &str, origin_dir: &Path, root: &ElfInfo, lib: &str) -> String {
+    expand_tokens_as(raw, origin_dir, root.platform(), lib)
 }
 
 // `expand_tokens`, with `platform` as the value of `$PLATFORM`.
-fn expand_tokens_as(raw: &str, origin_dir: &Path, root: &ElfInfo, platform: &str) -> String {
+fn expand_tokens_as(raw: &str, origin_dir: &Path, platform: &str, lib: &str) -> String {
     let origin = origin_dir.to_string_lossy();
-    let lib = if root.is_64 { "lib64" } else { "lib" };
     raw.replace("${ORIGIN}", &origin)
         .replace("$ORIGIN", &origin)
         .replace("${LIB}", lib)
         .replace("$LIB", lib)
         .replace("${PLATFORM}", platform)
         .replace("$PLATFORM", platform)
+}
+
+// The values `$LIB` takes, in search order. glibc fixes `$LIB` at build time to the directory
+// its libc sits in, without `usr/`: `lib/x86_64-linux-gnu` on Debian, `lib64` on Fedora, `lib`
+// on Arch. The libc must match the binary, or a foreign one earlier in the default dirs would
+// set the value. The old fixed value follows when it differs, so a library found only there
+// still resolves, and it is the only value when the sysroot holds no fitting libc.so.6
+// (decision-036, option B).
+fn lib_values(sysroot: &Sysroot, root_info: &ElfInfo, source: &dyn LinkInfoSource) -> Vec<String> {
+    let fallback = if root_info.is_64 { "lib64" } else { "lib" };
+    let root = canonical(&sysroot.root);
+    let glibc = sysroot
+        .default_dirs
+        .iter()
+        .map(|dir| dir.join("libc.so.6"))
+        .find(|libc| libc.is_file() && arch_fits(source, libc, root_info))
+        .and_then(|libc| {
+            let dir = canonical(&libc)
+                .parent()?
+                .strip_prefix(&root)
+                .ok()?
+                .to_path_buf();
+            let dir = dir.strip_prefix("usr").unwrap_or(&dir);
+            (!dir.as_os_str().is_empty()).then(|| dir.to_string_lossy().into_owned())
+        });
+    match glibc {
+        Some(value) if value != fallback => vec![value, fallback.to_owned()],
+        _ => vec![fallback.to_owned()],
+    }
+}
+
+// `search_entries(raw)`, each with the `$LIB` value to expand it with. An entry that names
+// `$LIB` comes once for each of `libs`, in order, and any other entry once.
+fn lib_entries<'a>(
+    raw: &'a [String],
+    libs: &'a [String],
+) -> impl Iterator<Item = (&'a str, &'a str)> {
+    search_entries(raw).flat_map(move |entry| {
+        let names_lib = entry.contains("$LIB") || entry.contains("${LIB}");
+        let values = if names_lib { libs } else { &libs[..1] };
+        values.iter().map(move |lib| (entry, lib.as_str()))
+    })
 }
 
 // The entries of RPATH or RUNPATH strings, in order. ld joins several -rpath flags into one
@@ -1259,9 +1307,15 @@ fn search_entries(raw: &[String]) -> impl Iterator<Item = &str> {
 
 // Turn raw RPATH/RUNPATH strings into concrete directories: split them, expand tokens, root
 // absolute paths inside the sysroot, and treat anything relative as origin-relative.
-fn build_dirs(raw: &[String], origin_dir: &Path, root: &Path, root_info: &ElfInfo) -> Vec<PathBuf> {
-    search_entries(raw)
-        .map(|entry| entry_dir(entry, origin_dir, root, root_info))
+fn build_dirs(
+    raw: &[String],
+    origin_dir: &Path,
+    root: &Path,
+    root_info: &ElfInfo,
+    libs: &[String],
+) -> Vec<PathBuf> {
+    lib_entries(raw, libs)
+        .map(|(entry, lib)| entry_dir(entry, origin_dir, root, root_info, lib))
         .collect()
 }
 
@@ -1275,10 +1329,11 @@ fn literal_dirs(
     origin_dir: &Path,
     root: &Path,
     root_info: &ElfInfo,
+    lib: &str,
 ) -> Vec<PathBuf> {
     raw.iter()
         .filter(|list| list.contains(':'))
-        .map(|list| entry_dir(list, origin_dir, root, root_info))
+        .map(|list| entry_dir(list, origin_dir, root, root_info, lib))
         .collect()
 }
 
@@ -1348,19 +1403,19 @@ fn ldconfig_caches_name(name: &str) -> bool {
 }
 
 // One search-path entry as a concrete directory.
-fn entry_dir(entry: &str, origin_dir: &Path, root: &Path, root_info: &ElfInfo) -> PathBuf {
-    entry_dir_as(entry, origin_dir, root, root_info, root_info.platform())
-}
-
-// `entry_dir`, with `platform` as the value of `$PLATFORM`.
-fn entry_dir_as(
+fn entry_dir(
     entry: &str,
     origin_dir: &Path,
     root: &Path,
     root_info: &ElfInfo,
-    platform: &str,
+    lib: &str,
 ) -> PathBuf {
-    let expanded = expand_tokens_as(entry, origin_dir, root_info, platform);
+    entry_dir_as(entry, origin_dir, root, root_info.platform(), lib)
+}
+
+// `entry_dir`, with `platform` as the value of `$PLATFORM`.
+fn entry_dir_as(entry: &str, origin_dir: &Path, root: &Path, platform: &str, lib: &str) -> PathBuf {
+    let expanded = expand_tokens_as(entry, origin_dir, platform, lib);
     let p = Path::new(&expanded);
     if p.is_absolute() {
         reroot(root, p)
@@ -3993,6 +4048,131 @@ mod tests {
             edges_to_c, 2,
             "both a and b must keep an edge to c, got {edges_to_c}"
         );
+    }
+
+    // A sysroot whose glibc sits in `libc_dir` (with `lib` and `lib64` as the usual symlinks),
+    // and an app with RUNPATH `$ORIGIN/../$LIB` and a copy of libfoo.so.1 under each of
+    // `copies`, relative to the app. Returns where libfoo.so.1 resolved, or None if missing.
+    fn lib_token_case(libc_dir: Option<&str>, copies: &[&str]) -> Option<PathBuf> {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::os::unix::fs::symlink("usr/lib", root.join("lib")).unwrap();
+        if let Some(dir) = libc_dir {
+            touch(&root.join(dir).join("libc.so.6"));
+            if dir == "usr/lib64" {
+                std::os::unix::fs::symlink("usr/lib64", root.join("lib64")).unwrap();
+            }
+        }
+        let exe = root.join("opt/app/bin/exe");
+        touch(&exe);
+        let mut infos = HashMap::new();
+        infos.insert(
+            canonical(&exe),
+            elf(&["libfoo.so.1"], &[], &["$ORIGIN/../$LIB"], None),
+        );
+        for copy in copies {
+            let lib = root.join("opt/app").join(copy).join("libfoo.so.1");
+            touch(&lib);
+            infos.insert(canonical(&lib), elf(&[], &[], &[], None));
+        }
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        let found = res.libs.iter().find(|l| l.soname == "libfoo.so.1")?;
+        Some(
+            found
+                .path
+                .strip_prefix(canonical(root))
+                .unwrap()
+                .to_path_buf(),
+        )
+    }
+
+    #[test]
+    fn lib_token_follows_a_debian_layout() {
+        let found = lib_token_case(Some("usr/lib/x86_64-linux-gnu"), &["lib/x86_64-linux-gnu"]);
+        assert_eq!(
+            found.as_deref(),
+            Some(Path::new("opt/app/lib/x86_64-linux-gnu/libfoo.so.1"))
+        );
+    }
+
+    #[test]
+    fn lib_token_follows_a_fedora_layout() {
+        let found = lib_token_case(Some("usr/lib64"), &["lib64"]);
+        assert_eq!(
+            found.as_deref(),
+            Some(Path::new("opt/app/lib64/libfoo.so.1"))
+        );
+    }
+
+    #[test]
+    fn lib_token_follows_an_arch_layout() {
+        // Arch keeps libc in usr/lib, so glibc's `$LIB` is `lib`.
+        let found = lib_token_case(Some("usr/lib"), &["lib"]);
+        assert_eq!(found.as_deref(), Some(Path::new("opt/app/lib/libfoo.so.1")));
+    }
+
+    #[test]
+    fn lib_token_falls_back_without_a_libc() {
+        let found = lib_token_case(None, &["lib64"]);
+        assert_eq!(
+            found.as_deref(),
+            Some(Path::new("opt/app/lib64/libfoo.so.1"))
+        );
+    }
+
+    #[test]
+    fn lib_token_keeps_the_old_value_as_a_second_directory() {
+        // Option B (decision-036): a copy only under lib64 still resolves on a Debian layout,
+        // because the image's ld.so.cache finds it there.
+        let found = lib_token_case(Some("usr/lib/x86_64-linux-gnu"), &["lib64"]);
+        assert_eq!(
+            found.as_deref(),
+            Some(Path::new("opt/app/lib64/libfoo.so.1"))
+        );
+    }
+
+    #[test]
+    fn lib_token_prefers_the_copy_the_loader_uses() {
+        let found = lib_token_case(
+            Some("usr/lib/x86_64-linux-gnu"),
+            &["lib64", "lib/x86_64-linux-gnu"],
+        );
+        assert_eq!(
+            found.as_deref(),
+            Some(Path::new("opt/app/lib/x86_64-linux-gnu/libfoo.so.1"))
+        );
+    }
+
+    #[test]
+    fn lib_token_skips_a_libc_of_another_architecture() {
+        // An aarch64 libc in usr/lib64 comes first in the default dirs, but cannot be the
+        // x86_64 binary's glibc.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let foreign = root.join("usr/lib64/libc.so.6");
+        let native = root.join("usr/lib/x86_64-linux-gnu/libc.so.6");
+        let exe = root.join("opt/app/bin/exe");
+        let lib = root.join("opt/app/usr/lib/x86_64-linux-gnu/libfoo.so.1");
+        for p in [&foreign, &native, &exe, &lib] {
+            touch(p);
+        }
+        let mut infos = HashMap::new();
+        infos.insert(
+            canonical(&exe),
+            elf(&["libfoo.so.1"], &[], &["$ORIGIN/../usr/$LIB"], None),
+        );
+        infos.insert(
+            canonical(&foreign),
+            ElfInfo {
+                machine: goblin::elf::header::EM_AARCH64,
+                ..elf(&[], &[], &[], None)
+            },
+        );
+        infos.insert(canonical(&lib), elf(&[], &[], &[], None));
+        let res = resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap();
+        assert!(res.missing.is_empty(), "{:?}", res.missing);
+        assert!(res.libs.iter().any(|l| l.path == canonical(&lib)));
     }
 
     // exe (RUNPATH $ORIGIN/../lib) -> {libbar, libfoo}; libbar -> libfoo, with no search path.

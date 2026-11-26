@@ -30,7 +30,13 @@
    `$PLATFORM` is read as `x86_64`. glibc reads it as `haswell` or `xeon_phi` on some Intel CPUs,
    but those copies are optimized builds that not every CPU can run, so they never stage. A
    library missing as `x86_64` but present under such a name gets a hint, and a library that
-   ships while `ld.so` on such a CPU would load such a copy gets a note on stderr. Scratchsmith never
+   ships while `ld.so` on such a CPU would load such a copy gets a note on stderr. `$LIB` takes
+   the value the glibc in the host root uses, read from the directory where the first
+   `libc.so.6` of the binary's arch sits, without a leading `usr/`: `lib/x86_64-linux-gnu` on
+   Debian and Ubuntu, `lib64` on Fedora, `lib` on Arch. When that value is not `lib64` (`lib`
+   for a 32-bit binary), that old fixed value is searched next, so a library found there before
+   still resolves. A string that holds `:`, tried whole, uses the glibc value only. With no such
+   `libc.so.6`, the old value is the only one. Scratchsmith never
    scrapes the host's `ldd`, `ld.so.cache`, or `LD_LIBRARY_PATH`, so the result is deterministic.
 2. **Stage**: copy the interpreter to its verbatim path, mirror the libraries, recreate
    versioned-soname symlinks, regenerate `ld.so.cache`, and add the glibc NSS pieces.
