@@ -71,9 +71,11 @@ jobs:
       - name: Pack a tiny binary, push it to GHCR, sign it, and attest its SBOM
         run: |
           set -euo pipefail
-          # /usr/bin/id is a small dynamic glibc ELF — exactly what scratchsmith packs.
-          cp /usr/bin/id ./authtest-bin
-          ./target/release/scratchsmith pack --push "$PUSH_REF" --sign --sbom ./authtest-bin
+          # /usr/bin/id is a dynamic glibc ELF — exactly what scratchsmith packs. Keep its name:
+          # on runners where it is the uutils coreutils multicall binary, it picks the applet
+          # from argv[0], so a renamed copy exits "unknown program".
+          mkdir -p authtest && cp /usr/bin/id authtest/id
+          ./target/release/scratchsmith pack --push "$PUSH_REF" --sign --sbom ./authtest/id
       - name: Pull it back from GHCR and run it (round-trip proof)
         run: |
           set -euo pipefail
