@@ -1,0 +1,49 @@
+name: Release binary build
+description: >-
+  Install the pinned Rust, zig and cargo-zigbuild, then build one static-musl release binary
+  with scripts/build-release-binary.sh. knope-release.yml builds the published binaries with
+  it, and reproduce.yml rebuilds them with it from the release tag, so both use one recipe.
+
+# The versions pinned here are part of the recipe: REPRODUCE.md sends a third party to this
+# file at the release tag for them. A change to any of them changes the release bytes.
+
+inputs:
+  target:
+    description: The Rust target triple to build, e.g. x86_64-unknown-linux-musl.
+    required: true
+
+outputs:
+  binary:
+    description: Path of the built binary, relative to the workspace.
+    value: target/${{ inputs.target }}/release/scratchsmith
+
+runs:
+  using: composite
+  steps:
+    - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+      with:
+        # Pinned, not `stable`: a rebuild must use the exact compiler that built the release.
+        # renovate: datasource=github-releases depName=rust-lang/rust
+        toolchain: 1.100.0
+        target: ${{ inputs.target }}
+        cache: false
+        # build-warnings: warn clears v2's default CARGO_BUILD_WARNINGS=deny, so a stray
+        # warning can't fail the release build. The script sets RUSTFLAGS itself.
+        rustflags: ""
+        build-warnings: warn
+    # zig is the cross linker for both musl targets.
+    - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      with:
+        # renovate: datasource=github-releases depName=ziglang/zig
+        version: 0.15.1
+        use-cache: false
+    # Pinned prebuilt (not `cargo install`): cargo-zigbuild tracks zig's breaking CLI, so a
+    # skew would only surface at release time. Renovate bumps the pin.
+    - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+      with:
+        tool: cargo-zigbuild@0.24.0
+    - name: Build (static musl via zig)
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: scripts/build-release-binary.sh "$TARGET"
