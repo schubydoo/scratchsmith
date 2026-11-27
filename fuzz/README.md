@@ -18,7 +18,7 @@ cargo +nightly fuzz run <target>
 | `resolve_graph` | `resolver::resolve_with` | `ld.so` search: RPATH, RUNPATH, `$ORIGIN`, soname lookup, and the refusals: a corrupt, non-ELF, or wrong-type library or loader, and `$PLATFORM` with no value. Asserts that no hint or `$PLATFORM` error holds a character that breaks a line. Structured input. |
 | `unpack` | `unpack::run` | The outer OCI-archive parse (tar, gzip, JSON) on raw bytes. |
 | `unpack_structured` | `unpack::run` | Layer application, whiteout deletion and its symlink containment, digest checks, media dispatch. Structured input. |
-| `registry_parse` | `registry::parse_child_manifest`, `parse_child_config`, `select_token` | Registry manifest, config blob, and token-response JSON parse. |
+| `registry_parse` | `registry::parse_child_manifest`, `parse_child_config`, `manifest_kind`, `select_token` | Registry manifest, config blob, and token-response JSON parse. |
 | `rpm_headers` | `rpm::header_names` | The rpm header-list reader behind `--packages` on an rpm host: the split into headers and the field reads. |
 | `dpkg_output` | `packages::parse_dpkg_output` | The readers of `dpkg-query` output behind `--packages` on a dpkg host: owner rows and diversions, package rows, and status stanzas. Asserts that every package name and record file name is one safe path component. |
 
@@ -53,7 +53,7 @@ they are not committed:
 - `parse_elf_info`, `glibc_versions` and `analyze_hardening`: a real dynamic executable plus link-variant ELFs
   (RPATH, RUNPATH with `$ORIGIN`, a shared object, a static PIE, and a full-RELRO build).
 - `unpack`: a real OCI-layout archive whose blob digests match.
-- `registry_parse`: a valid child manifest, config blob, and token response.
+- `registry_parse`: a valid child manifest, config blob, token response, and an index with no `mediaType`.
 - `rpm_headers`: one small valid header with a name, a version, a release and an architecture.
 - `dpkg_output`: one text for each `dpkg-query` mode: owner rows with a diversion, package
   rows, and two status stanzas.

@@ -25,7 +25,7 @@ product story and `CONTRIBUTING.md` for the flow.
 - `src/watch.rs`: `pack --watch`.
 - `src/verbose.rs`: the global `--verbose` decision lines (used by the resolver and stager).
 - `src/test_support.rs`: `skip_required`/`skip_optional`, the only allowed test skips, and the CI strict-skip gate.
-- `src/{graph,diff,unpack}.rs`: the `graph`, `diff` and `unpack` subcommands. `unpack` reads untrusted image layers.
+- `src/{graph,diff,unpack,verify}.rs`: the `graph`, `diff`, `unpack` and `verify` subcommands. `unpack` reads untrusted image layers.
 - `src/{cli,lint,doctor,report,config}.rs` · `tests/`: integration tests.
 
 ## Hard rules

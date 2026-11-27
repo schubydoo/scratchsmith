@@ -70,8 +70,16 @@ const COSIGN_HINT: &str = "install cosign: https://github.com/sigstore/cosign";
 /// Check that cosign runs. `--sign` calls it before the push, since a signing that fails
 /// after the push leaves a public image that is not signed.
 pub fn check_cosign() -> Result<()> {
+    cosign_runs().context("--sign needs cosign, so nothing was pushed")
+}
+
+/// Check that cosign runs, before `verify` reads the registry.
+pub fn check_cosign_to_verify() -> Result<()> {
+    cosign_runs().context("verify needs cosign")
+}
+
+fn cosign_runs() -> Result<()> {
     run_tool("cosign", &["version".into()], COSIGN_HINT, Io::Captured)
-        .context("--sign needs cosign, so nothing was pushed")
 }
 
 // `prefix` then `path`, byte for byte. A path's `display()` replaces a byte that is not UTF-8,
@@ -116,6 +124,92 @@ fn cosign_attest_args(image_ref: &str, sbom: &Path, predicate_type: &str) -> Vec
         "--predicate".into(),
         sbom.into(),
         image_ref.into(),
+    ]
+}
+
+/// The signer identity that `verify` asks cosign to match: an exact value, or a pattern.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CertificateIdentity {
+    /// `--certificate-identity`: the identity must equal this value.
+    Exact(String),
+    /// `--certificate-identity-regexp`: the identity must match this pattern.
+    Regexp(String),
+}
+
+impl CertificateIdentity {
+    /// The cosign flag that carries this identity.
+    pub fn flag(&self) -> &'static str {
+        match self {
+            Self::Exact(_) => "--certificate-identity",
+            Self::Regexp(_) => "--certificate-identity-regexp",
+        }
+    }
+
+    /// The identity or pattern as given.
+    pub fn value(&self) -> &str {
+        match self {
+            Self::Exact(v) | Self::Regexp(v) => v,
+        }
+    }
+}
+
+/// Check the keyless signature on an image, by digest reference, with cosign.
+pub fn cosign_verify(image_ref: &str, identity: &CertificateIdentity, issuer: &str) -> Result<()> {
+    run_tool(
+        "cosign",
+        &cosign_verify_args(image_ref, identity, issuer),
+        COSIGN_HINT,
+        Io::Captured,
+    )
+}
+
+fn cosign_verify_args(
+    image_ref: &str,
+    identity: &CertificateIdentity,
+    issuer: &str,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec!["verify".into(), image_ref.into()];
+    args.extend(identity_args(identity, issuer));
+    args
+}
+
+/// Check an image's attestation of `predicate_type`, by digest reference, with cosign.
+pub fn cosign_verify_attestation(
+    image_ref: &str,
+    predicate_type: &str,
+    identity: &CertificateIdentity,
+    issuer: &str,
+) -> Result<()> {
+    run_tool(
+        "cosign",
+        &cosign_verify_attestation_args(image_ref, predicate_type, identity, issuer),
+        COSIGN_HINT,
+        Io::Captured,
+    )
+}
+
+fn cosign_verify_attestation_args(
+    image_ref: &str,
+    predicate_type: &str,
+    identity: &CertificateIdentity,
+    issuer: &str,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec![
+        "verify-attestation".into(),
+        image_ref.into(),
+        "--type".into(),
+        predicate_type.into(),
+    ];
+    args.extend(identity_args(identity, issuer));
+    args
+}
+
+fn identity_args(identity: &CertificateIdentity, issuer: &str) -> [OsString; 4] {
+    [
+        identity.flag().into(),
+        identity.value().into(),
+        "--certificate-oidc-issuer".into(),
+        issuer.into(),
     ]
 }
 
@@ -411,6 +505,41 @@ mod tests {
         assert!(args.iter().any(|a| a == "--type"));
         assert!(args.iter().any(|a| a == "cyclonedx"));
         assert!(args.iter().any(|a| a == "reg/img@sha256:abc"));
+    }
+
+    #[test]
+    fn cosign_verify_args_carry_the_digest_identity_and_issuer() {
+        let exact = CertificateIdentity::Exact("me@example.com".into());
+        assert_eq!(
+            cosign_verify_args("reg/img@sha256:abc", &exact, "https://accounts.example.com"),
+            [
+                "verify",
+                "reg/img@sha256:abc",
+                "--certificate-identity",
+                "me@example.com",
+                "--certificate-oidc-issuer",
+                "https://accounts.example.com",
+            ]
+        );
+        let pattern = CertificateIdentity::Regexp("^https://github\\.com/you/".into());
+        assert_eq!(
+            cosign_verify_attestation_args(
+                "reg/img@sha256:abc",
+                "spdxjson",
+                &pattern,
+                "https://token.actions.githubusercontent.com",
+            ),
+            [
+                "verify-attestation",
+                "reg/img@sha256:abc",
+                "--type",
+                "spdxjson",
+                "--certificate-identity-regexp",
+                "^https://github\\.com/you/",
+                "--certificate-oidc-issuer",
+                "https://token.actions.githubusercontent.com",
+            ]
+        );
     }
 
     #[test]

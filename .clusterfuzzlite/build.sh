@@ -80,14 +80,16 @@ printf '{"imageLayoutVersion":"1.0.0"}' > "$oci/oci-layout"
 ( cd "$oci" && tar -cf "$oci_seed/app.oci.tar" oci-layout index.json blobs )
 rm -f "$layer_tar"
 
-# JSON seeds for registry_parse: a valid child manifest, config blob, and token response, so
-# mutation reaches each field (mediaType/config.digest, architecture/os/variant, token/
-# access_token) from valid JSON instead of bouncing off the outer serde parse.
+# JSON seeds for registry_parse: a valid child manifest, config blob, token response, and an
+# index with no mediaType (the manifest-kind reader's other branch), so mutation reaches each
+# field (mediaType/config.digest, architecture/os/variant, token/access_token, manifests) from
+# valid JSON instead of bouncing off the outer serde parse.
 json_seed="$(mktemp -d)"
 zero="0000000000000000000000000000000000000000000000000000000000000000"
 printf '{"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:%s"}}' "$zero" > "$json_seed/manifest.json"
 printf '{"architecture":"amd64","os":"linux","variant":"v8"}' > "$json_seed/config.json"
 printf '{"token":"t","access_token":"a"}' > "$json_seed/token.json"
+printf '{"schemaVersion":2,"manifests":[]}' > "$json_seed/index.json"
 
 # An rpm header seed for rpm_headers: the 8-byte magic, an entry count of 4, a data length of
 # 8, four STRING index entries (NAME 1000, VERSION 1001, RELEASE 1002, ARCH 1022, each

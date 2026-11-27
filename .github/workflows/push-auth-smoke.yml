@@ -2,7 +2,8 @@ name: Push auth smoke (live GHCR)
 
 # Manual, opt-in end-to-end proof that `pack --push --sign` authenticates to a REAL token-auth
 # registry (GHCR), completes the daemonless round-trip (pack -> push -> pull -> run), and that
-# the cosign signature and SBOM attestation it creates both verify. This exercises the
+# the cosign signature and SBOM attestation it creates both verify, with cosign and with
+# `scratchsmith verify` (which must also reject a wrong identity or issuer). This exercises the
 # username/password -> registry-token exchange path against real GHCR; the identity-token
 # refresh-grant path is covered deterministically by the unit tests in src/registry.rs (a live
 # identity-token source isn't reproducible here).
@@ -98,6 +99,51 @@ jobs:
             --certificate-identity-regexp '^https://github\.com/.+/\.github/workflows/push-auth-smoke\.yml@' \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             > /dev/null
+      # The same checks through `scratchsmith verify` (TASK-258): the pass, a wrong identity and
+      # a wrong issuer, each of which must exit exactly 1, and an unanchored pattern, which
+      # must exit 2. `want` runs a command and checks its exit code.
+      - name: Verify with scratchsmith verify
+        run: |
+          set -euo pipefail
+          id='^https://github\.com/.+/\.github/workflows/push-auth-smoke\.yml@'
+          issuer=https://token.actions.githubusercontent.com
+          v() { ./target/release/scratchsmith verify "$@"; }
+          want() {
+            local code=$1; shift
+            local got=0
+            "$@" || got=$?
+            if [ "$got" != "$code" ]; then
+              echo "::error::expected exit $code, got $got: $*"
+              exit 1
+            fi
+          }
+          v "$PUSH_REF" --certificate-identity-regexp "$id" --certificate-oidc-issuer "$issuer" --sbom
+          want 1 v "$PUSH_REF" \
+            --certificate-identity-regexp '^https://github\.com/.+/\.github/workflows/not-this-workflow\.yml@' \
+            --certificate-oidc-issuer "$issuer"
+          want 1 v "$PUSH_REF" --certificate-identity-regexp "$id" \
+            --certificate-oidc-issuer https://accounts.google.com
+          want 2 v "$PUSH_REF" \
+            --certificate-identity-regexp 'github\.com/.+/\.github/workflows/push-auth-smoke\.yml@' \
+            --certificate-oidc-issuer "$issuer"
+      # A signed one-entry index at a second tag of the same package, which the cleanup below
+      # deletes with the rest. verify checks the index signature, and refuses --sbom on it.
+      - name: Verify a signed index with scratchsmith verify
+        run: |
+          set -euo pipefail
+          index="${PUSH_REF%:*}:smoke-index"
+          ./target/release/scratchsmith index --sign "$index" "$PUSH_REF"
+          id='^https://github\.com/.+/\.github/workflows/push-auth-smoke\.yml@'
+          issuer=https://token.actions.githubusercontent.com
+          ./target/release/scratchsmith verify "$index" \
+            --certificate-identity-regexp "$id" --certificate-oidc-issuer "$issuer"
+          got=0
+          ./target/release/scratchsmith verify "$index" --sbom \
+            --certificate-identity-regexp "$id" --certificate-oidc-issuer "$issuer" || got=$?
+          if [ "$got" != 2 ]; then
+            echo "::error::verify --sbom on an index exited $got, not 2"
+            exit 1
+          fi
       # Delete the throwaway package so it doesn't linger (public) in the namespace. Runs even
       # if an earlier step failed. GITHUB_TOKEN can't delete packages, so this uses a separate
       # PAT secret; without it, warn and skip rather than fail the run. `keep_package` skips it.

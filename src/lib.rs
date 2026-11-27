@@ -24,4 +24,5 @@ pub mod supplychain;
 mod test_support;
 pub mod unpack;
 pub mod verbose;
+pub mod verify;
 pub mod watch;
