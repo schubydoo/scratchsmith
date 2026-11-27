@@ -1802,6 +1802,10 @@ resolves the libraries by musl's rules, which
 <li><strong>No glibc locales.</strong> musl has a built-in C.UTF-8 and does not read compiled glibc locales, so
   <code>--locale</code>, or a <code>locale</code> key, exits <code>2</code>.</li>
 <li><strong>One libc per image.</strong> An <code>--add-binary</code> program of the other libc fails the pack.</li>
+<li><strong><code>--ca-certs</code>.</strong> Alpine's OpenSSL and curl read the CA bundle at <code>/etc/ssl/cert.pem</code>, not at
+  <code>/etc/ssl/certs/ca-certificates.crt</code>. <code>--ca-certs</code> stages the bundle at the second path and
+  links the first to it, as Alpine does, so TLS works with no <code>--cacert</code> flag. A file that
+  <code>--add-file</code> puts at <code>/etc/ssl/cert.pem</code> is kept, and no link is made.</li>
 <li><strong><code>--packages</code>.</strong> An Alpine host keeps an apk database, which <code>--packages</code> does not read yet.
   The report says null there, as on any host with no dpkg or rpm database.</li>
 </ul>
