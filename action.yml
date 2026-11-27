@@ -16,7 +16,7 @@ branding:
 
 inputs:
   binary:
-    description: Path to the dynamically linked glibc or musl ELF binary to pack.
+    description: Path to the dynamically linked ELF binary to pack: glibc, or musl on x86_64.
     required: true
   version:
     description: >-
