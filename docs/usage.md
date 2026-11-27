@@ -128,7 +128,8 @@ The report also carries `libc` (`"glibc"`, `"musl"`, or null for a binary with n
 `fortify_detectable`. musl's `fortify-headers` check in inline code and leave no `*_chk` symbol,
 so for a musl binary the text report shows `Fortify: unknown (musl's fortify-headers leave no
 symbol)`, `fortify` is `false` and `fortify_detectable` is `false`. `--fail-on no-fortify` cannot
-be checked there, so it exits `2` for a musl binary. The other gates work for musl as for glibc.
+be checked there, so it fails every musl binary: `lint` warns on standard error that the gate
+cannot be checked, prints the report and exits `1`. The other gates work for musl as for glibc.
 
 `--smoke` runs the image once and fails the pack only when the binary could not start: a
 missing library or loader, or an entrypoint the runtime could not exec. An app that starts and
@@ -454,8 +455,9 @@ musl, its search path file and links), `--deny` and `--require`, `--strip`, the 
 whatever `--symlinks` says, so a symlinked `SRC` brings its target's content. One image has one
 loader, so the pack fails when the added ELF is built for another architecture or names another
 program interpreter than the packed binary, and when the added program uses the other libc. A
-static ELF, or a shared library, names none and is accepted. A file that is not an ELF fails
-too: add it with `--add-file`.
+static ELF, or a shared library, names no interpreter, so that check passes. A shared library
+that loads the other libc still fails the pack. A file that is not an ELF fails too: add it with
+`--add-file`.
 
 ## Keep a symlink as a symlink
 

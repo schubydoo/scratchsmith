@@ -279,7 +279,36 @@ fn add_binary_libs(
         origin_fits(&info, add, &shown)?;
         let theirs = resolver::resolve(&add.src, &Sysroot::new("/"))
             .with_context(|| format!("--add-binary {shown}"))?;
+        added_libs_fit(binary, main, &theirs, &shown)?;
         merge_resolution(resolution, theirs);
+    }
+    Ok(())
+}
+
+// A library or static ELF names no loader, so `added_binary_fits` cannot see its libc. It
+// shows in what the added file loads: a glibc `libc.so.6` beside a musl loader, or musl's libc
+// in a glibc image, sits in the image and never loads (D9).
+fn added_libs_fit(
+    binary: &Path,
+    main: &resolver::ElfInfo,
+    theirs: &resolver::Resolution,
+    shown: &str,
+) -> Result<()> {
+    let Some(ours) = main.uses_libc() else {
+        return Ok(());
+    };
+    for lib in &theirs.libs {
+        let Ok(info) = resolver::read_elf_info(&lib.path) else {
+            continue;
+        };
+        if let Some(theirs) = info.libc.filter(|libc| *libc != ours) {
+            bail!(
+                "--add-binary {shown} loads {theirs} through {}, and {} uses {ours}. Pack \
+                 programs and libraries of one libc in one image.",
+                resolver::printable(&lib.path),
+                resolver::printable(binary)
+            );
+        }
     }
     Ok(())
 }

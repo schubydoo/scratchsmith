@@ -160,8 +160,8 @@ impl std::fmt::Display for Hardening {
 /// Analyze and print the hardening report (the `lint` subcommand). When `gates` are
 /// given, fail (non-zero) if any is violated, naming the offending checks — without
 /// a gate, lint only reports and always succeeds. The report prints first, in either
-/// format, so a failing gate still leaves the whole report on stdout. A gate that cannot be
-/// checked (`no-fortify` on a musl binary) is a usage error instead, before any report.
+/// format, so a failing gate still leaves the whole report on stdout. `no-fortify` cannot be
+/// checked on a musl binary, so it fails there as in 2.2.0, with a warning that says why.
 pub fn run(binary: &Path, gates: &[Gate], format: crate::cli::Format) -> Result<()> {
     let hardening = analyze(binary)?;
     // The libc only decides whether fortify can be read. A file goblin parses that the
@@ -171,13 +171,14 @@ pub fn run(binary: &Path, gates: &[Gate], format: crate::cli::Format) -> Result<
         .and_then(|info| info.uses_libc());
     let report = report(binary, hardening, libc, gates);
     if !report.fortify_detectable && gates.contains(&Gate::NoFortify) {
-        // A gate that cannot see what it checks would fail every musl binary, fortified or not.
-        return Err(crate::cli::UsageError(format!(
-            "--fail-on no-fortify cannot be checked for {}: it uses musl, and musl's \
-             fortify-headers leave no symbol to find. Drop no-fortify for musl binaries.",
+        // The gate fails every musl binary, fortified or not. It kept 2.2.0's report and exit
+        // `1` rather than become a usage error, which would change an exit code in a minor.
+        eprintln!(
+            "warning: --fail-on no-fortify cannot be checked for {}: it uses musl, and musl's \
+             fortify-headers leave no symbol to find, so the gate always fails. Drop no-fortify \
+             for musl binaries.",
             crate::resolver::printable(binary)
-        ))
-        .into());
+        );
     }
     match format {
         crate::cli::Format::Text => println!("{}", text(&hardening, report.fortify_detectable)),

@@ -83,9 +83,10 @@ inputs:
       Host ELF programs to copy into the image with the shared libraries they need, one
       `SRC:DST` per line. A bare absolute `SRC` keeps its own path. Each program's libraries
       resolve by the same loader rules as the packed binary, and a library both need is staged
-      once. An ELF for another architecture, or a program for another loader or libc, fails the
-      pack, and so does one that uses `$ORIGIN` with a `DST` outside its real directory. A path may
-      hold spaces, which the `args` input cannot pass. Needs scratchsmith v2.1.0 or later.
+      once. An ELF for another architecture, a program for another loader, or a program or library
+      that uses the other libc fails the pack, and so does one that uses `$ORIGIN` with a `DST`
+      outside its real directory. A path may hold spaces, which the `args` input cannot pass. Needs
+      scratchsmith v2.1.0 or later.
     required: false
     default: ""
   locale:
