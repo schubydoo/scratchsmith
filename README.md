@@ -76,6 +76,7 @@ build. It is purpose-built for the hard case and useful for the easy one.
 | **Daemonless OCI archive**: `--oci-archive <file>` (no daemon, and skopeo/buildah/registry-ready) | ✅ |
 | **Daemonless registry push**: `--push <ref>` (no daemon, and it uses your docker credentials) | ✅ |
 | **Signing the image `pack` produces**: `--push --sign` (cosign keyless, by digest) | ✅ |
+| **Verifying a signed image**: `verify <ref>` (check the signature, and with `--sbom` the SBOM attestation, against the signer you expect) | ✅ |
 | **Multi-arch image index**: `index` (combine per-arch pushes into one tag, daemonless) | ✅ |
 | **Rootfs diff**: `diff <a> <b>` (compare two staged rootfs directories: files added, removed and changed, mode changes and empty directories, plus the size delta, and `--exit-code` gates CI. To compare images, `unpack` them first) | ✅ |
 | **Unpack an OCI image**: `unpack <archive> <dir>` (extract the layers to audit an image you did not build) | ✅ |

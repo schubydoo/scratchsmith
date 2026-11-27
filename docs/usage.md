@@ -92,6 +92,9 @@ keyless signing prints a login URL there and can ask for a code, and you answer 
 when you run cosign yourself. cosign's standard output stays captured, so `--format json` stays
 parseable. A failed cosign run is reported with its exit status, and its own messages are above.
 
+To check the signature later, against the signer you expect, run `scratchsmith verify`. See
+[Verifying an image you signed with `pack`](verifying.md#with-scratchsmith-verify).
+
 ## Supply-chain output, smoke-run, and size gates
 
 ```sh

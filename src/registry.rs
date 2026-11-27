@@ -189,6 +189,96 @@ impl PushedDigest {
     }
 }
 
+/// Whether a manifest is a single image or an image index (a multi-arch list). The value
+/// names are a `verify --format json` contract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ManifestKind {
+    Image,
+    Index,
+}
+
+/// An image reference resolved to the digest it named when it was read.
+#[derive(Debug)]
+pub struct Resolved {
+    /// The by-digest reference, `registry/repo@sha256:…`.
+    pub digest_ref: String,
+    /// The digest alone, `sha256:…`.
+    pub digest: String,
+    /// What the manifest at that digest is.
+    pub kind: ManifestKind,
+    /// Whether the reference named a tag and no digest, so the digest came from the registry.
+    pub by_tag: bool,
+}
+
+/// Parse an image reference given on the command line. A bad one is a usage error.
+pub fn parse_image_reference(image: &str) -> Result<Reference> {
+    image
+        .parse()
+        .with_context(|| format!("invalid image reference {image:?}"))
+        .map_err(crate::cli::usage)
+}
+
+/// Read `reference` from its registry, once, and return its digest and manifest kind. A tag
+/// is resolved to the digest it points to now, so a caller that checks the digest checks what
+/// it reports, even if the tag moves later.
+pub fn resolve(reference: &Reference) -> Result<Resolved> {
+    let image = reference.whole();
+    let plan = plan_credential(lookup_credential(reference.registry())?);
+    let endpoint = reference.resolve_registry().to_string();
+    let repository = reference.repository().to_string();
+    let Clients {
+        registry: client,
+        http,
+    } = registry_clients(&endpoint)?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("tokio runtime for the registry read")?;
+    let (raw, served) = rt.block_on(async {
+        let auth = resolve_auth(plan, &endpoint, &repository, &http).await?;
+        client
+            .pull_manifest_raw(reference, &auth, CHILD_MANIFEST_TYPES)
+            .await
+            .with_context(|| format!("pulling the manifest for {image}"))
+    })?;
+    // oci-client checked the bytes against both the digest asked for and the one served. A
+    // digest the user gave stays the one reported, in the algorithm they wrote.
+    let digest = reference.digest().map_or(served, str::to_string);
+    let kind = manifest_kind(&raw).with_context(|| format!("reading the manifest for {image}"))?;
+    Ok(Resolved {
+        digest_ref: Reference::with_digest(
+            reference.registry().to_string(),
+            repository,
+            digest.clone(),
+        )
+        .whole(),
+        by_tag: reference.digest().is_none(),
+        digest,
+        kind,
+    })
+}
+
+/// Read whether registry-served manifest bytes are an image or an index. The OCI spec makes
+/// `mediaType` optional, so with none a `manifests` array marks an index. A byte-level entry
+/// point for fuzzing, since the bytes are untrusted.
+pub fn manifest_kind(raw: &[u8]) -> Result<ManifestKind> {
+    let manifest: serde_json::Value =
+        serde_json::from_slice(raw).context("parsing the manifest")?;
+    let Some(fields) = manifest.as_object() else {
+        bail!("the manifest is not a JSON object");
+    };
+    let is_index = match fields.get("mediaType").and_then(|v| v.as_str()) {
+        Some(media_type) => is_multi_arch_media_type(media_type),
+        None => fields.get("manifests").is_some_and(|v| v.is_array()),
+    };
+    Ok(if is_index {
+        ManifestKind::Index
+    } else {
+        ManifestKind::Image
+    })
+}
+
 // Manifest media types accepted when pulling a child. Both OCI and Docker single-image
 // manifests are valid children; the two list types are accepted only so a mistakenly
 // passed index is fetched and rejected with a clear message rather than an opaque error.
@@ -2181,6 +2271,44 @@ mod tests {
         assert!(!is_multi_arch_media_type(
             "application/vnd.docker.distribution.manifest.v2+json"
         ));
+    }
+
+    #[test]
+    fn manifest_kind_reads_each_accepted_media_type() {
+        for (media_type, kind) in [
+            (crate::image::OCI_MANIFEST, ManifestKind::Image),
+            (
+                "application/vnd.docker.distribution.manifest.v2+json",
+                ManifestKind::Image,
+            ),
+            (crate::image::OCI_INDEX, ManifestKind::Index),
+            (
+                "application/vnd.docker.distribution.manifest.list.v2+json",
+                ManifestKind::Index,
+            ),
+        ] {
+            assert!(CHILD_MANIFEST_TYPES.contains(&media_type));
+            let raw = format!(r#"{{"schemaVersion":2,"mediaType":"{media_type}"}}"#);
+            assert_eq!(manifest_kind(raw.as_bytes()).unwrap(), kind, "{media_type}");
+        }
+    }
+
+    #[test]
+    fn manifest_kind_without_a_media_type_looks_for_a_manifests_array() {
+        // The OCI spec makes `mediaType` optional, so an index may carry none.
+        let index = br#"{"schemaVersion":2,"manifests":[]}"#;
+        assert_eq!(manifest_kind(index).unwrap(), ManifestKind::Index);
+        let image = br#"{"schemaVersion":2,"config":{"digest":"sha256:a"},"layers":[]}"#;
+        assert_eq!(manifest_kind(image).unwrap(), ManifestKind::Image);
+        // `manifests` that is not an array does not make an index.
+        let odd = br#"{"schemaVersion":2,"manifests":{}}"#;
+        assert_eq!(manifest_kind(odd).unwrap(), ManifestKind::Image);
+    }
+
+    #[test]
+    fn manifest_kind_errors_on_bytes_that_are_not_a_json_object() {
+        assert!(manifest_kind(b"not json").is_err());
+        assert!(manifest_kind(b"[1,2]").is_err());
     }
 
     #[test]

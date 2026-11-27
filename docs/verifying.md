@@ -85,6 +85,40 @@ that provider's. Sigstore's [verification cheat sheet](https://docs.sigstore.dev
 lists them. In CI, `--certificate-identity-regexp` lets one check hold for every branch or tag
 of the workflow.
 
+### With `scratchsmith verify`
+
+`scratchsmith verify` runs both checks below with cosign (cosign must be installed). It takes
+cosign's flag names, so a working `cosign verify` line moves over as it is:
+
+```sh
+scratchsmith verify ghcr.io/you/app@sha256:... \
+  --certificate-identity-regexp '^https://github\.com/you/app/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --sbom
+```
+
+- **Identity:** give exactly one of `--certificate-identity` (an exact value) and
+  `--certificate-identity-regexp`. A pattern must start with `^`. cosign matches a pattern
+  anywhere in the identity, so without the anchor a longer identity that contains it passes too.
+- **`--sbom`:** also checks the SBOM attestation, of the type that `--sbom-format` names
+  (`cyclonedx-json` by default, the same values as `pack`). Leave it out for an image signed
+  with no SBOM, or for an index.
+- **A tag:** verify reads the digest the tag points to once, and cosign checks that digest. The
+  report prints it and notes that a tag can move.
+- **An index** that `index --sign` signed: verify checks the signature on the index. It does not
+  check the images that the index lists, and `--sbom` is refused.
+
+It exits `0` when every check passed, `1` when a check failed or could not run (for example the
+image is not found), and `2` when the command line is refused. `--format json` prints `requested`
+(the reference as given), `image` (the digest reference that cosign checked), `kind` (`image` or
+`index`), `identity`, `identity_is_regexp`, `issuer`, `signature` and `attestation` (the type
+checked, or null). A failure prints no report.
+
+A pass proves who signed that image digest. It does not prove that the image is safe, or that
+the SBOM is complete.
+
+### With cosign directly
+
 ```sh
 IMAGE=ghcr.io/you/app:latest   # or the @sha256:... reference that the pack printed
 
@@ -110,5 +144,5 @@ cosign verify-attestation "$IMAGE" --type cyclonedx <identity flags as above> \
 ```
 
 Scratchsmith's `push-auth-smoke` workflow runs the same `cosign verify` and
-`cosign verify-attestation` checks, with its own workflow identity, against an image it packs,
-pushes to GHCR and signs.
+`cosign verify-attestation` checks, and `scratchsmith verify`, with its own workflow identity,
+against an image it packs, pushes to GHCR and signs.

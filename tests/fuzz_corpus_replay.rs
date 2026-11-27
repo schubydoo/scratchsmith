@@ -57,6 +57,7 @@ fn replay_registry_parse() {
     for b in corpus("registry_parse") {
         let _ = scratchsmith::registry::parse_child_manifest(&b, "fuzz");
         let _ = scratchsmith::registry::parse_child_config(&b, "fuzz");
+        let _ = scratchsmith::registry::manifest_kind(&b);
         let _ = scratchsmith::registry::select_token(&b, "fuzz");
     }
 }

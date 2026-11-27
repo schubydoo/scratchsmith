@@ -213,6 +213,70 @@ impl IndexReport {
     }
 }
 
+/// The outcome of a passing `verify`. A failing check prints no report: the error and the
+/// exit code carry it. Fields are a contract, like `IndexReport`.
+#[derive(Debug, Clone, Serialize)]
+pub struct VerifyReport {
+    /// The image reference as given.
+    pub requested: String,
+    /// The by-digest reference that cosign checked.
+    pub image: String,
+    /// Whether that digest is an image or an image index.
+    pub kind: crate::registry::ManifestKind,
+    /// The identity, or the identity pattern, that the signer had to match.
+    pub identity: String,
+    /// Whether `identity` is a pattern (`--certificate-identity-regexp`).
+    pub identity_is_regexp: bool,
+    /// The OIDC issuer that the signer's certificate had to name.
+    pub issuer: String,
+    /// The signature check passed. Always true in a report.
+    pub signature: bool,
+    /// The attestation type checked with `--sbom`, such as `cyclonedx`.
+    pub attestation: Option<String>,
+    /// The digest the tag in `requested` pointed to, when a tag was given. Text only.
+    #[serde(skip)]
+    pub tag_digest: Option<String>,
+}
+
+impl VerifyReport {
+    /// Human-readable rendering (the `--format text` output).
+    pub fn to_text(&self) -> String {
+        let mut out = format!("verified signature: {}\n", self.image);
+        if self.identity_is_regexp {
+            out.push_str(&format!(
+                "  signed by an identity that matches {}\n",
+                self.identity
+            ));
+        } else {
+            out.push_str(&format!("  signed by the identity {}\n", self.identity));
+        }
+        out.push_str(&format!("  issued by {}\n", self.issuer));
+        if let Some(kind) = &self.attestation {
+            out.push_str(&format!(
+                "verified attestation: {kind} SBOM, same identity and issuer\n"
+            ));
+        }
+        out.push_str(
+            "note: this proves who signed this image digest. It does not prove that the image \
+             is safe, or that the SBOM is complete.\n",
+        );
+        if let Some(digest) = &self.tag_digest {
+            out.push_str(&format!(
+                "note: {} is a tag. It pointed to {digest} when verify ran. A tag can move, so \
+                 pin the digest.\n",
+                self.requested
+            ));
+        }
+        if self.kind == crate::registry::ManifestKind::Index {
+            out.push_str(
+                "note: this checked the signature on the index. It did not check the images \
+                 that the index lists.\n",
+            );
+        }
+        out.trim_end().to_string()
+    }
+}
+
 /// The `lint --format json` report. Its fields are a v2 contract, like `PackReport`.
 #[derive(Debug, Clone, Serialize)]
 pub struct LintReport {
@@ -1238,6 +1302,66 @@ mod tests {
         assert_eq!(
             sorted_keys(&json["manifests"][0]),
             ["digest", "platform", "source"]
+        );
+    }
+
+    #[test]
+    fn verify_report_schema_is_stable() {
+        // `verify --format json` is a contract (v2.3): pin the key set, so an added, removed
+        // or renamed field is caught here. The text-only tag digest stays out of it.
+        let report = VerifyReport {
+            requested: "reg/app:1".into(),
+            image: "reg/app@sha256:aaa".into(),
+            kind: crate::registry::ManifestKind::Image,
+            identity: "^https://github\\.com/you/".into(),
+            identity_is_regexp: true,
+            issuer: "https://token.actions.githubusercontent.com".into(),
+            signature: true,
+            attestation: Some("cyclonedx".into()),
+            tag_digest: Some("sha256:aaa".into()),
+        };
+        let json = serde_json::to_value(&report).unwrap();
+        let mut keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "attestation",
+                "identity",
+                "identity_is_regexp",
+                "image",
+                "issuer",
+                "kind",
+                "requested",
+                "signature"
+            ]
+        );
+        assert_eq!(json["kind"], "image");
+        let index = VerifyReport {
+            kind: crate::registry::ManifestKind::Index,
+            ..report
+        };
+        assert_eq!(serde_json::to_value(&index).unwrap()["kind"], "index");
+    }
+
+    #[test]
+    fn verify_text_names_an_exact_identity() {
+        let report = VerifyReport {
+            requested: "reg/app@sha256:aaa".into(),
+            image: "reg/app@sha256:aaa".into(),
+            kind: crate::registry::ManifestKind::Image,
+            identity: "me@example.com".into(),
+            identity_is_regexp: false,
+            issuer: "https://accounts.google.com".into(),
+            signature: true,
+            attestation: None,
+            tag_digest: None,
+        };
+        assert_eq!(
+            report.to_text(),
+            "verified signature: reg/app@sha256:aaa\n  signed by the identity me@example.com\n  \
+             issued by https://accounts.google.com\nnote: this proves who signed this image \
+             digest. It does not prove that the image is safe, or that the SBOM is complete."
         );
     }
 

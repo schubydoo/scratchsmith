@@ -10,17 +10,19 @@ upgrade, and how we change it**.
 A breaking change to any of these requires a new **major** version. This page is the full list.
 [Architecture → Stability](docs/architecture.md#stability) has a short summary.
 
-- **CLI surface**: the names and meaning of `pack` / `lint` / `doctor` / `index` / `graph` /
-  `diff` / `unpack` flags and positionals, and the top-level `--completions` and `--verbose`.
+- **CLI surface**: the names and meaning of `pack` / `lint` / `doctor` / `index` / `verify` /
+  `graph` / `diff` / `unpack` flags and positionals, and the top-level `--completions` and
+  `--verbose`.
   The contract also covers their short aliases, their defaults, and whether they take a value
   or are repeatable. It covers the accepted **enum values** too (for example
   `--sbom-format cyclonedx-json`, `--scan-fail-on high`).
 - **`scratchsmith.toml`**: the config keys and their types.
-- **`--format json`**: the field names and types of the `pack`, `index`, `graph`, `diff`,
-  `unpack`, and `lint` reports (the schema CI gates consume). A field added in a minor joins
-  the contract when it ships, as `libc` did in the `pack`, `graph` and `lint` reports, and
+- **`--format json`**: the field names and types of the `pack`, `index`, `verify`, `graph`,
+  `diff`, `unpack`, and `lint` reports (the schema CI gates consume). A field added in a minor
+  joins the contract when it ships, as `libc` did in the `pack`, `graph` and `lint` reports, and
   `fortify_detectable` in the `lint` report. `libc` is `"glibc"`, `"musl"` or null, and a new
-  value would be an additive enum value.
+  value would be an additive enum value. The `verify` report's `kind` is `"image"` or
+  `"index"`, held to the same rule.
 - **Exit codes**: `0` on success. `2` on a usage error, which is any refusal of the command
   line. That is an argument-parse error from clap, or a refusal made after the parse. Examples
   are `--watch --format json`, `pack` with no binary, and a config value that conflicts with a
@@ -98,8 +100,9 @@ change:
   `a_profile_layers_over_the_base` and its siblings cover the `[profile.<name>]` tables, and `#[serde(deny_unknown_fields)]`
   rejects a renamed/removed key.
 - **`--format json`**: `json_report_schema_is_stable`, `index_report_schema_is_stable`,
-  `dep_graph_json_schema_is_stable`, `diff_report_schema_is_stable`,
-  `unpack_report_schema_is_stable`, and `lint_report_schema_is_stable` pin the exact key sets.
+  `verify_report_schema_is_stable`, `dep_graph_json_schema_is_stable`,
+  `diff_report_schema_is_stable`, `unpack_report_schema_is_stable`, and
+  `lint_report_schema_is_stable` pin the exact key sets.
 - **Exit codes**: the exit-code tests in `tests/cli.rs` pin `0` / `2` / `1`.
   `post_parse_usage_refusals_exit_2` covers each refusal made after the parse.
 - **Library API**: a non-blocking `cargo-semver-checks` CI job surfaces `pub`-API changes as a
