@@ -908,8 +908,8 @@ report, a non-root image, and no Dockerfile, it is equally handy. More:
 <td>✅</td>
 </tr>
 <tr>
-<td>Dynamic musl/Alpine binaries</td>
-<td>❌ rejected loudly (glibc comes first, and a musl backend is a future goal)</td>
+<td><strong>Dynamic musl/Alpine binaries</strong>: x86_64, by musl's own loader rules (no NSS and no glibc locales; <code>lint</code> cannot read fortify)</td>
+<td>✅</td>
 </tr>
 <tr>
 <td><strong>Daemonless OCI archive</strong>: <code>--oci-archive &lt;file&gt;</code> (no daemon, and skopeo/buildah/registry-ready)</td>

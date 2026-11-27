@@ -586,6 +586,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-musl-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The musl backend
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#stability" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -723,6 +734,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-musl-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The musl backend
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#stability" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -798,11 +820,47 @@
    <code>LD_LIBRARY_PATH</code>, so the result is deterministic.</li>
 <li><strong>Stage</strong>: copy the interpreter to its verbatim path (another path to the loader becomes a
    relative symlink to that copy), mirror the libraries, recreate versioned-soname symlinks,
-   regenerate <code>ld.so.cache</code>, and add the glibc NSS pieces.</li>
+   regenerate <code>ld.so.cache</code>, and add the glibc NSS pieces. A musl binary gets no cache and no
+   NSS (see <a href="#the-musl-backend">The musl backend</a>).</li>
 <li><strong>Assemble</strong>: build a non-root image with reproducible layers (sorted entries, zeroed
    mtime/uid/gid). The uncompressed <code>diff_id</code> and the gzip layer digest are computed
    separately, which avoids the classic unpullable-image bug.</li>
 </ol>
+<h2 id="the-musl-backend">The musl backend<a class="headerlink" href="#the-musl-backend" title="Permanent link">&para;</a></h2>
+<p>The binary's program interpreter (<code>PT_INTERP</code>) picks the rules. A loader named <code>ld-musl-*</code>
+selects musl's rules for the whole graph, and any other loader selects the glibc rules above,
+which do not change. musl's loader (1.2.5) differs from glibc's in these ways, and Scratchsmith
+copies each one:</p>
+<ol>
+<li><strong>No cache.</strong> musl has no <code>ld.so.cache</code> and no <code>ldconfig</code>, so <code>pack</code> writes neither and never
+   runs <code>ldconfig</code>. musl opens a library only at the path its search found. When that path is
+   a link into another directory, or passes through a directory link, the image gets a link
+   at that path to the staged file.</li>
+<li><strong>libc is the loader.</strong> A needed name of <code>lib</code> plus <code>c.</code>, <code>pthread.</code>, <code>rt.</code>, <code>m.</code>, <code>dl.</code>,
+   <code>util.</code> or <code>xnet.</code>, such as <code>libc.so</code>, <code>libc.musl-x86_64.so.1</code> or <code>libm.so</code>, is the loader
+   itself, found with no search. So is a name equal to the <code>PT_INTERP</code> string.</li>
+<li><strong>Search order.</strong> A name with no <code>/</code> matches an object already loaded under that name first.
+   Then come the search path of the object that needs it, of the object that needed that one,
+   and so on up to the program, then the system path.</li>
+<li><strong>RPATH and RUNPATH are one value.</strong> RUNPATH wins when both are set, and either one is
+   inherited by every dependency below it.</li>
+<li><strong>Only <code>$ORIGIN</code> expands.</strong> A search path that holds any other <code>$</code> token, such as <code>$LIB</code>,
+   is dropped whole for that object, and <code>pack</code> prints a note.</li>
+<li><strong>The system path</strong> comes from <code>&lt;prefix&gt;/etc/ld-musl-&lt;arch&gt;.path</code> in the host root, split on
+   <code>:</code> and on newlines. The prefix is the <code>PT_INTERP</code> path less its last two parts. With no such
+   file, it is <code>/lib:/usr/local/lib:/usr/lib</code>. When a library came from a directory outside
+   those defaults, the image gets its own path file that lists those directories and the
+   defaults.</li>
+<li><strong>"Already loaded" goes by file name.</strong> musl never reads <code>DT_SONAME</code>. A name matches an
+   object found under the same file name, or the same file by device and inode.</li>
+<li><strong>A glibc libc is not loaded.</strong> musl takes a library that defines <code>__libc_start_main</code> and
+   <code>stdin</code> for its own libc. Scratchsmith fails the pack on a glibc libc in a musl graph, and
+   maps a copy of musl's libc to the loader.</li>
+</ol>
+<p>musl has no NSS: it reads <code>/etc/passwd</code>, <code>/etc/group</code>, <code>/etc/hosts</code> and <code>/etc/resolv.conf</code>
+directly. A musl image always gets the minimal <code>/etc/passwd</code> and <code>/etc/group</code>, and no
+<code>nsswitch.conf</code> or NSS module. One image has one libc, so an <code>--add-binary</code> program of the other
+libc fails the pack.</p>
 <h2 id="stability">Stability<a class="headerlink" href="#stability" title="Permanent link">&para;</a></h2>
 <p>Scratchsmith follows <a href="https://semver.org/">Semantic Versioning</a>. As of <strong>1.0</strong>, these surfaces are a
 stable contract. A breaking change to any of them requires a new major version:</p>

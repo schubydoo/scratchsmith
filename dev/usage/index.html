@@ -553,6 +553,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#pack-a-musl-binary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pack a musl binary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#inspect-the-dependency-graph" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1078,6 +1089,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#pack-a-musl-binary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pack a musl binary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#inspect-the-dependency-graph" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1320,6 +1342,11 @@ flag. The report prints in full before a failing gate exits <code>1</code>. The 
 </table>
 <p><code>canary</code> and <code>fortify</code> mean the binary imports the guard or a <code>*_chk</code> wrapper, so a static binary
 reads <code>false</code>.</p>
+<p>The report also carries <code>libc</code> (<code>"glibc"</code>, <code>"musl"</code>, or null for a binary with no loader) and
+<code>fortify_detectable</code>. musl's <code>fortify-headers</code> check in inline code and leave no <code>*_chk</code> symbol,
+so for a musl binary the text report shows <code>Fortify: unknown (musl's fortify-headers leave no
+symbol)</code>, <code>fortify</code> is <code>false</code> and <code>fortify_detectable</code> is <code>false</code>. <code>--fail-on no-fortify</code> cannot
+be checked there, so it exits <code>2</code> for a musl binary. The other gates work for musl as for glibc.</p>
 <p><code>--smoke</code> runs the image once and fails the pack only when the binary could not start: a
 missing library or loader, or an entrypoint the runtime could not exec. An app that starts and
 exits with an error passes, unless the code is 126 or 127, which shells use for a command
@@ -1345,6 +1372,7 @@ without unpacking the image. An ELF that carries no <code>PT_INTERP</code> repor
 case for a static binary.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--format<span class="w"> </span>json<span class="w"> </span>./app<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-e<span class="w"> </span><span class="s1">'.interpreter == "/lib64/ld-linux-x86-64.so.2"'</span>
 </code></pre></div>
+<p><code>libc</code> names the C library behind that loader: <code>"glibc"</code>, <code>"musl"</code>, or null with no loader.</p>
 <p><code>--format json</code> also carries <code>timings</code>: the time that each phase of the pack took, in
 milliseconds. Use it to find the slow part of a pack in CI, or to turn the phases into the spans
 of a build trace.</p>
@@ -1634,7 +1662,8 @@ address needs no NSS module. A program that reaches a host by name over TLS also
 certificates, which you add separately with <code>--ca-certs</code>. <code>--nss none</code> also skips the generated
 <code>/etc/nsswitch.conf</code>, and <code>--nss files</code> writes one that lists local files alone. A mode without
 <code>files</code> also drops <code>/etc/passwd</code> and <code>/etc/group</code>. Because glibc reads them through the <code>files</code>
-module, user and group lookups do not work there.</p>
+module, user and group lookups do not work there. musl has no NSS, so <code>--nss</code> is refused for a
+musl binary (see <a href="#pack-a-musl-binary">Pack a musl binary</a>).</p>
 <h2 id="add-a-writable-tmp">Add a writable /tmp<a class="headerlink" href="#add-a-writable-tmp" title="Permanent link">&para;</a></h2>
 <p>A scratch image has no <code>/tmp</code>, and many programs exit at startup without one. <code>--tmp</code> adds an
 empty <code>/tmp</code>, mode <code>1777</code> and owned by uid 0, the same as on a Linux host. If a library staged
@@ -1750,12 +1779,35 @@ locale costs about 3 MB, and most of that is the collation table <code>LC_COLLAT
 locale and set none of them, the pack warns and the program runs in the C locale. If a selector
 names a locale the pack did not stage, the pack warns as well. glibc falls back to the C locale
 for that category. The flag repeats, and the <code>locale</code> key in <code>scratchsmith.toml</code> takes the same
-list. Locale data counts toward <code>--max-size</code>.</p>
+list. Locale data counts toward <code>--max-size</code>. musl does not read these locales, so <code>--locale</code> is
+refused for a musl binary.</p>
+<h2 id="pack-a-musl-binary">Pack a musl binary<a class="headerlink" href="#pack-a-musl-binary" title="Permanent link">&para;</a></h2>
+<p>A dynamic musl program, such as one built on Alpine or with <code>musl-gcc</code>, packs the same way as a
+glibc one. Scratchsmith sees musl in the binary's loader (<code>/lib/ld-musl-x86_64.so.1</code>) and
+resolves the libraries by musl's rules, which
+<a href="../architecture/#the-musl-backend">Architecture</a> lists. Only x86_64 is supported for now.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app<span class="w">                      </span><span class="c1"># on Alpine, or with musl's libraries in the host root</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--format<span class="w"> </span>json<span class="w"> </span>./app<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-e<span class="w"> </span><span class="s1">'.libc == "musl"'</span>
+</code></pre></div>
+<p>What changes for a musl binary:</p>
+<ul>
+<li><strong>No loader cache.</strong> musl reads no <code>ld.so.cache</code>, so <code>pack</code> writes none and does not need
+  <code>ldconfig</code>. An Alpine host has no glibc <code>ldconfig</code>, and that is fine. When a library comes from
+  a directory outside musl's defaults (<code>/lib</code>, <code>/usr/local/lib</code>, <code>/usr/lib</code>), the image gets an
+  <code>/etc/ld-musl-x86_64.path</code> that lists it.</li>
+<li><strong>No NSS.</strong> musl reads <code>/etc/passwd</code> and <code>/etc/group</code> itself, so the image always gets the
+  minimal pair and no NSS module. <code>--nss</code>, or an <code>nss</code> key in <code>scratchsmith.toml</code>, exits <code>2</code>.</li>
+<li><strong>No glibc locales.</strong> musl has a built-in C.UTF-8 and does not read compiled glibc locales, so
+  <code>--locale</code>, or a <code>locale</code> key, exits <code>2</code>.</li>
+<li><strong>One libc per image.</strong> An <code>--add-binary</code> program of the other libc fails the pack.</li>
+<li><strong><code>--packages</code>.</strong> An Alpine host keeps an apk database, which <code>--packages</code> does not read yet.
+  The report says null there, as on any host with no dpkg or rpm database.</li>
+</ul>
 <h2 id="inspect-the-dependency-graph">Inspect the dependency graph<a class="headerlink" href="#inspect-the-dependency-graph" title="Permanent link">&para;</a></h2>
 <p>To see the libraries <code>pack</code> resolves for the binary, without building an image, run <code>graph</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>scratchsmith<span class="w"> </span>graph<span class="w"> </span>./app<span class="w">                            </span><span class="c1"># ASCII tree of the resolved deps</span>
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>scratchsmith<span class="w"> </span>graph<span class="w"> </span>--format<span class="w"> </span>json<span class="w"> </span>./app<span class="w">              </span><span class="c1"># machine-readable adjacency list</span>
-<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>scratchsmith<span class="w"> </span>graph<span class="w"> </span>--include<span class="w"> </span>libplugin.so.1<span class="w"> </span>./app<span class="w">   </span><span class="c1"># add a dlopen'd library, like pack</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>scratchsmith<span class="w"> </span>graph<span class="w"> </span>./app<span class="w">                            </span><span class="c1"># ASCII tree of the resolved deps</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>scratchsmith<span class="w"> </span>graph<span class="w"> </span>--format<span class="w"> </span>json<span class="w"> </span>./app<span class="w">              </span><span class="c1"># machine-readable adjacency list</span>
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>scratchsmith<span class="w"> </span>graph<span class="w"> </span>--include<span class="w"> </span>libplugin.so.1<span class="w"> </span>./app<span class="w">   </span><span class="c1"># add a dlopen'd library, like pack</span>
 </code></pre></div>
 <p>The tree shows each library in full the first time. A later repeat is marked <code>(*)</code>, so
 a shared dependency or a cycle does not print twice. A dependency that does not resolve is
@@ -1766,14 +1818,14 @@ has a loader (<code>PT_INTERP</code>), the last line names it.</p>
 program and its libraries, which <code>pack</code> also stages. The pack report lists the NSS modules
 under its payload sizes (<code>size.entries</code> in <code>--format json</code>).</p>
 <p><code>graph --format json</code> prints one object: <code>root</code> (the binary's real path), <code>interpreter</code> (the
-loader, or null), <code>nodes</code> and <code>missing</code> (every soname that did not resolve). Each node has <code>id</code>
+loader, or null), <code>libc</code> (<code>"glibc"</code>, <code>"musl"</code>, or null with no loader), <code>nodes</code> and <code>missing</code> (every soname that did not resolve). Each node has <code>id</code>
 (its real path), <code>name</code> (the soname the loader searched for, or the binary's file name), <code>needs</code>
 (the ids of the nodes it needs) and <code>missing</code> (its own sonames that did not resolve).</p>
 <h2 id="see-each-decision-with-verbose">See each decision with <code>--verbose</code><a class="headerlink" href="#see-each-decision-with-verbose" title="Permanent link">&para;</a></h2>
 <p>To see why a library was picked, or where a file was staged, add <code>--verbose</code>. It works before
 or after the subcommand:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>scratchsmith<span class="w"> </span>--verbose<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>-o<span class="w"> </span>rootfs<span class="w"> </span>./app
-<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>scratchsmith<span class="w"> </span>graph<span class="w"> </span>--verbose<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>scratchsmith<span class="w"> </span>--verbose<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>-o<span class="w"> </span>rootfs<span class="w"> </span>./app
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>scratchsmith<span class="w"> </span>graph<span class="w"> </span>--verbose<span class="w"> </span>./app
 </code></pre></div>
 <p><code>pack</code> and <code>graph</code> then print one line on standard error for each decision, each starting
 <code>verbose:</code>. The lines say which directories each object searches, the file each <code>DT_NEEDED</code>
@@ -1785,8 +1837,8 @@ they are without the flag, so <code>--format json</code> still prints only JSON.
 <h2 id="gate-on-libraries">Gate on libraries<a class="headerlink" href="#gate-on-libraries" title="Permanent link">&para;</a></h2>
 <p>To enforce a library policy in CI, fail the pack on a forbidden library or a missing required
 one:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--deny<span class="w"> </span>libssl.so.3<span class="w"> </span>./app<span class="w">        </span><span class="c1"># fail if OpenSSL is staged</span>
-<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--require<span class="w"> </span>libseccomp.so.2<span class="w"> </span>./app<span class="w">  </span><span class="c1"># fail if seccomp is missing</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--deny<span class="w"> </span>libssl.so.3<span class="w"> </span>./app<span class="w">        </span><span class="c1"># fail if OpenSSL is staged</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--require<span class="w"> </span>libseccomp.so.2<span class="w"> </span>./app<span class="w">  </span><span class="c1"># fail if seccomp is missing</span>
 </code></pre></div>
 <p>Both flags repeat and match exactly, by soname or staged file name. The resolved libraries,
 the loader, and the NSS modules are all in scope. Read the library names from
@@ -1794,10 +1846,10 @@ the loader, and the NSS modules are all in scope. Read the library names from
 The same keys work in <code>scratchsmith.toml</code> as <code>deny</code> and <code>require</code>.</p>
 <h2 id="diff-two-builds">Diff two builds<a class="headerlink" href="#diff-two-builds" title="Permanent link">&para;</a></h2>
 <p>To catch image drift, stage two builds and compare their rootfs directories:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>old<span class="w"> </span>./app-v1
-<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>new<span class="w"> </span>./app-v2
-<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>scratchsmith<span class="w"> </span>diff<span class="w"> </span>old<span class="w"> </span>new<span class="w">              </span><span class="c1"># files added, removed, changed, mode changes, size delta</span>
-<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>scratchsmith<span class="w"> </span>diff<span class="w"> </span>--exit-code<span class="w"> </span>old<span class="w"> </span>new<span class="w">  </span><span class="c1"># exit non-zero on any difference (a CI gate)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>old<span class="w"> </span>./app-v1
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>new<span class="w"> </span>./app-v2
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>scratchsmith<span class="w"> </span>diff<span class="w"> </span>old<span class="w"> </span>new<span class="w">              </span><span class="c1"># files added, removed, changed, mode changes, size delta</span>
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>scratchsmith<span class="w"> </span>diff<span class="w"> </span>--exit-code<span class="w"> </span>old<span class="w"> </span>new<span class="w">  </span><span class="c1"># exit non-zero on any difference (a CI gate)</span>
 </code></pre></div>
 <p><code>diff</code> marks an added file with <code>+</code>, a removed file with <code>-</code>, and a changed file with <code>~</code>.
 It also compares permission bits: a regular file or directory in both trees whose mode differs
@@ -1824,7 +1876,7 @@ empty tree and prints a deprecation warning. 3.0 refuses it. To compare two arch
 each one first.</p>
 <h2 id="unpack-an-image">Unpack an image<a class="headerlink" href="#unpack-an-image" title="Permanent link">&para;</a></h2>
 <p>To audit an image you did not build, extract its OCI archive to a directory:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>scratchsmith<span class="w"> </span>unpack<span class="w"> </span>app.oci.tar<span class="w"> </span>./rootfs<span class="w">   </span><span class="c1"># apply the layers into ./rootfs</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>scratchsmith<span class="w"> </span>unpack<span class="w"> </span>app.oci.tar<span class="w"> </span>./rootfs<span class="w">   </span><span class="c1"># apply the layers into ./rootfs</span>
 </code></pre></div>
 <p><code>unpack</code> reads an OCI-layout archive (what <code>pack --oci-archive</code> writes, or a skopeo/buildah
 export), applies each layer in order, and honors whiteouts. Combine it with <code>diff</code> to
@@ -1860,15 +1912,15 @@ can remove. A finished tree keeps the image's modes, so it may need <code>chmod 
 To publish a multi-arch image, run <code>pack --push</code> on each architecture (a CI matrix). Then combine
 the per-arch images into one <strong>multi-arch OCI image index</strong> with <code>index</code>. That is the daemonless
 equivalent of <code>docker manifest create</code>, with no Docker or buildx:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># on the amd64 runner</span>
-<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0-amd64<span class="w"> </span>./app
-<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="c1"># on the arm64 runner</span>
-<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0-arm64<span class="w"> </span>./app
-<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>
-<a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a><span class="c1"># then, once both are pushed, assemble the index that consumers pull by one tag</span>
-<a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a>scratchsmith<span class="w"> </span>index<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-24-8" name="__codelineno-24-8" href="#__codelineno-24-8"></a><span class="w">  </span>ghcr.io/you/app:1.0-amd64<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-24-9" name="__codelineno-24-9" href="#__codelineno-24-9"></a><span class="w">  </span>ghcr.io/you/app:1.0-arm64
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="c1"># on the amd64 runner</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0-amd64<span class="w"> </span>./app
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="c1"># on the arm64 runner</span>
+<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0-arm64<span class="w"> </span>./app
+<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>
+<a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a><span class="c1"># then, once both are pushed, assemble the index that consumers pull by one tag</span>
+<a id="__codelineno-25-7" name="__codelineno-25-7" href="#__codelineno-25-7"></a>scratchsmith<span class="w"> </span>index<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-8" name="__codelineno-25-8" href="#__codelineno-25-8"></a><span class="w">  </span>ghcr.io/you/app:1.0-amd64<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-9" name="__codelineno-25-9" href="#__codelineno-25-9"></a><span class="w">  </span>ghcr.io/you/app:1.0-arm64
 </code></pre></div>
 <p>Each source's platform is read from its own image configuration. Nothing is rebuilt, and no
 cross-arch resolution happens. The sources must already be pushed, and must live in the
@@ -1888,9 +1940,9 @@ index by digest.</p>
 </ul>
 <h2 id="image-metadata-and-entrypoint">Image metadata and entrypoint<a class="headerlink" href="#image-metadata-and-entrypoint" title="Permanent link">&para;</a></h2>
 <p>Set what the image runs: entrypoint, arguments, environment, working directory, and user:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>/opt/app/bin/app<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="w">  </span>--cmd<span class="w"> </span>serve<span class="w"> </span>--env<span class="w"> </span><span class="nv">LANG</span><span class="o">=</span>C.UTF-8<span class="w"> </span>--workdir<span class="w"> </span>/data<span class="w"> </span>--user<span class="w"> </span><span class="m">65532</span>:65532<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="w">  </span>--label<span class="w"> </span><span class="nv">role</span><span class="o">=</span>api<span class="w"> </span>--healthcheck<span class="w"> </span>/opt/app/bin/app<span class="w"> </span>--healthcheck<span class="w"> </span>--health
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>/opt/app/bin/app<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="w">  </span>--cmd<span class="w"> </span>serve<span class="w"> </span>--env<span class="w"> </span><span class="nv">LANG</span><span class="o">=</span>C.UTF-8<span class="w"> </span>--workdir<span class="w"> </span>/data<span class="w"> </span>--user<span class="w"> </span><span class="m">65532</span>:65532<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="w">  </span>--label<span class="w"> </span><span class="nv">role</span><span class="o">=</span>api<span class="w"> </span>--healthcheck<span class="w"> </span>/opt/app/bin/app<span class="w"> </span>--healthcheck<span class="w"> </span>--health
 </code></pre></div>
 <p>The packed binary keeps its host path in the image (its real path, after symlinks), and that path
 is the default entrypoint. So an <code>--entrypoint</code> or <code>--healthcheck</code> that runs the binary must name
@@ -1904,7 +1956,7 @@ To set an empty value, end the entry with <code>=</code>, as in <code>--label bu
 <h2 id="pack-again-on-every-change">Pack again on every change<a class="headerlink" href="#pack-again-on-every-change" title="Permanent link">&para;</a></h2>
 <p>While you develop the program that you pack, <code>--watch</code> packs it again after each build. It
 packs one time, and then packs again each time the binary changes:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--watch<span class="w"> </span>./target/release/app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--watch<span class="w"> </span>./target/release/app
 </code></pre></div>
 <p>Scratchsmith looks at the binary two times each second. After a change, it waits until the file
 is the same on two looks in a row. That keeps most half-written binaries out. If the linker
@@ -1959,20 +2011,20 @@ upx, tini, the docker CLI) on a Wolfi base. With it, <code>pack</code> itself ru
 That image has no dpkg and no rpm database, so <code>--packages</code> has no data there. The <code>packages</code>
 field is <code>null</code>. An <code>image</code> output that you set fails. If <code>--sbom</code> or <code>--scan</code> is on, a <code>sbom</code>
 output that you set fails too. The default stays quiet.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># Daemonless — no socket needed; write an OCI archive or push straight to a registry.</span>
-<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="w">  </span>pack<span class="w"> </span>--oci-archive<span class="w"> </span>app.oci.tar<span class="w"> </span>./app
-<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="w">  </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.docker:/docker:ro"</span><span class="w"> </span>-e<span class="w"> </span><span class="nv">DOCKER_CONFIG</span><span class="o">=</span>/docker<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a><span class="w">  </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1"># Daemonless — no socket needed; write an OCI archive or push straight to a registry.</span>
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a><span class="w">  </span>pack<span class="w"> </span>--oci-archive<span class="w"> </span>app.oci.tar<span class="w"> </span>./app
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a><span class="w">  </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.docker:/docker:ro"</span><span class="w"> </span>-e<span class="w"> </span><span class="nv">DOCKER_CONFIG</span><span class="o">=</span>/docker<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a><span class="w">  </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span>./app
 </code></pre></div>
 <p><code>--push</code> reads the registry login from the Docker config, so mount one that holds the
 credentials themselves. A credential helper on the host is not available inside the container.</p>
 <p>Prefer the daemonless sinks (<code>--push</code> / <code>--oci-archive</code>) in CI. The <strong>default <code>docker load</code> sink</strong>
 needs a host engine, so mount its socket. That socket is <strong>root-equivalent on the host</strong>, so use
 it only where you trust the workflow:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/var/run/docker.sock:/var/run/docker.sock<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="w">  </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span>pack<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/var/run/docker.sock:/var/run/docker.sock<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="w">  </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span>pack<span class="w"> </span>./app
 </code></pre></div>
 <p>Tags: <code>:toolbox</code> (latest), <code>:X.Y.Z-toolbox</code>, <code>:X.Y-toolbox</code>. Verify its signature exactly like the
 scratch image. See <a href="../verifying/">Verifying releases</a>.</p>

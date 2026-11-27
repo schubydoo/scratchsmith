@@ -859,12 +859,12 @@ build. It is purpose-built for the hard case and useful for the easy one.</p>
 <p><sub><em>Snapshot as of 2026-08. The other tools evolve, so read their own docs for current behavior. Only Scratchsmith's row is kept current here.</em></sub></p>
 <h2 id="limitations">Limitations<a class="headerlink" href="#limitations" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>glibc / host-arch only (for now).</strong> Dynamic musl/Alpine binaries are detected by their
-  interpreter and <strong>rejected with a clear error</strong> before anything is staged. You never get a
-  silently broken image. This is a scope choice, not a permanent boundary: musl uses a
-  different loader model and has no NSS, so it needs its own resolver backend (a possible
-  future addition). (A <em>static</em> musl binary is a single self-contained file and packs fine
-  today.) No cross-arch resolution yet.</li>
+<li><strong>glibc and musl, host arch only (for now).</strong> A dynamic glibc binary resolves by <code>ld.so</code>'s
+  rules. A dynamic musl binary resolves by musl's own loader rules, on x86_64 only. A musl
+  binary for another arch is <strong>rejected with a clear error</strong> before anything is staged, so you
+  never get a silently broken image. musl has no NSS and reads no glibc locales, so <code>--nss</code> and
+  <code>--locale</code> are refused for it. (A <em>static</em> binary of either libc is a single self-contained
+  file and packs fine.) No cross-arch resolution yet.</li>
 <li><strong><code>dlopen</code> is best-effort.</strong> Libraries loaded at runtime via <code>dlopen</code> are invisible to
   static analysis. Scratchsmith <em>warns</em> about a <code>dlopen</code> reference in the binary's dynamic
   symbol table, and it lets you force-stage those libraries with <code>--include &lt;lib&gt;</code>. It is not
