@@ -303,6 +303,59 @@ jobs:
             echo "::error::musl build has a PT_INTERP segment (a dynamic loader) — not statically linked. A dependency likely pulled a dynamic TLS/crypto backend; keep TLS on rustls + aws-lc-rs."
             exit 1
           fi
+      # The alpine job packs with this exact binary, on the libc it is built for.
+      - name: Upload the static binary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scratchsmith-musl
+          path: target/x86_64-unknown-linux-musl/debug/scratchsmith
+          if-no-files-found: error
+          retention-days: 1
+
+  alpine:
+    # The real musl use: a program built on Alpine, with Alpine's libraries, which only an
+    # Alpine root has (plan 025, slice 4). Inside alpine:3.21 the static scratchsmith checks
+    # its musl graph of every dynamic program against musl's own `--list`, then packs
+    # /usr/bin/curl. On the runner, the packed image must load and run with no NSS and no
+    # ld.so.cache.
+    name: pack on Alpine (musl)
+    needs: musl
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # new job; the oracle and one pack take well under a minute
+    env:
+      # renovate: datasource=docker depName=alpine
+      ALPINE: alpine:3.21@sha256:bc21487101ae47172509130ee1092cc273a831968d64b617776d1f69c81e42ab
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: scratchsmith-musl
+          path: ${{ runner.temp }}/bin
+      - name: Check the musl graph and pack curl in Alpine
+        run: |
+          set -euo pipefail
+          chmod +x "$RUNNER_TEMP/bin/scratchsmith"
+          mkdir -p "$RUNNER_TEMP/out"
+          docker run --rm \
+            -v "$RUNNER_TEMP/bin:/opt/bin:ro" \
+            -v "$GITHUB_WORKSPACE/scripts:/opt/scripts:ro" \
+            -v "$RUNNER_TEMP/out:/out" \
+            "$ALPINE" /opt/scripts/alpine-musl-check.sh /opt/bin/scratchsmith /out
+      - name: Load and run the packed curl
+        run: |
+          set -euo pipefail
+          loaded=$(docker load -i "$RUNNER_TEMP/out/curl.tar")
+          echo "$loaded"
+          image=$(sed -n 's/^Loaded image: //p' <<<"$loaded" | tail -n 1)
+          # Run by ID: a daemon on the containerd image store can list a name it loaded from
+          # an OCI archive and still not resolve it for `run`.
+          id=$(docker images -q "$image" | head -n 1)
+          [ -n "$id" ]
+          out=$(docker run --rm "$id" --version)
+          echo "$out"
+          grep -q '^curl ' <<<"$out"
 
   fuzz-check:
     # The fuzz harness lives in a detached workspace (fuzz/), so lint/msrv/test above never
@@ -487,7 +540,7 @@ jobs:
     # `semver` is intentionally excluded — it is informational (see its comment above).
     name: ci required checks passed
     if: always()
-    needs: [lint, msrv, test, coverage, supply-chain, completions, musl, fuzz-check, real-tools]
+    needs: [lint, msrv, test, coverage, supply-chain, completions, musl, alpine, fuzz-check, real-tools]
     runs-on: ubuntu-latest
     timeout-minutes: 10 # only checks the needs results; 10-minute floor, as for the other jobs
     steps:
