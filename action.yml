@@ -61,6 +61,12 @@ inputs:
     description: Add a minimal init (tini) as pid 1 wrapping the entrypoint.
     required: false
     default: "false"
+  tmp:
+    description: >-
+      Add an empty, writable `/tmp` to the image (mode `1777`, owned by uid 0), so the non-root
+      user can write there with no `--tmpfs` mount. Needs scratchsmith v2.1.0 or later.
+    required: false
+    default: "false"
   add-file:
     description: >-
       Host files to copy into the image, one `SRC:DST` per line. A bare absolute `SRC` keeps its
@@ -70,6 +76,16 @@ inputs:
       to a directory no longer fails. Under `skip-unsafe`, an entry the pack cannot honor stages
       nothing and warns. A taken `DST` still fails under every mode. The file lands owned by
       uid 0 at mode `0644`, or `0755` for an executable source, so do not add a secret this way.
+    required: false
+    default: ""
+  add-binary:
+    description: >-
+      Host ELF programs to copy into the image with the shared libraries they need, one
+      `SRC:DST` per line. A bare absolute `SRC` keeps its own path. Each program's libraries
+      resolve by the same `ld.so` rules as the packed binary, and a library both need is staged
+      once. An ELF for another architecture or loader fails the pack, and so does one that uses
+      `$ORIGIN` with a `DST` outside its real directory. A path may hold spaces, which the `args`
+      input cannot pass. Needs scratchsmith v2.1.0 or later.
     required: false
     default: ""
   locale:
@@ -272,7 +288,9 @@ runs:
         IN_CA_CERTS: ${{ inputs.ca-certs }}
         IN_TZ: ${{ inputs.tz }}
         IN_INIT: ${{ inputs.init }}
+        IN_TMP: ${{ inputs.tmp }}
         IN_ADD_FILE: ${{ inputs.add-file }}
+        IN_ADD_BINARY: ${{ inputs.add-binary }}
         IN_LOCALE: ${{ inputs.locale }}
         IN_SYMLINKS: ${{ inputs.symlinks }}
         IN_INCLUDE: ${{ inputs.include }}
@@ -331,6 +349,7 @@ runs:
         [ "$IN_CA_CERTS" = "true" ] && args+=("--ca-certs")
         [ "$IN_TZ" = "true" ] && args+=("--tz")
         [ "$IN_INIT" = "true" ] && args+=("--init")
+        [ "$IN_TMP" = "true" ] && args+=("--tmp")
         [ "$IN_UPX" = "true" ] && args+=("--upx")
         [ -n "$IN_ENTRYPOINT" ] && args+=("--entrypoint" "$IN_ENTRYPOINT")
         [ -n "$IN_WORKDIR" ] && args+=("--workdir" "$IN_WORKDIR")
@@ -356,6 +375,10 @@ runs:
         while IFS= read -r f; do
           [ -n "$f" ] && args+=("--add-file" "$f")
         done <<< "$IN_ADD_FILE"
+        # The same SRC[:DST] shape as add-file, one program per line.
+        while IFS= read -r b; do
+          [ -n "$b" ] && args+=("--add-binary" "$b")
+        done <<< "$IN_ADD_BINARY"
         while IFS= read -r loc; do
           [ -n "$loc" ] && args+=("--locale" "$loc")
         done <<< "$IN_LOCALE"
