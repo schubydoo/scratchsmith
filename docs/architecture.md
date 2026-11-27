@@ -88,8 +88,8 @@ one:
 
 musl has no NSS: it reads `/etc/passwd`, `/etc/group`, `/etc/hosts` and `/etc/resolv.conf`
 directly. A musl image always gets the minimal `/etc/passwd` and `/etc/group`, and no
-`nsswitch.conf` or NSS module. One image has one libc, so an `--add-binary` program of the other
-libc fails the pack.
+`nsswitch.conf` or NSS module. One image has one libc, so an `--add-binary` program or library of
+the other libc fails the pack.
 
 ## Stability
 

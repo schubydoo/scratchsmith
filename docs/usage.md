@@ -455,8 +455,9 @@ musl, its search path file and links), `--deny` and `--require`, `--strip`, the 
 whatever `--symlinks` says, so a symlinked `SRC` brings its target's content. One image has one
 loader, so the pack fails when the added ELF is built for another architecture or names another
 program interpreter than the packed binary, and when the added program uses the other libc. A
-static ELF, or a shared library, names none and is accepted. A file that is not an ELF fails
-too: add it with `--add-file`.
+static ELF, or a shared library, names no interpreter, so that check passes. A shared library
+that loads the other libc still fails the pack. A file that is not an ELF fails too: add it with
+`--add-file`.
 
 ## Keep a symlink as a symlink
 
