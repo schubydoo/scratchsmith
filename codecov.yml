@@ -106,6 +106,23 @@ component_management:
       name: unpack (OCI archive extraction)
       paths:
         - src/unpack.rs
+    - component_id: packages
+      name: packages (dpkg, rpm ownership)
+      paths:
+        - src/packages.rs
+        - src/rpm.rs
+    - component_id: watch
+      name: watch (pack --watch)
+      paths:
+        - src/watch.rs
+    - component_id: verbose
+      name: verbose (--verbose lines)
+      paths:
+        - src/verbose.rs
+    - component_id: test_support
+      name: test_support (test skips, CI strict-skip gate)
+      paths:
+        - src/test_support.rs
     # Crate root: `pub mod` re-exports only, so this renders near-empty (no coverable
     # lines) — listed for a complete module map, not for a coverage signal.
     - component_id: lib

@@ -5,7 +5,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install.sh | bash
 #
 # Env overrides:
-#   VERSION   release tag to install (default: latest), e.g. VERSION=v1.0.0
+#   VERSION   release tag to install (default: latest), e.g. VERSION=v1.0.0 or VERSION=1.0.0
 #   BIN_DIR   install directory (default: /usr/local/bin as root, else ~/.local/bin)
 #   INSECURE_ALLOW_MISSING_SIGNATURE=1  install even if the cosign signature bundle cannot
 #             be fetched (SHA-256 only; a failed signature check still aborts)
@@ -129,6 +129,7 @@ if [ -z "$tag" ]; then
   tag="$(sed -nE '/"tag_name"/{s/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/p;q;}' <<<"$latest")"
   [ -n "$tag" ] || die "could not resolve the latest release tag; set VERSION=vX.Y.Z"
 fi
+tag="v${tag#v}" # accept VERSION=X.Y.Z too; release tags and tarball names carry the v
 base="https://github.com/${REPO}/releases/download/${tag}"
 tarball="scratchsmith-${tag}-linux-${arch}.tar.gz"
 

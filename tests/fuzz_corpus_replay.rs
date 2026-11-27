@@ -76,3 +76,18 @@ fn replay_dpkg_output() {
         let _ = scratchsmith::packages::parse_dpkg_output(&String::from_utf8_lossy(&b));
     }
 }
+
+#[test]
+#[ignore = "coverage audit; needs a grown fuzz/corpus"]
+fn replay_glibc_versions() {
+    for b in corpus("glibc_versions") {
+        if let Ok(versions) = scratchsmith::resolver::symbol_versions(&b) {
+            for (_, version) in &versions.needed {
+                let _ = scratchsmith::resolver::glibc_release(version);
+            }
+            for version in &versions.defined {
+                let _ = scratchsmith::resolver::glibc_release(version);
+            }
+        }
+    }
+}
