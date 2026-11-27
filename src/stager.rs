@@ -2,7 +2,7 @@
 //! at the paths the runtime expects, recreate soname symlinks, and regenerate the
 //! loader cache. Consumes the [`Resolution`] produced by [`crate::resolver`].
 
-use crate::resolver::{Resolution, ResolvedLib};
+use crate::resolver::{MuslSearch, Resolution, ResolvedLib, MUSL_DEFAULT_DIRS};
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -690,7 +690,8 @@ nonroot:x:65532:
 nobody:x:65534:
 ";
 
-/// Stage `binary` and its resolved dependencies under `dest`, then build the cache.
+/// Stage `binary` and its resolved dependencies under `dest`, then build the loader's cache, or
+/// for musl its search path file.
 pub fn stage(
     binary: &Path,
     resolution: &Resolution,
@@ -698,7 +699,7 @@ pub fn stage(
     symlinks: SymlinkMode,
 ) -> Result<StagedTree> {
     let tree = stage_files(binary, resolution, dest, symlinks)?;
-    generate_ld_cache(dest, resolution)?;
+    configure_loader(dest, resolution)?;
     Ok(tree)
 }
 
@@ -715,7 +716,7 @@ pub fn stage_with_includes(
 ) -> Result<(StagedTree, IncludeReport)> {
     let tree = stage_files(binary, resolution, dest, symlinks)?;
     let includes = stage_default_includes(resolution, dest, nss)?;
-    generate_ld_cache(dest, resolution)?;
+    configure_loader(dest, resolution)?;
     Ok((tree, includes))
 }
 
@@ -730,6 +731,13 @@ pub fn stage_default_includes(
     nss: &NssSelection,
 ) -> Result<IncludeReport> {
     let mut report = IncludeReport::default();
+
+    // musl has no NSS and reads passwd and group itself, so a musl image gets the two files
+    // and nothing else here, whatever `nss` selects.
+    if resolution.musl.is_some() {
+        write_user_db(dest, &mut report)?;
+        return Ok(report);
+    }
 
     if let Some(body) = nss.nsswitch() {
         write_into(dest, Path::new("/etc/nsswitch.conf"), body.as_bytes())?;
@@ -767,17 +775,23 @@ pub fn stage_default_includes(
     // a lie — an image with /etc/passwd whose getpwuid() still returns null. Stage them
     // only when `files` is staged.
     if nss.files {
-        for (path, body) in [
-            ("/etc/passwd", MINIMAL_PASSWD),
-            ("/etc/group", MINIMAL_GROUP),
-        ] {
-            write_into(dest, Path::new(path), body.as_bytes())?;
-            crate::verbose::line(|| format!("wrote {path}"));
-            report.staged.push(PathBuf::from(path));
-        }
+        write_user_db(dest, &mut report)?;
     }
 
     Ok(report)
+}
+
+// The minimal /etc/passwd and /etc/group.
+fn write_user_db(dest: &Path, report: &mut IncludeReport) -> Result<()> {
+    for (path, body) in [
+        ("/etc/passwd", MINIMAL_PASSWD),
+        ("/etc/group", MINIMAL_GROUP),
+    ] {
+        write_into(dest, Path::new(path), body.as_bytes())?;
+        crate::verbose::line(|| format!("wrote {path}"));
+        report.staged.push(PathBuf::from(path));
+    }
+    Ok(())
 }
 
 /// One staged ELF file's size, before and after an optional strip.
@@ -1195,6 +1209,41 @@ fn image_dir(dest: &Path, dir: &Path, create: bool) -> Result<PathBuf> {
     Ok(at)
 }
 
+// Give the loader what it needs to find the staged libraries: glibc's ld.so.cache, or musl's
+// search path file. musl reads no cache, and an Alpine host has no glibc `ldconfig`, so a musl
+// image skips the cache before any `ldconfig` call.
+fn configure_loader(dest: &Path, resolution: &Resolution) -> Result<()> {
+    match &resolution.musl {
+        Some(search) => write_musl_path_file(dest, search),
+        None => generate_ld_cache(dest, resolution),
+    }
+}
+
+// Write musl's search path file only when the system search found a library outside musl's
+// default directories. Once the file exists, musl searches only what it lists, so it lists
+// those directories and the defaults, sorted, one per line. A library found through the
+// binary's own search path needs no entry, because that search path works in the image too.
+fn write_musl_path_file(dest: &Path, search: &MuslSearch) -> Result<()> {
+    let defaults: Vec<PathBuf> = MUSL_DEFAULT_DIRS.iter().map(PathBuf::from).collect();
+    if search.system_dirs.iter().all(|dir| defaults.contains(dir)) {
+        return Ok(());
+    }
+    let dirs: BTreeSet<&PathBuf> = search.system_dirs.iter().chain(&defaults).collect();
+    let body: String = dirs.iter().map(|d| format!("{}\n", d.display())).collect();
+    write_into(dest, &search.path_file, body.as_bytes())?;
+    crate::verbose::line(|| {
+        format!(
+            "wrote {} for {}",
+            search.path_file.display(),
+            dirs.iter()
+                .map(|d| d.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    });
+    Ok(())
+}
+
 // Regenerate /etc/ld.so.cache inside the staged root. A fresh root has no
 // ld.so.conf, so write one listing every dir we staged into, then let ldconfig
 // (which knows the glibc cache format) build the cache against that root.
@@ -1575,6 +1624,83 @@ mod tests {
             "loader must be at its PT_INTERP path"
         );
         assert_eq!(fs::read(&staged_loader).unwrap(), b"LOADER");
+    }
+
+    // A musl resolution under `src`: the loader, and the system dirs its search used.
+    fn musl_res(src: &Path, system_dirs: &[&str]) -> Resolution {
+        let loader = make_file(&src.join("lib/ld-musl-x86_64.so.1"), b"MUSL");
+        let mut res = with_interp("/lib/ld-musl-x86_64.so.1", &loader);
+        res.musl = Some(MuslSearch {
+            path_file: PathBuf::from("/etc/ld-musl-x86_64.path"),
+            system_dirs: system_dirs.iter().map(PathBuf::from).collect(),
+        });
+        res
+    }
+
+    // D7: a musl image gets no ld.so.conf or ld.so.cache, so `ldconfig` never runs. D3: no path
+    // file while every library the system search found is in a default directory.
+    #[test]
+    fn a_musl_stage_builds_no_cache_and_needs_no_path_file_in_the_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&src.join("app"), b"binary");
+        let res = musl_res(&src, &["/lib", "/usr/lib"]);
+        stage(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+        assert_eq!(
+            fs::read(dest.join("lib/ld-musl-x86_64.so.1")).unwrap(),
+            b"MUSL"
+        );
+        for absent in [
+            "etc/ld.so.conf",
+            "etc/ld.so.cache",
+            "etc/ld-musl-x86_64.path",
+        ] {
+            assert!(!dest.join(absent).exists(), "{absent} was written");
+        }
+    }
+
+    // D3: a library outside the defaults puts its dir and the defaults, sorted, in the file.
+    #[test]
+    fn a_musl_library_outside_the_defaults_writes_the_path_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&src.join("app"), b"binary");
+        let res = musl_res(&src, &["/usr/lib", "/opt/sys", "/lib"]);
+        stage(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+        assert_eq!(
+            fs::read_to_string(dest.join("etc/ld-musl-x86_64.path")).unwrap(),
+            "/lib\n/opt/sys\n/usr/lib\n/usr/local/lib\n"
+        );
+        assert!(!dest.join("etc/ld.so.cache").exists());
+    }
+
+    // D5: musl has no NSS, so whatever `--nss` selects, a musl image gets passwd and group and
+    // no nsswitch.conf or module.
+    #[test]
+    fn a_musl_image_gets_passwd_and_group_and_no_nss() {
+        for nss in [NssSelection::default(), NssSelection::NONE] {
+            let tmp = tempfile::tempdir().unwrap();
+            let src = tmp.path().join("src");
+            let dest = tmp.path().join("dest");
+            let res = musl_res(&src, &[]);
+            let report = stage_default_includes(&res, &dest, &nss).unwrap();
+            assert_eq!(
+                report.staged,
+                [PathBuf::from("/etc/passwd"), PathBuf::from("/etc/group")]
+            );
+            assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+            assert_eq!(
+                fs::read_to_string(dest.join("etc/passwd")).unwrap(),
+                MINIMAL_PASSWD
+            );
+            assert_eq!(
+                fs::read_to_string(dest.join("etc/group")).unwrap(),
+                MINIMAL_GROUP
+            );
+            assert!(!dest.join("etc/nsswitch.conf").exists());
+        }
     }
 
     #[test]
