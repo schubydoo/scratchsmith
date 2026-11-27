@@ -70,10 +70,10 @@ set `SCRATCHSMITH_DIFF_SEED=<seed>` and `SCRATCHSMITH_DIFF_CASES=1`.
 
 `tests/differential_musl.rs` does the same for musl, with `musl-gcc` and musl's own loader as the
 reference. Its layouts reach the musl rules that real Alpine programs almost never use, such as
-an inherited RUNPATH, a libc alias like `libpthread.so.0`, and a search path dropped for a `$LIB`
-token. On each case that musl runs, `graph` must also resolve exactly the files that
-`ld-musl-x86_64.so.1 --list` maps. The nightly workflow sweeps it too, and the same two variables
-repeat a case.
+an inherited RUNPATH, an object with both RPATH and RUNPATH (musl reads only RUNPATH), a libc
+alias like `libpthread.so.0`, and a search path dropped for a `$LIB` token. On each case that
+musl runs, `graph` must also resolve exactly the files that `ld-musl-x86_64.so.1 --list` maps.
+The nightly workflow sweeps it too, and the same two variables repeat a case.
 
 ```sh
 git clone https://github.com/schubydoo/scratchsmith

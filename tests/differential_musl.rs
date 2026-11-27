@@ -5,6 +5,8 @@
 //! `musl-gcc` that reach them on purpose (docs/architecture.md, "The musl backend"):
 //!
 //! - RPATH and RUNPATH alike are inherited by every dependency below the object that sets them;
+//! - an object with both reads RUNPATH alone, so its RPATH (here naming a directory of decoy
+//!   copies of every library) is never searched;
 //! - a search path holding a `$` token other than `$ORIGIN` is dropped whole;
 //! - `DT_SONAME` is never read, so a library whose soname differs is still found by file name;
 //! - a name that matches an object already loaded needs no search;
@@ -61,7 +63,8 @@ enum Soname {
 }
 
 // Directories under the case root. `bin` holds the program, `real` the targets of
-// `LinkElsewhere` links, and `ln` is a link to `lib/sub`.
+// `LinkElsewhere` links, `shadow` a copy of every library under its NEEDED name, and `ln` is
+// a link to `lib/sub`.
 const DIRS: &[&str] = &[
     "bin",
     "lib",
@@ -70,7 +73,9 @@ const DIRS: &[&str] = &[
     "deps/a",
     "opt/lib64",
     "real",
+    "shadow",
 ];
+const SHADOW: &str = "shadow";
 const LIB_DIRS: &[&str] = &["lib", "lib/sub", "x:y", "deps/a", "opt/lib64"];
 const DIR_LINK: &str = "ln";
 const DIR_LINK_TARGET: &str = "lib/sub";
@@ -128,12 +133,15 @@ impl Lib {
 enum Tags {
     Rpath,
     Runpath,
+    // DT_RPATH holds the decoys and DT_RUNPATH the real search path. ld emits only one of the
+    // two, so the RUNPATH string goes in as a marker's NEEDED name and `set_runpath` retags it.
+    Both,
 }
 
 impl Tags {
     fn flag(self) -> &'static str {
         match self {
-            Tags::Rpath => "-Wl,--disable-new-dtags",
+            Tags::Rpath | Tags::Both => "-Wl,--disable-new-dtags",
             Tags::Runpath => "-Wl,--enable-new-dtags",
         }
     }
@@ -145,6 +153,8 @@ struct Layout {
     // Search-path entries and dtags per object: index 0 is the program, i + 1 is library i.
     paths: Vec<Vec<String>>,
     tags: Vec<Tags>,
+    // The DT_RPATH entries of a `Both` object, which musl must ignore. Each names `shadow`.
+    decoys: Vec<Vec<String>>,
     // A libc alias per object, or None.
     aliases: Vec<Option<&'static str>>,
 }
@@ -212,18 +222,17 @@ fn generate(rng: &mut Rng, root: &Path) -> Layout {
     }
     let objects = count + 1;
     let tags = (0..objects)
-        .map(|_| {
-            if rng.chance(50) {
-                Tags::Rpath
-            } else {
-                Tags::Runpath
-            }
+        .map(|_| match rng.below(5) {
+            0 | 1 => Tags::Rpath,
+            2 | 3 => Tags::Runpath,
+            _ => Tags::Both,
         })
         .collect();
     let mut layout = Layout {
         libs,
         paths: vec![Vec::new(); objects],
         tags,
+        decoys: vec![Vec::new(); objects],
         aliases: vec![None; objects],
     };
     for i in 0..count {
@@ -248,6 +257,12 @@ fn generate(rng: &mut Rng, root: &Path) -> Layout {
         if rng.chance(12) {
             let at = rng.below(paths.len() + 1);
             paths.insert(at, "/opt/$LIB".to_string());
+        }
+    }
+    for object in 0..objects {
+        if matches!(layout.tags[object], Tags::Both) {
+            let e = entry(rng, root, dir_of(&layout, object), SHADOW);
+            layout.decoys[object].push(e);
         }
     }
     for alias in &mut layout.aliases {
@@ -362,10 +377,62 @@ fn link_args(layout: &Layout, object: usize, root: &Path) -> Vec<String> {
         args.push("-Wl,--as-needed".to_string());
     }
     args.push(layout.tags[object].flag().to_string());
-    for e in &layout.paths[object] {
-        args.push(format!("-Wl,-rpath,{e}"));
+    if matches!(layout.tags[object], Tags::Both) {
+        for e in &layout.decoys[object] {
+            args.push(format!("-Wl,-rpath,{e}"));
+        }
+        args.push("-Wl,--no-as-needed".to_string());
+        args.push(s(&marker(root, object)));
+        args.push("-Wl,--as-needed".to_string());
+    } else {
+        for e in &layout.paths[object] {
+            args.push(format!("-Wl,-rpath,{e}"));
+        }
     }
     args
+}
+
+// The DT_RUNPATH string of a `Both` object. With no entries it names a missing directory,
+// which still hides the RPATH from musl.
+fn runpath(layout: &Layout, object: usize) -> String {
+    match layout.paths[object].as_slice() {
+        [] => "/opt/ssmusl-none".to_string(),
+        paths => paths.join(":"),
+    }
+}
+
+// The stub whose soname is the RUNPATH string of a `Both` object.
+fn marker(root: &Path, object: usize) -> PathBuf {
+    root.join("stub/runpath").join(format!("{object}.so"))
+}
+
+// Retags the NEEDED entry that names `runpath` as DT_RUNPATH. Both are offsets into the
+// string table, so only the tag changes.
+fn set_runpath(path: &Path, runpath: &str) {
+    use goblin::elf::dynamic::{DT_NEEDED, DT_RUNPATH};
+    let mut bytes = std::fs::read(path).unwrap();
+    let at = {
+        let elf = goblin::elf::Elf::parse(&bytes).unwrap();
+        let dynamic = elf
+            .program_headers
+            .iter()
+            .find(|p| p.p_type == goblin::elf::program_header::PT_DYNAMIC)
+            .expect("a dynamic segment");
+        let index = elf
+            .dynamic
+            .as_ref()
+            .expect("a dynamic section")
+            .dyns
+            .iter()
+            .position(|d| {
+                d.d_tag == DT_NEEDED && elf.dynstrtab.get_at(d.d_val as usize) == Some(runpath)
+            })
+            .expect("the marker's NEEDED entry");
+        // Elf64_Dyn is 16 bytes, its tag the first 8.
+        dynamic.p_offset as usize + index * 16
+    };
+    bytes[at..at + 8].copy_from_slice(&DT_RUNPATH.to_le_bytes());
+    std::fs::write(path, bytes).unwrap();
 }
 
 // An empty shared object at `path` whose soname is `soname`: it gives the linker a NEEDED name.
@@ -394,6 +461,16 @@ fn build(layout: &Layout, root: &Path) -> PathBuf {
             stub(&at, alias, &empty);
         }
     }
+    for object in 0..layout.tags.len() {
+        if matches!(layout.tags[object], Tags::Both) {
+            stub(&marker(root, object), &runpath(layout, object), &empty);
+        }
+    }
+    let finish = |object: usize, path: &Path| {
+        if matches!(layout.tags[object], Tags::Both) {
+            set_runpath(path, &runpath(layout, object));
+        }
+    };
     // Children before parents: a child always has a higher index than its library parent.
     for lib in layout.libs.iter().rev() {
         let object = lib.index + 1;
@@ -408,6 +485,7 @@ fn build(layout: &Layout, root: &Path) -> PathBuf {
         args.extend(["-o".to_string(), s(&root.join(lib.file())), s(&src)]);
         args.extend(link_args(layout, object, root));
         musl_gcc(&args);
+        finish(object, &root.join(lib.file()));
         let link = root.join(lib.dir).join(lib.needed());
         match lib.name {
             Name::LinkChain => {
@@ -438,6 +516,11 @@ fn build(layout: &Layout, root: &Path) -> PathBuf {
     ];
     args.extend(link_args(layout, 0, root));
     musl_gcc(&args);
+    finish(0, &app);
+    // The decoys go in last, so the linker never finds one while it links the case.
+    for lib in &layout.libs {
+        std::fs::copy(root.join(lib.file()), root.join(SHADOW).join(lib.needed())).unwrap();
+    }
     app
 }
 
