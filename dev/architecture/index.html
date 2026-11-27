@@ -827,10 +827,11 @@
    separately, which avoids the classic unpullable-image bug.</li>
 </ol>
 <h2 id="the-musl-backend">The musl backend<a class="headerlink" href="#the-musl-backend" title="Permanent link">&para;</a></h2>
-<p>The binary's program interpreter (<code>PT_INTERP</code>) picks the rules. A loader named <code>ld-musl-*</code>
-selects musl's rules for the whole graph, and any other loader selects the glibc rules above,
-which do not change. musl's loader (1.2.5) differs from glibc's in these ways, and Scratchsmith
-copies each one:</p>
+<p>The binary's program interpreter (<code>PT_INTERP</code>) picks the rules. A loader named <code>ld-musl-*</code> selects
+musl's rules for the whole graph, and any other loader selects the glibc rules above, which do not
+change. The musl backend supports x86_64 only, and a musl binary for any other architecture fails
+the pack. musl's loader (1.2.5) differs from glibc's in these ways, and Scratchsmith copies each
+one:</p>
 <ol>
 <li><strong>No cache.</strong> musl has no <code>ld.so.cache</code> and no <code>ldconfig</code>, so <code>pack</code> writes neither and never
    runs <code>ldconfig</code>. musl opens a library only at the path its search found. When that path is
@@ -856,6 +857,9 @@ copies each one:</p>
 <li><strong>A glibc libc is not loaded.</strong> musl takes a library that defines <code>__libc_start_main</code> and
    <code>stdin</code> for its own libc. Scratchsmith fails the pack on a glibc libc in a musl graph, and
    maps a copy of musl's libc to the loader.</li>
+<li><strong>No skip on class or machine.</strong> glibc skips a library file of another ELF class or
+   machine and keeps searching. musl opens the first file of the needed name and fails to load
+   it. Scratchsmith takes that file too, and warns.</li>
 </ol>
 <p>musl has no NSS: it reads <code>/etc/passwd</code>, <code>/etc/group</code>, <code>/etc/hosts</code> and <code>/etc/resolv.conf</code>
 directly. A musl image always gets the minimal <code>/etc/passwd</code> and <code>/etc/group</code>, and no
@@ -866,11 +870,12 @@ libc fails the pack.</p>
 stable contract. A breaking change to any of them requires a new major version:</p>
 <ul>
 <li><strong>CLI flags</strong>: the names and meaning of <code>pack</code> / <code>lint</code> / <code>doctor</code> / <code>index</code> / <code>graph</code> / <code>diff</code> /
-  <code>unpack</code> flags, and the top-level <code>--completions</code> and <code>--verbose</code>. New flags arrive in minor
-  releases. A removed or renamed flag, or a changed default, is a major change.</li>
+  <code>unpack</code> / <code>verify</code> flags, and the top-level <code>--completions</code> and <code>--verbose</code>. New flags arrive in
+  minor releases. A removed or renamed flag, or a changed default, is a major change.</li>
 <li><strong><code>scratchsmith.toml</code></strong>: the configuration keys and their types (the <a href="../configuration/">Configuration</a> reference).</li>
-<li><strong><code>--format json</code></strong>: the field names and types of the <code>pack</code>, <code>index</code>, <code>graph</code>, <code>diff</code>, <code>unpack</code>,
-  and <code>lint</code> reports (the schema CI gates consume). Each is pinned by a golden test, so a change is always deliberate.</li>
+<li><strong><code>--format json</code></strong>: the field names and types of the <code>pack</code>, <code>index</code>, <code>verify</code>, <code>graph</code>, <code>diff</code>,
+  <code>unpack</code>, and <code>lint</code> reports (the schema CI gates consume). Each is pinned by a golden test, so a
+  change is always deliberate.</li>
 <li><strong>Exit codes</strong>: <code>0</code> on success. <code>2</code> on a usage error: an argument-parse error, or a command line
   that scratchsmith refuses after the parse, such as <code>--watch --format json</code> or <code>pack</code> with no
   binary. <code>1</code> on any other failure, such as a failed pack. Before 2.0.0, a refusal made after the

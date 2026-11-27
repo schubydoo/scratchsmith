@@ -1235,13 +1235,13 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>scratchsmith/app:packed<span class="w"> </span>--version<span class="w">   </span><span class="c1"># image is scratchsmith/&lt;name&gt;:packed, &lt;name&gt; lowercased (other characters an image name cannot hold become -)</span>
 </code></pre></div>
-<p>The image gets the build host's glibc. A binary built against a newer glibc than the host's
-packs, and then fails to start with an error like <code>version `GLIBC_2.38' not found</code>. <code>pack</code>
-reads the <code>GLIBC_</code> versions that the binary and each library need. For each object that needs
-a version the staged glibc does not define, it adds a warning to the report that names the
-highest missing version. The text report prints it on standard output as <code>warning: …</code>, and
-<code>--format json</code> lists it in <code>warnings</code>. The pack still succeeds, with the same exit code.
-Pack on a host whose glibc is as new as the one the binary was built against.</p>
+<p>The image gets the build host's glibc (or, for a musl binary, its musl). A binary built against a
+newer glibc than the host's packs, and then fails to start with an error like <code>version
+`GLIBC_2.38' not found</code>. <code>pack</code> reads the <code>GLIBC_</code> versions that the binary and each library
+need. For each object that needs a version the staged glibc does not define, it adds a warning to
+the report that names the highest missing version. The text report prints it on standard output
+as <code>warning: …</code>, and <code>--format json</code> lists it in <code>warnings</code>. The pack still succeeds, with the
+same exit code. Pack on a host whose glibc is as new as the one the binary was built against.</p>
 <p>The default sink loads into Docker. To load with <strong>podman</strong> or <strong>nerdctl</strong> instead (and run
 <code>--smoke</code> with it), pass <code>--runtime</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--runtime<span class="w"> </span>podman<span class="w"> </span>./app
@@ -1678,9 +1678,9 @@ pack. A <code>--no-build</code> rootfs has the same mode, owned by the user who 
 written to <code>/tmp</code> live in the container's writable layer, so mount a <code>--tmpfs</code> instead when
 the container runs with <code>--read-only</code>.</p>
 <h2 id="add-a-host-file">Add a host file<a class="headerlink" href="#add-a-host-file" title="Permanent link">&para;</a></h2>
-<p><code>--ca-certs</code> and <code>--tz</code> each add one fixed file. To add any other host file, use <code>--add-file</code>.
-A scratch image starts empty. A program that reads a configuration file, a template, or a
-data file at runtime needs that file copied in.</p>
+<p><code>--ca-certs</code> and <code>--tz</code> each add a fixed file (<code>--ca-certs</code> also links <code>/etc/ssl/cert.pem</code> to
+it). To add any other host file, use <code>--add-file</code>. A scratch image starts empty. A program that
+reads a configuration file, a template, or a data file at runtime needs that file copied in.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--add-file<span class="w"> </span>./app.conf:/etc/app/app.conf<span class="w"> </span>./app<span class="w">   </span><span class="c1"># copy to a chosen path</span>
 <a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--add-file<span class="w"> </span>/etc/motd<span class="w"> </span>./app<span class="w">                      </span><span class="c1"># keep the host path</span>
 </code></pre></div>
@@ -1705,21 +1705,22 @@ the detail.</p>
 <h2 id="add-a-program-with-its-libraries">Add a program with its libraries<a class="headerlink" href="#add-a-program-with-its-libraries" title="Permanent link">&para;</a></h2>
 <p><code>--add-file</code> copies a file as it is. An ELF program added that way arrives without the shared
 libraries it needs, so it fails in the image with <code>error while loading shared libraries</code>.
-<code>--add-binary</code> takes the same <code>SRC[:DST]</code> form and also resolves the program's libraries,
-with the same <code>ld.so</code> rules as the packed binary. <code>$ORIGIN</code> in its RPATH or RUNPATH names the
-real directory of the added file on the host, and ld.so reads it from the program's directory
-in the image. So the pack fails when a program that uses <code>$ORIGIN</code> is given a <code>DST</code> in another
-directory, and the message names the <code>DST</code> to use.</p>
+<code>--add-binary</code> takes the same <code>SRC[:DST]</code> form and also resolves the program's libraries, with
+the same loader rules as the packed binary (glibc's or musl's). <code>$ORIGIN</code> in its RPATH or
+RUNPATH names the real directory of the added file on the host, and the loader reads it from the
+program's directory in the image. So the pack fails when a program that uses <code>$ORIGIN</code> is given
+a <code>DST</code> in another directory, and the message names the <code>DST</code> to use.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--add-binary<span class="w"> </span>/usr/bin/bash:/bin/bash<span class="w"> </span>./app
 </code></pre></div>
-<p>A library that the packed binary needs too is staged once. The image's <code>ld.so.cache</code>,
-<code>--deny</code> and <code>--require</code>, <code>--strip</code>, the SBOM and <code>--packages</code> all cover the added libraries.
-The added program itself is copied like an <code>--add-file</code> entry, so the same destination rules
-apply to it. It is always copied as a file, whatever <code>--symlinks</code> says, so a symlinked <code>SRC</code>
-brings its target's content. One image has one loader, so the pack fails when the added ELF is
-built for another architecture or names another program interpreter than the packed binary.
-A static ELF, or a shared library, names none and is accepted. A file that is not an ELF
-fails too: add it with <code>--add-file</code>.</p>
+<p>A library that the packed binary needs too is staged once. The image's <code>ld.so.cache</code> (or, for
+musl, its search path file and links), <code>--deny</code> and <code>--require</code>, <code>--strip</code>, the SBOM and
+<code>--packages</code> all cover the added libraries. The added program itself is copied like an
+<code>--add-file</code> entry, so the same destination rules apply to it. It is always copied as a file,
+whatever <code>--symlinks</code> says, so a symlinked <code>SRC</code> brings its target's content. One image has one
+loader, so the pack fails when the added ELF is built for another architecture or names another
+program interpreter than the packed binary, and when the added program uses the other libc. A
+static ELF, or a shared library, names none and is accepted. A file that is not an ELF fails
+too: add it with <code>--add-file</code>.</p>
 <h2 id="keep-a-symlink-as-a-symlink">Keep a symlink as a symlink<a class="headerlink" href="#keep-a-symlink-as-a-symlink" title="Permanent link">&para;</a></h2>
 <p>Scratchsmith copies the content of a symlink you name, so the image gets a regular file and
 not the link. That loses the path itself. If you pack <code>/usr/bin/python3</code>, which is a link to
@@ -1824,9 +1825,10 @@ has a loader (<code>PT_INTERP</code>), the last line names it.</p>
 program and its libraries, which <code>pack</code> also stages. The pack report lists the NSS modules
 under its payload sizes (<code>size.entries</code> in <code>--format json</code>).</p>
 <p><code>graph --format json</code> prints one object: <code>root</code> (the binary's real path), <code>interpreter</code> (the
-loader, or null), <code>libc</code> (<code>"glibc"</code>, <code>"musl"</code>, or null with no loader), <code>nodes</code> and <code>missing</code> (every soname that did not resolve). Each node has <code>id</code>
-(its real path), <code>name</code> (the soname the loader searched for, or the binary's file name), <code>needs</code>
-(the ids of the nodes it needs) and <code>missing</code> (its own sonames that did not resolve).</p>
+loader, or null), <code>libc</code> (<code>"glibc"</code>, <code>"musl"</code>, or null with no loader), <code>nodes</code> and <code>missing</code>
+(every soname that did not resolve). Each node has <code>id</code> (its real path), <code>name</code> (the soname the
+loader searched for, the loader's own file name for its node, or the binary's file name),
+<code>needs</code> (the ids of the nodes it needs) and <code>missing</code> (its own sonames that did not resolve).</p>
 <h2 id="see-each-decision-with-verbose">See each decision with <code>--verbose</code><a class="headerlink" href="#see-each-decision-with-verbose" title="Permanent link">&para;</a></h2>
 <p>To see why a library was picked, or where a file was staged, add <code>--verbose</code>. It works before
 or after the subcommand:</p>
@@ -1836,10 +1838,11 @@ or after the subcommand:</p>
 <p><code>pack</code> and <code>graph</code> then print one line on standard error for each decision, each starting
 <code>verbose:</code>. The lines say which directories each object searches, the file each <code>DT_NEEDED</code>
 name resolves to (or that it is not found, or already loaded), and, for <code>pack</code>, the binary,
-interpreter, libraries and name-service files it stages, each link it makes, and the
-directories in the image's <code>/etc/ld.so.cache</code>. Standard output and every other line stay as
-they are without the flag, so <code>--format json</code> still prints only JSON. The wording of the
-<code>verbose:</code> lines is for reading, not parsing, and can change in any release.</p>
+interpreter, libraries and name-service files it stages, each link it makes, and the directories
+in the image's <code>/etc/ld.so.cache</code> (for musl, the search path file it writes). Standard output
+and every other line stay as they are without the flag, so <code>--format json</code> still prints only
+JSON. The wording of the <code>verbose:</code> lines is for reading, not parsing, and can change in any
+release.</p>
 <h2 id="gate-on-libraries">Gate on libraries<a class="headerlink" href="#gate-on-libraries" title="Permanent link">&para;</a></h2>
 <p>To enforce a library policy in CI, fail the pack on a forbidden library or a missing required
 one:</p>
@@ -2010,10 +2013,12 @@ changes only with a newer scratchsmith release.</p>
 <p>If <code>SSL_CERT_FILE</code> or <code>SSL_CERT_DIR</code> is set, scratchsmith never uses the compiled-in
 certificates. If the path that you set gives no certificates, the command fails and names the
 variable.</p>
-<p>One subcommand does not run there. <code>pack</code> needs ldconfig, plus a container engine for the
-default sink and strip, syft or grype for the options that use them.</p>
+<p>Two subcommands do not run there. <code>pack</code> needs ldconfig for a glibc binary, plus a container
+engine for the default sink and strip, syft or grype for the options that use them. <code>verify</code>
+needs cosign. The <code>:toolbox</code> image below runs both.</p>
 <p>The <strong><code>:toolbox</code></strong> image bundles the <code>pack</code> toolchain (ldconfig, strip, syft, grype, cosign,
 upx, tini, the docker CLI) on a Wolfi base. With it, <code>pack</code> itself runs inside a container.
+Wolfi is glibc-based and has no musl loader, so the toolbox packs glibc binaries only.
 That image has no dpkg and no rpm database, so <code>--packages</code> has no data there. The <code>packages</code>
 field is <code>null</code>. An <code>image</code> output that you set fails. If <code>--sbom</code> or <code>--scan</code> is on, a <code>sbom</code>
 output that you set fails too. The default stays quiet.</p>

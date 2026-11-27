@@ -799,7 +799,7 @@ build. It is purpose-built for the hard case and useful for the easy one.</p>
 <th></th>
 <th>Input</th>
 <th>No Dockerfile</th>
-<th>Prebuilt <strong>dynamic glibc</strong> binaries</th>
+<th>Prebuilt <strong>dynamic glibc or musl</strong> binaries</th>
 <th>Built-in SBOM + hardening</th>
 <th>Daemonless build</th>
 </tr>
@@ -809,7 +809,7 @@ build. It is purpose-built for the hard case and useful for the easy one.</p>
 <td><strong>Scratchsmith</strong></td>
 <td>a prebuilt dynamic ELF binary</td>
 <td>✅</td>
-<td>✅ <em>(the whole point)</em></td>
+<td>✅ <em>(the whole point; musl on x86_64)</em></td>
 <td>✅ SBOM (via syft) + built-in ELF hardening lint</td>
 <td>✅ <code>--push</code> / <code>--oci-archive</code> (the <em>default</em> sink uses <code>docker load</code>)</td>
 </tr>

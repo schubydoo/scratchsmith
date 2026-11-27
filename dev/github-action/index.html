@@ -767,7 +767,8 @@ runner, verifies it against the release checksums, and runs <code>pack</code>:</
 </code></pre></div>
 <p>A musl binary (x86_64 only) packs the same way, but <code>pack</code> reads its libraries from the runner,
 so the runner needs musl's loader at <code>/lib/ld-musl-x86_64.so.1</code>. On an Ubuntu runner, install
-the <code>musl</code> package in an earlier step. See <a href="../usage/#pack-a-musl-binary">Pack a musl binary</a>.</p>
+the <code>musl</code> package in an earlier step. See <a href="../usage/#pack-a-musl-binary">Pack a musl binary</a>.
+musl needs scratchsmith v2.3.0 or later.</p>
 <p>To publish the built image, log in first and set <code>push</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">docker/login-action@v4</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span>
@@ -946,12 +947,12 @@ the <code>packages</code> input to <code>none</code>.</p>
 <tr>
 <td><code>add-binary</code></td>
 <td></td>
-<td>Copy host ELF programs into the image with the shared libraries they need, one <code>SRC:DST</code> per line. A bare absolute <code>SRC</code> keeps its own path. Each program's libraries resolve by the same <code>ld.so</code> rules as the packed binary, and a library both need is staged once. An ELF for another architecture or loader fails the pack, and so does one that uses <code>$ORIGIN</code> with a <code>DST</code> outside its real directory. A path may hold spaces, which <code>args</code> cannot pass. See <a href="../usage/#add-a-program-with-its-libraries">Usage</a>. Needs scratchsmith v2.1.0 or later.</td>
+<td>Copy host ELF programs into the image with the shared libraries they need, one <code>SRC:DST</code> per line. A bare absolute <code>SRC</code> keeps its own path. Each program's libraries resolve by the same loader rules as the packed binary, and a library both need is staged once. An ELF for another architecture, or a program for another loader or libc, fails the pack, and so does one that uses <code>$ORIGIN</code> with a <code>DST</code> outside its real directory. A path may hold spaces, which <code>args</code> cannot pass. See <a href="../usage/#add-a-program-with-its-libraries">Usage</a>. Needs scratchsmith v2.1.0 or later.</td>
 </tr>
 <tr>
 <td><code>locale</code></td>
 <td></td>
-<td>Compiled glibc locales to stage at <code>/usr/lib/locale</code>, one name per line, for example <code>en_US.UTF-8</code>. A name, never a path. Needs a prebuilt directory on the runner, or <code>localedef</code> plus the glibc sources at <code>/usr/share/i18n</code>. Staging a locale does not select it, so also set <code>LANG</code> through <code>env</code>. The host <code>locale-archive</code> is never copied.</td>
+<td>Compiled glibc locales to stage at <code>/usr/lib/locale</code>, one name per line, for example <code>en_US.UTF-8</code>. A name, never a path. Needs a prebuilt directory on the runner, or <code>localedef</code> plus the glibc sources at <code>/usr/share/i18n</code>. Staging a locale does not select it, so also set <code>LANG</code> through <code>env</code>. The host <code>locale-archive</code> is never copied. glibc only: set for a musl binary, it fails the pack.</td>
 </tr>
 <tr>
 <td><code>symlinks</code></td>
@@ -966,7 +967,7 @@ the <code>packages</code> input to <code>none</code>.</p>
 <tr>
 <td><code>nss</code></td>
 <td><code>files,dns</code></td>
-<td>NSS modules to stage for glibc lookups, comma-separated (<code>files,dns</code>, or <code>none</code>). Fewer modules trim CVE surface.</td>
+<td>NSS modules to stage for glibc lookups, comma-separated (<code>files,dns</code>, or <code>none</code>). Fewer modules trim CVE surface. glibc only: set for a musl binary, it fails the pack.</td>
 </tr>
 <tr>
 <td><code>packages</code></td>
