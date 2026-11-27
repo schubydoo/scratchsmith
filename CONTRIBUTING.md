@@ -89,8 +89,8 @@ cargo run -- doctor   # shows which external tools are present
 A change that breaks one of these is wrong, even with every test green:
 
 - **Fail loud, never silently.** A missing library/loader, a musl binary on an architecture
-  other than x86_64, or a missing external tool exits non-zero with a fix hint. It is never a
-  silent skip that ships a broken image.
+  other than x86_64, glibc and musl mixed in one image, or a missing external tool exits
+  non-zero with a fix hint. It is never a silent skip that ships a broken image.
 - **Determinism over host-trust.** Resolution emulates `ld.so`. It never scrapes host
   `ldd` / `ld.so.cache` / `LD_LIBRARY_PATH`.
 - **Non-root + reproducible by default.** Images default to a non-root user, and layers are

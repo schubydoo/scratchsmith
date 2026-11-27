@@ -6,11 +6,15 @@ runner, verifies it against the release checksums, and runs `pack`:
 ```yaml
 - uses: schubydoo/scratchsmith@v<ver>   # pin to a release tag
   with:
-    binary: ./dist/app         # your prebuilt dynamic glibc binary
+    binary: ./dist/app         # your prebuilt dynamic glibc or musl binary
     sbom: true                 # needs syft on the runner
     strip: true
     smoke: true                # fail the job if the packed image can't start
 ```
+
+A musl binary (x86_64 only) packs the same way, but `pack` reads its libraries from the runner,
+so the runner needs musl's loader at `/lib/ld-musl-x86_64.so.1`. On an Ubuntu runner, install
+the `musl` package in an earlier step. See [Pack a musl binary](usage.md#pack-a-musl-binary).
 
 To publish the built image, log in first and set `push`:
 
@@ -76,7 +80,7 @@ the `packages` input to `none`.
 
 | Input | Default | Description |
 |---|---|---|
-| `binary` | *(required)* | Path to the dynamically linked glibc ELF binary to pack. |
+| `binary` | *(required)* | Path to the dynamically linked glibc or musl ELF binary to pack. |
 | `version` | *(the pinned tag, else `latest`)* | Which scratchsmith release to download: a tag like `v1.0.0`, or `latest`. |
 | `output` | | Stage the rootfs into this directory instead of building an image (`--no-build`). The directory must be new or empty. |
 | `entrypoint` | *(the binary's path)* | Image `ENTRYPOINT`. |
