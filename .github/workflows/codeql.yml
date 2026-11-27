@@ -16,7 +16,11 @@ name: CodeQL
 
 on:
   push:
-    branches: ["**"] # every branch head; feature-branch heads cure the required-CodeQL stuck-PR class
+    # Every branch head; feature-branch heads cure the required-CodeQL stuck-PR class. Not the
+    # bot's packaging-bump/* heads: those PRs auto-merge and delete the branch within minutes,
+    # often while this run is still analyzing, and its upload then fails on the gone ref. Their
+    # pull_request run below still scans them.
+    branches: ["**", "!packaging-bump/**"]
   pull_request:
     branches: [main]
   schedule:
