@@ -118,8 +118,8 @@ flag. The report prints in full before a failing gate exits `1`. The six gates a
 | `no-canary` | it imports no stack-protector guard |
 | `no-fortify` | it imports no `*_chk` wrapper |
 
- `canary` and `fortify` mean the
-binary imports the guard or a `*_chk` wrapper, so a static binary reads `false`.
+`canary` and `fortify` mean the binary imports the guard or a `*_chk` wrapper, so a static binary
+reads `false`.
 
 `--smoke` runs the image once and fails the pack only when the binary could not start: a
 missing library or loader, or an entrypoint the runtime could not exec. An app that starts and
@@ -198,7 +198,8 @@ The other fields of the pack report:
   or `--init`.
 - `size`: `entries` (each with `path`, `before` and `after` in bytes), `total_before`,
   `total_after`, and the booleans `stripped` and `upx`. It covers the ELF payload: the binary,
-  the loader, the libraries and the NSS modules.
+  the loader, the libraries and the NSS modules. An `--add-binary` program's libraries are
+  included, and the added program itself is not.
 - `warnings`: a list of warning lines, empty when there are none.
 - `smoke_ok`: `true` after a passing `--smoke`, otherwise null.
 - `sbom`: the SBOM path with `--sbom`, otherwise null.
@@ -763,7 +764,8 @@ If `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, scratchsmith never uses the compile
 certificates. If the path that you set gives no certificates, the command fails and names the
 variable.
 
-One subcommand does not run there. `pack` needs ldconfig, strip, and the SBOM tools.
+One subcommand does not run there. `pack` needs ldconfig, plus a container engine for the
+default sink and strip, syft or grype for the options that use them.
 
 The **`:toolbox`** image bundles the `pack` toolchain (ldconfig, strip, syft, grype, cosign,
 upx, tini, the docker CLI) on a Wolfi base. With it, `pack` itself runs inside a container.
@@ -775,17 +777,21 @@ output that you set fails too. The default stays quiet.
 # Daemonless — no socket needed; write an OCI archive or push straight to a registry.
 docker run --rm -v "$PWD:/w" -w /w ghcr.io/schubydoo/scratchsmith:toolbox \
   pack --oci-archive app.oci.tar ./app
-docker run --rm -v "$PWD:/w" -w /w ghcr.io/schubydoo/scratchsmith:toolbox \
-  pack --push ghcr.io/you/app:1.0 ./app
+docker run --rm -v "$PWD:/w" -w /w \
+  -v "$HOME/.docker:/docker:ro" -e DOCKER_CONFIG=/docker \
+  ghcr.io/schubydoo/scratchsmith:toolbox pack --push ghcr.io/you/app:1.0 ./app
 ```
+
+`--push` reads the registry login from the Docker config, so mount one that holds the
+credentials themselves. A credential helper on the host is not available inside the container.
 
 Prefer the daemonless sinks (`--push` / `--oci-archive`) in CI. The **default `docker load` sink**
 needs a host engine, so mount its socket. That socket is **root-equivalent on the host**, so use
 it only where you trust the workflow:
 
 ```sh
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/schubydoo/scratchsmith:toolbox \
-  pack ./app
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/w" -w /w \
+  ghcr.io/schubydoo/scratchsmith:toolbox pack ./app
 ```
 
 Tags: `:toolbox` (latest), `:X.Y.Z-toolbox`, `:X.Y-toolbox`. Verify its signature exactly like the

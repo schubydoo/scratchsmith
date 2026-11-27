@@ -7,8 +7,9 @@
 # itself is a milestone it has not taken, though `scratchsmith index` does assemble a
 # multi-arch index daemonlessly. The rule for what runs here: every subcommand that
 # needs no external tool. `pack` needs ldconfig (plus docker for the default sink, and
-# syft/grype/strip for the options that use them), so it does not work here. `index` does: with no certificate store in the image, it falls back
-# to the Mozilla roots compiled into the binary.
+# syft/grype/cosign/strip/upx/tini for the options that use them), so it does not work
+# here. `index` without `--sign` does: with no certificate store in the image, it falls
+# back to the Mozilla roots compiled into the binary.
 # Everything else does too, `doctor` included — it probes for each tool and reports
 # them all missing, which is the right answer. To run `pack` in a container, use the
 # `:toolbox` image instead (Dockerfile.toolbox, a Wolfi base with the

@@ -129,7 +129,7 @@ inputs:
     default: ""
   healthcheck:
     description: >-
-      Container HEALTHCHECK in exec form — one token per line (e.g. `/app`, then `--health`). It runs
+      Container HEALTHCHECK in exec form — one token per line (e.g. the binary's absolute path on the runner, then `--health`). It runs
       inside the scratch image, so it must name an executable present there, typically the binary.
     required: false
     default: ""
@@ -166,7 +166,7 @@ inputs:
     required: false
     default: ""
   args:
-    description: Extra raw `pack` flags appended verbatim (escape hatch for anything not mapped above).
+    description: Extra raw `pack` flags, split on whitespace (no quoting) and appended (escape hatch for anything not mapped above).
     required: false
     default: ""
   push:
@@ -179,7 +179,7 @@ inputs:
 
 outputs:
   image:
-    description: The loaded image tag (empty when `output` staged a rootfs instead).
+    description: The loaded image tag (empty when `output` staged a rootfs, or when `--push` or `--oci-archive` in `args` replaced the docker load).
     value: ${{ steps.pack.outputs.image }}
   rootfs:
     description: The staged rootfs directory (empty when an image was built).

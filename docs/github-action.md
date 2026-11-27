@@ -23,7 +23,7 @@ To publish the built image, log in first and set `push`:
 - uses: schubydoo/scratchsmith@v<ver>   # pin to a release tag
   with:
     binary: ./dist/app
-    push: ghcr.io/${{ github.repository }}:latest
+    push: ghcr.io/${{ github.repository }}:latest   # must be lowercase: spell it out if the name has capitals
 ```
 
 Nine inputs take **one value per line**: `cmd`, `env`, `label`, `healthcheck`, `add-file`,
@@ -62,7 +62,9 @@ Otherwise a SHA pin downloads the latest release.
 Most inputs map to the `pack` flag of the same name. See [Configuration](configuration.md) for what
 each does, and [Usage](usage.md) for the equivalent command-line recipes. A few inputs are
 action-specific. `version` picks which release to download. `output` maps to `--no-build --output`.
-`args` is a verbatim escape hatch for any flag without a dedicated input, for example
+`args` is split on whitespace and appended to the command. Quotes are not honoured, so a value
+cannot hold a space, and an unquoted `*` or `?` expands against the workspace. It is the escape
+hatch for any flag without a dedicated input, for example
 `--oci-archive out.tar`, or `--push <ref> --sign` for a daemonless, cosign-signed push (that job
 needs `permissions: id-token: write`). With `--push` or `--oci-archive` in `args`, the `image`
 output is empty, because only the default docker-load sink sets it. Note that `push` publishes with
@@ -105,12 +107,12 @@ the `packages` input to `none`.
 | `deny` | | If a listed library ships, fail the pack (soname or staged file name), one per line. |
 | `require` | | If a listed library does not ship, fail the pack (same scope as `deny`), one per line. |
 | `push` | | Tag the built image as this registry ref and `docker push` it. Needs a prior registry login. Not compatible with `output`. |
-| `args` | | Extra raw `pack` flags appended verbatim: the escape hatch for anything above. |
+| `args` | | Extra raw `pack` flags, split on whitespace (no quoting) and appended: the escape hatch for anything above. |
 
 ## Outputs
 
 | Output | Description |
 |---|---|
-| `image` | The loaded image tag. When `output` staged a rootfs instead, this is empty. |
+| `image` | The loaded image tag. It is empty when `output` staged a rootfs, or when `--push` or `--oci-archive` in `args` replaced the docker load. |
 | `rootfs` | The staged rootfs directory. When an image was built instead, this is empty. |
 | `report` | The full pack report as JSON. |
