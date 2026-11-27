@@ -1941,6 +1941,7 @@ mod tests {
             hints: vec![],
             notes: vec![],
             arch_warnings: vec![],
+            musl: None,
         }
     }
 

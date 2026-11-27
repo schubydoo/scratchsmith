@@ -5,10 +5,14 @@
 //! `parse_elf_info` only reaches the parse surface; the resolution core needs a filesystem and a
 //! link-info source, so this harness scripts a dependency graph over a throwaway sysroot (mirroring
 //! the resolver's own unit tests) and asserts it never panics on an adversarial graph.
+//! With `musl` set, the binary loads through musl's loader, so the same graph drives the musl
+//! walk instead, and the bytes of musl's search path file go through its parser.
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-use scratchsmith::resolver::{resolve_with, ElfInfo, LinkInfoSource, Sysroot, UnparsableElf};
+use scratchsmith::resolver::{
+    parse_musl_path_file, resolve_with, ElfInfo, Libc, LinkInfoSource, Sysroot, UnparsableElf,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -31,6 +35,8 @@ struct Facts {
     // Not a shared object, so the refusal of an ET_EXEC library is reachable. A raw u16
     // would almost never be ET_DYN and would cut every graph short.
     not_shared: bool,
+    // Looks like a libc to musl's loader: glibc's (refused) or musl's own (the loader).
+    libc: Option<bool>,
 }
 
 // One entry of a ':' list: empty, a token, a directory the harness fills, or anything.
@@ -85,6 +91,9 @@ impl Facts {
             uses_dlopen: false,
             // ET_EXEC (2) or ET_DYN (3); goblin is not a dependency of this workspace.
             e_type: if self.not_shared { 2 } else { 3 },
+            libc: self
+                .libc
+                .map(|glibc| if glibc { Libc::Glibc } else { Libc::Musl }),
         }
     }
 }
@@ -122,6 +131,9 @@ enum LibDir {
     // `/app/$PLATFORM` read as `x86_64`, and as a CPU name glibc picks on some Intel CPUs.
     AppX86_64,
     AppHaswell,
+    // musl's default system dir, and one that only a path file names.
+    Lib,
+    OptSys,
 }
 
 impl LibDir {
@@ -135,6 +147,8 @@ impl LibDir {
             LibDir::AppColon => "/app/x:y",
             LibDir::AppX86_64 => "/app/x86_64",
             LibDir::AppHaswell => "/app/haswell",
+            LibDir::Lib => "/lib",
+            LibDir::OptSys => "/opt/sys",
         }
     }
 }
@@ -151,11 +165,17 @@ struct Scenario {
     // The loader's parsed facts: none (it does not parse, and fails), a core dump (refused), or
     // a shared object.
     interp_core: Option<bool>,
+    // The binary loads through musl's loader, so the musl walk runs.
+    musl: bool,
+    // The bytes of musl's search path file, `/etc/ld-musl-x86_64.path`. None leaves it absent.
+    musl_path_file: Option<Vec<u8>>,
 }
 
 // A fixed, safe interpreter path used when `place_interp` is set — resolution reroots it under the
 // sysroot and checks existence, so a controlled path lets us exercise the "loader found" branch.
 const INTERP: &str = "/lib64/ld-fuzz.so.2";
+// The musl loader, where Alpine puts it. Its name is what selects the musl walk.
+const MUSL_INTERP: &str = "/lib/ld-musl-x86_64.so.1";
 
 // An in-memory link-info source, keyed exactly as the resolver looks up (canonical real path).
 struct MapSource {
@@ -226,17 +246,35 @@ fuzz_target!(|scn: Scenario| {
     }
 
     let mut root_facts = scn.root;
+    let interp = if scn.musl { MUSL_INTERP } else { INTERP };
+    if scn.musl {
+        root_facts.interpreter = Some(MUSL_INTERP.to_string());
+        root_facts.is_64 = true;
+        root_facts.machine = 62; // EM_X86_64
+    }
     // Optionally give the binary a real, resolvable loader.
     if scn.place_interp {
-        root_facts.interpreter = Some(INTERP.to_string());
-        // Place the file where reroot(root, INTERP) will look, derived from INTERP so the two
+        root_facts.interpreter = Some(interp.to_string());
+        // Place the file where reroot(root, interp) will look, derived from it so the two
         // can't drift: reroot strips the leading '/' and joins under the sysroot.
         let magic: &[u8] = if scn.interp_non_elf {
             b"data"
         } else {
             b"\x7fELF"
         };
-        let _ = write(&root.join(INTERP.trim_start_matches('/')), magic);
+        let _ = write(&root.join(interp.trim_start_matches('/')), magic);
+    }
+    if let Some(bytes) = &scn.musl_path_file {
+        let bytes = &bytes[..bytes.len().min(4096)];
+        // Every entry is one directory: not empty, and with no separator or NUL in it.
+        for entry in parse_musl_path_file(bytes) {
+            let raw = entry.as_os_str().as_encoded_bytes();
+            assert!(
+                !raw.is_empty() && !raw.iter().any(|b| matches!(b, b':' | b'\n' | 0)),
+                "path file entry {entry:?}"
+            );
+        }
+        let _ = write(&root.join("etc/ld-musl-x86_64.path"), bytes);
     }
 
     let mut infos: HashMap<PathBuf, ElfInfo> = HashMap::new();
@@ -254,9 +292,10 @@ fuzz_target!(|scn: Scenario| {
             uses_dlopen: false,
             // ET_CORE (4) or ET_DYN (3).
             e_type: if core { 4 } else { 3 },
+            libc: None,
         };
         infos.insert(
-            canonical(&root.join(INTERP.trim_start_matches('/'))),
+            canonical(&root.join(interp.trim_start_matches('/'))),
             loader,
         );
     }
@@ -317,5 +356,14 @@ fuzz_target!(|scn: Scenario| {
             !hint.chars().any(breaks_a_line),
             "a hint carries a character that breaks a line: {hint:?}"
         );
+    }
+    // The musl walk's note quotes a search path string out of the binary.
+    if scn.musl {
+        for note in &resolution.notes {
+            assert!(
+                !note.chars().any(breaks_a_line),
+                "a note carries a character that breaks a line: {note:?}"
+            );
+        }
     }
 });

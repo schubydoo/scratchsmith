@@ -53,6 +53,19 @@ pub struct ElfInfo {
     /// ELF object type (`e_type`): `ET_DYN` for a shared object or a PIE, `ET_EXEC` for a
     /// fixed-address executable, `ET_CORE` for a core dump.
     pub e_type: u16,
+    /// Set when the object defines both `__libc_start_main` and `stdin`, the two symbols musl's
+    /// loader takes as the mark of a C library: `Glibc` when it also defines a `GLIBC_` symbol
+    /// version, `Musl` otherwise. musl loads its own libc in place of any such file.
+    pub libc: Option<Libc>,
+}
+
+/// A C library, as the musl backend tells one from another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Libc {
+    /// GNU libc.
+    Glibc,
+    /// musl libc.
+    Musl,
 }
 
 impl ElfInfo {
@@ -130,7 +143,30 @@ pub fn parse_elf_info(bytes: &[u8]) -> Result<ElfInfo> {
         machine: elf.header.e_machine,
         uses_dlopen: references_dlopen(&elf),
         e_type: elf.header.e_type,
+        libc: libc_kind(&elf),
     })
+}
+
+// musl's loader refuses a second libc by these two symbols, both defined (`dynlink.c`,
+// `load_library`). glibc's libc defines versions named `GLIBC_*`, and musl's defines none.
+fn libc_kind(elf: &goblin::elf::Elf) -> Option<Libc> {
+    let defines = |want: &str| {
+        elf.dynsyms.iter().any(|sym| {
+            sym.st_shndx != goblin::elf::section_header::SHN_UNDEF as usize
+                && elf.dynstrtab.get_at(sym.st_name) == Some(want)
+        })
+    };
+    if !(defines("__libc_start_main") && defines("stdin")) {
+        return None;
+    }
+    let glibc = elf
+        .verdef
+        .iter()
+        .flat_map(|section| section.iter())
+        .filter_map(|def| def.iter().next())
+        .filter_map(|aux| elf.dynstrtab.get_at(aux.vda_name))
+        .any(|name| name.starts_with("GLIBC_"));
+    Some(if glibc { Libc::Glibc } else { Libc::Musl })
 }
 
 // A binary that calls dlopen imports the symbol, so finding it among the dynamic symbols
@@ -288,6 +324,9 @@ pub struct Resolution {
     /// load, one line each. It is the only copy found, or the binary names it by path. `pack`
     /// prints them with `print_notes`, and stages the library as it did before.
     pub arch_warnings: Vec<String>,
+    /// Set when the binary loads through musl's loader: what its search path needs in the
+    /// image. `None` for a glibc binary.
+    pub musl: Option<MuslSearch>,
 }
 
 impl Resolution {
@@ -468,6 +507,11 @@ pub fn resolve_with(
     // the binary's own DT_NEEDED, so the count of those tells the two apart below.
     let declared_needed = root_info.needed.len();
     root_info.needed.extend(includes.iter().cloned());
+    // musl's loader searches by other rules (decision-043, D1), so a musl binary takes the
+    // musl walk and none of what follows.
+    if root_info.is_musl() {
+        return resolve_musl(&root_path, &root_info, declared_needed, sysroot, source);
+    }
     let libs = lib_values(sysroot, &root_info, source);
 
     let mut resolution = Resolution::default();
@@ -477,62 +521,18 @@ pub fn resolve_with(
     // The loader is named by PT_INTERP, not DT_NEEDED, so resolve it separately.
     // Keep the verbatim PT_INTERP path (where it must live) alongside the real file.
     if let Some(interp) = &root_info.interpreter {
-        let loader = reroot(&sysroot.root, Path::new(interp));
-        if loader.exists() {
-            // PT_INTERP is a string out of the packed binary and can name any host file, which
-            // would then ship in the image. Stage only a regular file that starts like an ELF.
-            // `is_file` goes first, so a FIFO is never opened and cannot block the read.
-            if !loader.is_file() || !has_elf_magic(&loader) {
-                bail!(
-                    "the program interpreter (PT_INTERP) `{}` is not an ELF file: {}. Refusing \
-                     it, because that path can name any host file. Rebuild the binary with a \
-                     real loader path.",
-                    escape_for_display(interp),
-                    printable(&canonical(&loader))
-                );
-            }
-            // The kernel loads an ET_DYN or an ET_EXEC interpreter. An ELF of another type (a
-            // core dump holds a process's memory) is a host file the binary picked.
-            // A corrupt loader fails here, before the walk, so the error is the same whether or
-            // not a library lists it as DT_NEEDED.
-            let parsed = source.read(&canonical(&loader)).with_context(|| {
-                format!(
-                    "the program interpreter (PT_INTERP) `{}`",
-                    escape_for_display(interp)
-                )
-            })?;
-            if let Some(info) = &parsed {
-                if info.e_type != goblin::elf::header::ET_DYN
-                    && info.e_type != goblin::elf::header::ET_EXEC
-                {
-                    bail!(
-                        "the program interpreter (PT_INTERP) `{}` is {}, which the kernel cannot \
-                         load as an interpreter: {}. Refusing it, because that path can name \
-                         any host file. Rebuild the binary with a real loader path.",
-                        escape_for_display(interp),
-                        elf_type_name(info.e_type),
-                        printable(&canonical(&loader))
-                    );
+        match find_loader(sysroot, interp, &root_path, source)? {
+            Some((loader, parsed)) => {
+                loader_names.push((interp.clone(), loader.clone()));
+                if let Some(name) = parsed.and_then(|info| info.soname) {
+                    loader_names.push((name, loader.clone()));
                 }
+                resolution.interpreter = Some(ResolvedInterp {
+                    image_path: PathBuf::from(interp),
+                    source: loader,
+                });
             }
-            loader_names.push((interp.clone(), canonical(&loader)));
-            if let Some(name) = parsed.and_then(|info| info.soname) {
-                loader_names.push((name, canonical(&loader)));
-            }
-            crate::verbose::line(|| {
-                format!(
-                    "{} loads through the interpreter {interp}, found at {}",
-                    root_path.display(),
-                    canonical(&loader).display()
-                )
-            });
-            resolution.interpreter = Some(ResolvedInterp {
-                image_path: PathBuf::from(interp),
-                source: canonical(&loader),
-            });
-        } else {
-            crate::verbose::line(|| format!("the interpreter {interp} is not in the sysroot"));
-            resolution.missing.push(interp.clone());
+            None => resolution.missing.push(interp.clone()),
         }
     }
     crate::verbose::line(|| {
@@ -975,6 +975,511 @@ pub fn resolve_with(
         .collect();
     resolution.notes.extend(cpu_notes);
     Ok(resolution)
+}
+
+// ---------------------------------------------------------------------------
+// Emulate the musl loader's search (musl 1.2.5, `ldso/dynlink.c`). Chosen only when the
+// binary's PT_INTERP is musl's loader, so the glibc walk above runs as before.
+// ---------------------------------------------------------------------------
+
+/// The system search path musl uses when its path file does not exist (`dynlink.c`, `load_library`).
+pub const MUSL_DEFAULT_DIRS: [&str; 3] = ["/lib", "/usr/local/lib", "/usr/lib"];
+
+/// What a musl binary's search needs in the image, beyond the files that are staged.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MuslSearch {
+    /// Where the loader reads its system search path, as an image path, such as
+    /// `/etc/ld-musl-x86_64.path`.
+    pub path_file: PathBuf,
+    /// The image directory of each staged library that the system search path found, in the
+    /// order found. A library found through the binary's own search path is not listed,
+    /// because that search path works in the image as it is.
+    pub system_dirs: Vec<PathBuf>,
+}
+
+/// The entries of a musl search path file, such as `/etc/ld-musl-x86_64.path`, in order. musl
+/// reads the file as one C string, so it ends at the first NUL, and splits it on `:` and on
+/// newlines, skipping empty entries (`path_open`). The bytes come from the host and are not
+/// trusted: any input gives a list, never a panic.
+pub fn parse_musl_path_file(bytes: &[u8]) -> Vec<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let text = bytes.split(|&b| b == 0).next().unwrap_or_default();
+    text.split(|&b| b == b':' || b == b'\n')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| PathBuf::from(std::ffi::OsStr::from_bytes(entry)))
+        .collect()
+}
+
+// The `<ARCH>` of a loader named `ld-musl-<ARCH>.so.1`, from its last path part.
+fn musl_arch(interp: &str) -> Option<&str> {
+    let name = interp.rsplit('/').next()?;
+    let arch = name.strip_prefix("ld-musl-")?.strip_suffix(".so.1")?;
+    (!arch.is_empty()).then_some(arch)
+}
+
+// Where musl reads its path file: `<prefix>/etc/ld-musl-<ARCH>.path`. The prefix is PT_INTERP
+// up to its second-to-last `/`, so `/lib/ld-musl-x86_64.so.1` and `/ld-musl-x86_64.so.1` give
+// none, `/opt/musl/lib/ld-musl-x86_64.so.1` gives `/opt/musl`, and a relative PT_INTERP gives
+// none. Measured with musl 1.2.5 on Alpine 3.21.
+fn musl_path_file(interp: &str, arch: &str) -> PathBuf {
+    let prefix = match interp.starts_with('/') {
+        true => {
+            let slashes: Vec<usize> = interp.match_indices('/').map(|(i, _)| i).collect();
+            let cut = slashes.len().checked_sub(2).map_or(0, |i| slashes[i]);
+            &interp[..cut]
+        }
+        false => "",
+    };
+    PathBuf::from(format!("{prefix}/etc/ld-musl-{arch}.path"))
+}
+
+// The system search path, as image dirs. A missing path file gives musl's defaults. A file that
+// exists and cannot be read as a regular file gives nothing, as musl then searches nothing. A
+// relative entry names a directory under the program's working directory, which cannot be known
+// here, so it is left out.
+fn musl_system_dirs(root: &Path, path_file: &Path) -> Vec<PathBuf> {
+    let host = reroot(root, path_file);
+    let entries = match std::fs::metadata(&host) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            crate::verbose::line(|| {
+                format!(
+                    "{} does not exist, so musl searches {}",
+                    path_file.display(),
+                    MUSL_DEFAULT_DIRS.join(", ")
+                )
+            });
+            return MUSL_DEFAULT_DIRS.iter().map(PathBuf::from).collect();
+        }
+        Ok(meta) if meta.is_file() => match std::fs::read(&host) {
+            Ok(bytes) => parse_musl_path_file(&bytes),
+            Err(_) => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
+    let dirs: Vec<PathBuf> = entries.into_iter().filter(|d| d.is_absolute()).collect();
+    crate::verbose::line(|| {
+        format!(
+            "{} lists the system dirs {}",
+            path_file.display(),
+            dirs_for_display(&dirs)
+        )
+    });
+    dirs
+}
+
+// A `DT_NEEDED` name that musl's loader answers itself, with no search: `lib` and then `c.`,
+// `pthread.`, `rt.`, `m.`, `dl.`, `util.` or `xnet.` (`load_library`, its reserved list).
+// `libcrypt.so.1` is not one.
+fn musl_reserved(name: &str) -> bool {
+    const RESERVED: [&str; 7] = ["c.", "pthread.", "rt.", "m.", "dl.", "util.", "xnet."];
+    name.strip_prefix("lib")
+        .is_some_and(|rest| RESERVED.iter().any(|r| rest.starts_with(r)))
+}
+
+// One object's search path, as musl builds it (`fixup_rpath`): RUNPATH when the object has one,
+// else RPATH, the last tag of that kind. `$ORIGIN` and `${ORIGIN}` are expanded with the
+// directory of the path the object was opened at. Any other `$` drops the whole string, and
+// that earns a note. The result splits on `:` and newlines, and each absolute entry is
+// rerooted. A relative one is under the working directory, which cannot be known, so it is
+// left out.
+fn musl_object_dirs(
+    obj: &ElfInfo,
+    obj_path: &Path,
+    origin_dir: &Path,
+    root: &Path,
+    notes: &mut Vec<String>,
+) -> Vec<PathBuf> {
+    let Some(raw) = obj.runpaths.last().or(obj.rpaths.last()) else {
+        return Vec::new();
+    };
+    // One left-to-right pass, as musl's `fixup_rpath` does, so a `$ORIGIN` inside the origin
+    // directory itself is copied, not expanded again.
+    let origin = origin_dir.to_string_lossy();
+    let mut expanded = String::with_capacity(raw.len());
+    let mut rest = raw.as_str();
+    while let Some(at) = rest.find('$') {
+        expanded.push_str(&rest[..at]);
+        let token = &rest[at..];
+        let skip = if token.starts_with("${ORIGIN}") {
+            "${ORIGIN}".len()
+        } else if token.starts_with("$ORIGIN") {
+            "$ORIGIN".len()
+        } else {
+            push_unique(
+                notes,
+                format!(
+                    "musl ignores the search path \"{}\" in {}, because it holds {}. Only \
+                     $ORIGIN is expanded.",
+                    escape_for_display(raw),
+                    printable(obj_path),
+                    escape_for_display(dollar_token(token))
+                ),
+            );
+            return Vec::new();
+        };
+        expanded.push_str(&origin);
+        rest = &token[skip..];
+    }
+    expanded.push_str(rest);
+    parse_musl_path_file(expanded.as_bytes())
+        .into_iter()
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| reroot(root, &dir))
+        .collect()
+}
+
+// The `$` token at the start of `text`, for a note: `${...}` through its brace, else `$` and the
+// name characters after it.
+fn dollar_token(text: &str) -> &str {
+    if text.starts_with("${") {
+        return text.find('}').map_or(text, |end| &text[..=end]);
+    }
+    let end = text[1..]
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .map_or(text.len(), |i| i + 1);
+    &text[..end]
+}
+
+// The device and inode of a file, which musl compares to tell a loaded object from a new one.
+fn file_id(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
+}
+
+// Resolve a musl binary the way musl's loader does. `root_info.needed` already holds the
+// --include entries after its first `declared_needed` names.
+fn resolve_musl(
+    root_path: &Path,
+    root_info: &ElfInfo,
+    declared_needed: usize,
+    sysroot: &Sysroot,
+    source: &dyn LinkInfoSource,
+) -> Result<Resolution> {
+    let interp = root_info.interpreter.as_deref().unwrap_or_default();
+    let Some(arch) = musl_arch(interp) else {
+        bail!(
+            "{} uses musl through the loader {}, which does not have the form \
+             ld-musl-<arch>.so.1, so the search path file cannot be named.",
+            printable(root_path),
+            escape_for_display(interp)
+        );
+    };
+    if arch != "x86_64" {
+        bail!(
+            "{} uses musl on {}. v2.3 packs x86_64 musl binaries only.",
+            printable(root_path),
+            escape_for_display(arch)
+        );
+    }
+    if !root_info.is_64 || root_info.machine != goblin::elf::header::EM_X86_64 {
+        bail!(
+            "{} uses musl on {}. v2.3 packs x86_64 musl binaries only.",
+            printable(root_path),
+            arch_label(root_info.is_64, root_info.machine)
+        );
+    }
+
+    let mut resolution = Resolution::default();
+    let path_file = musl_path_file(interp, arch);
+    // Each system dir as the image names it, and as it sits under the sysroot.
+    let system: Vec<(PathBuf, PathBuf)> = musl_system_dirs(&sysroot.root, &path_file)
+        .into_iter()
+        .map(|dir| (reroot(&sysroot.root, &dir), dir))
+        .collect();
+    let mut search = MuslSearch {
+        path_file,
+        system_dirs: Vec::new(),
+    };
+
+    let loader = find_loader(sysroot, interp, root_path, source)?.map(|(real, _)| real);
+    match &loader {
+        Some(real) => {
+            resolution.interpreter = Some(ResolvedInterp {
+                image_path: PathBuf::from(interp),
+                source: real.clone(),
+            });
+        }
+        None => resolution.missing.push(interp.to_owned()),
+    }
+
+    let mut visited = HashSet::new();
+    // Real paths of musl libc copies, which load as the loader (rule 8).
+    let mut libc_copies: HashSet<PathBuf> = HashSet::new();
+    visited.insert(root_path.to_path_buf());
+    // The names a loaded object answers to: the last path part a search found it at (musl's
+    // `shortname`), never DT_SONAME. And each loaded file by device and inode.
+    let mut by_name: HashMap<String, PathBuf> = HashMap::new();
+    let mut by_file: HashMap<(u64, u64), PathBuf> = HashMap::new();
+    if let Some(real) = &loader {
+        visited.insert(real.clone());
+        if let Some(id) = file_id(real) {
+            by_file.insert(id, real.clone());
+        }
+    }
+
+    // Fields: the real path, where it was opened (its `$ORIGIN`), its ELF info, the search
+    // path of each object above it up to the program (musl's `needed_by` chain), the count of
+    // its own DT_NEEDED entries, and whether it loads at program start.
+    let mut queue = VecDeque::new();
+    queue.push_back((
+        root_path.to_path_buf(),
+        root_path.to_path_buf(),
+        root_info.clone(),
+        Vec::<PathBuf>::new(),
+        declared_needed,
+        true,
+    ));
+    while let Some((obj_path, found_at, obj, inherited, declared, at_start)) = queue.pop_front() {
+        let obj_dir = obj_path.parent().unwrap_or(Path::new("/"));
+        let origin_dir = found_at.parent().unwrap_or(Path::new("/"));
+        let mut own = musl_object_dirs(
+            &obj,
+            &obj_path,
+            origin_dir,
+            &sysroot.root,
+            &mut resolution.notes,
+        );
+        own.extend(inherited.iter().cloned());
+        if !obj.needed.is_empty() {
+            crate::verbose::line(|| {
+                format!(
+                    "{} searches {} before the system dirs",
+                    obj_path.display(),
+                    if own.is_empty() {
+                        "nothing".to_owned()
+                    } else {
+                        dirs_for_display(&own)
+                    }
+                )
+            });
+        }
+        for (i, name) in obj.needed.iter().enumerate() {
+            let edge = |to: Option<PathBuf>| DepEdge {
+                from: obj_path.clone(),
+                soname: name.clone(),
+                to,
+            };
+            if musl_reserved(name) || name == interp {
+                crate::verbose::line(|| {
+                    format!("{} needs `{name}`: the loader itself", obj_path.display())
+                });
+                resolution.edges.push(edge(loader.clone()));
+                continue;
+            }
+            let bare = !name.contains('/');
+            if let Some(real) = by_name.get(name).filter(|_| bare) {
+                crate::verbose::line(|| {
+                    format!(
+                        "{} needs `{name}`: {}, already loaded",
+                        obj_path.display(),
+                        real.display()
+                    )
+                });
+                resolution.edges.push(edge(Some(real.clone())));
+                continue;
+            }
+            // musl opens the first file of that name and does not skip one of another class or
+            // machine: it fails to load it instead. Measured with musl 1.2.5 on Alpine 3.21.
+            let own_hit = find_lib(name, &own, obj_dir, &sysroot.root);
+            let system_hit = match (&own_hit, bare) {
+                (None, true) => system
+                    .iter()
+                    .map(|(host, image)| (host.join(name), image))
+                    .find(|(candidate, _)| candidate.exists()),
+                _ => None,
+            };
+            let Some(found) = own_hit.or_else(|| system_hit.as_ref().map(|(c, _)| c.clone()))
+            else {
+                crate::verbose::line(|| {
+                    format!("{} needs `{name}`: not found", obj_path.display())
+                });
+                push_unique(&mut resolution.missing, name.clone());
+                resolution.edges.push(edge(None));
+                continue;
+            };
+            let real = canonical(&found);
+            let loads_at_start = at_start && i < declared;
+            // A file already loaded under another name is that object (rule 7).
+            if let Some(loaded) = file_id(&real).and_then(|id| by_file.get(&id)).cloned() {
+                if bare && loads_at_start {
+                    by_name
+                        .entry(name.clone())
+                        .or_insert_with(|| loaded.clone());
+                }
+                resolution.edges.push(edge(Some(loaded)));
+                continue;
+            }
+            if !visited.insert(real.clone()) {
+                // A musl libc copy is never staged, so a later request for it is the loader too.
+                let to = if libc_copies.contains(&real) {
+                    loader.clone()
+                } else {
+                    Some(real)
+                };
+                resolution.edges.push(edge(to));
+                continue;
+            }
+            // The name came out of an ELF. Refuse a file that is not a regular one before the
+            // read opens it, as the glibc walk does.
+            if i < declared && std::fs::metadata(&real).is_ok_and(|meta| !meta.is_file()) {
+                bail!(
+                    "{} needs `{}`, which resolved to {}, and that is not a regular file. \
+                     Refusing it, because that name can point at any host file. Rebuild the \
+                     binary so it names a real library.",
+                    printable(&obj_path),
+                    escape_for_display(name),
+                    printable(&real)
+                );
+            }
+            let child = source.read(&real)?;
+            match child.as_ref().and_then(|c| c.libc) {
+                // musl loads its own libc in place of any file that looks like a libc (rule 8),
+                // so a glibc one means the dependency was built against glibc.
+                Some(Libc::Glibc) => bail!(
+                    "{} is a glibc libc, and {} uses musl. musl loads its own libc in its place. \
+                     Build the dependency against musl.",
+                    printable(&real),
+                    printable(root_path)
+                ),
+                Some(Libc::Musl) => {
+                    libc_copies.insert(real);
+                    resolution.edges.push(edge(loader.clone()));
+                    continue;
+                }
+                None => {}
+            }
+            match &child {
+                Some(c) if i < declared && c.e_type != goblin::elf::header::ET_DYN => bail!(
+                    "{} needs `{}`, which resolved to {}, and that file is {}, not a shared \
+                     object. Refusing it, because that name can point at any host file. Rebuild \
+                     the binary so it names a real library.",
+                    printable(&obj_path),
+                    escape_for_display(name),
+                    printable(&real),
+                    elf_type_name(c.e_type)
+                ),
+                None if i < declared => bail!(
+                    "{} needs `{}`, which resolved to {}, and that file is not an ELF. \
+                     Refusing it, because that name can point at any host file. Rebuild the \
+                     binary so it names a real library.",
+                    printable(&obj_path),
+                    escape_for_display(name),
+                    printable(&real)
+                ),
+                _ => {}
+            }
+            if !arch_fits(source, &found, root_info) {
+                let effect = if i < declared {
+                    "the image cannot start"
+                } else {
+                    "the program cannot open it"
+                };
+                push_unique(
+                    &mut resolution.arch_warnings,
+                    format!(
+                        "`{}` resolved to {}, the first file of that name on the search path, \
+                         which is a {} library. {} is {}, so musl will not load it and {effect}. \
+                         Put a {4} copy first on the search path.",
+                        name.escape_debug(),
+                        printable(&found),
+                        arch_of(source, &found),
+                        printable(root_path),
+                        arch_label(root_info.is_64, root_info.machine),
+                    ),
+                );
+            }
+            crate::verbose::line(|| {
+                format!("{} needs `{name}`: {}", obj_path.display(), real.display())
+            });
+            if loads_at_start {
+                if bare {
+                    by_name.entry(name.clone()).or_insert_with(|| real.clone());
+                }
+                if let Some(id) = file_id(&real) {
+                    by_file.entry(id).or_insert_with(|| real.clone());
+                }
+            }
+            if let Some((_, image)) = &system_hit {
+                if !search.system_dirs.contains(image) {
+                    search.system_dirs.push((*image).clone());
+                }
+            }
+            resolution.edges.push(edge(Some(real.clone())));
+            resolution.libs.push(ResolvedLib {
+                soname: name.clone(),
+                path: real.clone(),
+            });
+            if let Some(child) = child {
+                let found_at = if found.is_absolute() {
+                    found
+                } else {
+                    real.clone()
+                };
+                let declared = child.needed.len();
+                queue.push_back((real, found_at, child, own.clone(), declared, loads_at_start));
+            }
+        }
+    }
+    resolution.musl = Some(search);
+    Ok(resolution)
+}
+
+// The loader that PT_INTERP names, with its parsed facts, or `None` when the sysroot lacks it.
+// Both backends stage it, so both refuse the same files here.
+fn find_loader(
+    sysroot: &Sysroot,
+    interp: &str,
+    root_path: &Path,
+    source: &dyn LinkInfoSource,
+) -> Result<Option<(PathBuf, Option<ElfInfo>)>> {
+    let loader = reroot(&sysroot.root, Path::new(interp));
+    if !loader.exists() {
+        crate::verbose::line(|| format!("the interpreter {interp} is not in the sysroot"));
+        return Ok(None);
+    }
+    // PT_INTERP is a string out of the packed binary and can name any host file, which
+    // would then ship in the image. Stage only a regular file that starts like an ELF.
+    // `is_file` goes first, so a FIFO is never opened and cannot block the read.
+    if !loader.is_file() || !has_elf_magic(&loader) {
+        bail!(
+            "the program interpreter (PT_INTERP) `{}` is not an ELF file: {}. Refusing \
+                 it, because that path can name any host file. Rebuild the binary with a \
+                 real loader path.",
+            escape_for_display(interp),
+            printable(&canonical(&loader))
+        );
+    }
+    // The kernel loads an ET_DYN or an ET_EXEC interpreter. An ELF of another type (a
+    // core dump holds a process's memory) is a host file the binary picked.
+    // A corrupt loader fails here, before the walk, so the error is the same whether or
+    // not a library lists it as DT_NEEDED.
+    let parsed = source.read(&canonical(&loader)).with_context(|| {
+        format!(
+            "the program interpreter (PT_INTERP) `{}`",
+            escape_for_display(interp)
+        )
+    })?;
+    if let Some(info) = &parsed {
+        if info.e_type != goblin::elf::header::ET_DYN && info.e_type != goblin::elf::header::ET_EXEC
+        {
+            bail!(
+                "the program interpreter (PT_INTERP) `{}` is {}, which the kernel cannot \
+                     load as an interpreter: {}. Refusing it, because that path can name \
+                     any host file. Rebuild the binary with a real loader path.",
+                escape_for_display(interp),
+                elf_type_name(info.e_type),
+                printable(&canonical(&loader))
+            );
+        }
+    }
+    crate::verbose::line(|| {
+        format!(
+            "{} loads through the interpreter {interp}, found at {}",
+            root_path.display(),
+            canonical(&loader).display()
+        )
+    });
+    Ok(Some((canonical(&loader), parsed)))
 }
 
 // A search-path entry that this resolver searches but ld.so does not. Decision-019 keeps the
@@ -1756,6 +2261,7 @@ mod tests {
             machine: goblin::elf::header::EM_X86_64,
             uses_dlopen: false,
             e_type: goblin::elf::header::ET_DYN,
+            libc: None,
         }
     }
 
@@ -1790,6 +2296,7 @@ mod tests {
             machine: goblin::elf::header::EM_X86_64,
             uses_dlopen: false,
             e_type: goblin::elf::header::ET_DYN,
+            libc: None,
         };
         assert_eq!(elf.rpaths, vec!["/opt/rpath".to_string()]);
         assert_eq!(elf.runpaths, vec!["/opt/runpath".to_string()]);
@@ -1905,6 +2412,7 @@ mod tests {
             machine: goblin::elf::header::EM_X86_64,
             uses_dlopen: false,
             e_type: goblin::elf::header::ET_DYN,
+            libc: None,
         }
     }
 
@@ -4676,5 +5184,590 @@ mod tests {
             find_lib("./libx.so.1", &[], &libdir, Path::new("/")),
             Some(libdir.join("./libx.so.1"))
         );
+    }
+
+    // The musl walk (decision-043). The loader sits where Alpine puts it, with no path file, so
+    // the system dirs are musl's defaults unless a test writes one.
+    mod musl {
+        use super::*;
+
+        const LOADER: &str = "/lib/ld-musl-x86_64.so.1";
+
+        // A sysroot with the binary at `/app/exe` and the musl loader in place.
+        fn setup(root: &Path) -> PathBuf {
+            let exe = root.join("app/exe");
+            touch(&exe);
+            touch(&root.join(LOADER.trim_start_matches('/')));
+            exe
+        }
+
+        fn bin(needed: &[&str], rpaths: &[&str], runpaths: &[&str]) -> ElfInfo {
+            elf(needed, rpaths, runpaths, Some(LOADER))
+        }
+
+        // Resolve, with every touched file that has no facts of its own scripted as a leaf.
+        fn resolve(exe: &Path, root: &Path, mut infos: HashMap<PathBuf, ElfInfo>) -> Resolution {
+            fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+                for entry in fs::read_dir(dir).unwrap().flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        walk(&path, out);
+                    } else if fs::read(&path).is_ok_and(|b| b.starts_with(b"\x7fELF")) {
+                        out.push(canonical(&path));
+                    }
+                }
+            }
+            let mut files = Vec::new();
+            walk(root, &mut files);
+            for file in files {
+                infos
+                    .entry(file)
+                    .or_insert_with(|| elf(&[], &[], &[], None));
+            }
+            resolve_with(exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap()
+        }
+
+        fn path_of(res: &Resolution, soname: &str) -> PathBuf {
+            res.libs
+                .iter()
+                .find(|l| l.soname == soname)
+                .unwrap_or_else(|| panic!("`{soname}` not staged: {:?}", res.libs))
+                .path
+                .clone()
+        }
+
+        #[test]
+        fn the_path_file_splits_on_colons_and_newlines_and_ends_at_a_nul() {
+            assert_eq!(
+                parse_musl_path_file(b"/lib/a:/usr/lib/b\n\n/opt/c::\nrel\0/after-nul"),
+                ["/lib/a", "/usr/lib/b", "/opt/c", "rel"].map(PathBuf::from)
+            );
+            assert!(parse_musl_path_file(b"").is_empty());
+            assert!(parse_musl_path_file(b":\n:").is_empty());
+            // A file name may hold any byte but NUL and `/`.
+            use std::os::unix::ffi::OsStrExt;
+            let odd = parse_musl_path_file(b"/x\xff");
+            assert_eq!(odd[0].as_os_str().as_bytes(), b"/x\xff");
+        }
+
+        #[test]
+        fn the_path_file_is_named_from_pt_interp_without_its_last_two_parts() {
+            let named = |interp: &str| musl_path_file(interp, musl_arch(interp).unwrap());
+            assert_eq!(
+                named("/lib/ld-musl-x86_64.so.1"),
+                Path::new("/etc/ld-musl-x86_64.path")
+            );
+            // Fewer than two parts, and a relative PT_INTERP, give no prefix. Both measured
+            // with musl 1.2.5 on Alpine 3.21.
+            assert_eq!(
+                named("/ld-musl-x86_64.so.1"),
+                Path::new("/etc/ld-musl-x86_64.path")
+            );
+            assert_eq!(
+                named("lib/ld-musl-x86_64.so.1"),
+                Path::new("/etc/ld-musl-x86_64.path")
+            );
+            assert_eq!(
+                named("/opt/musl/lib/ld-musl-x86_64.so.1"),
+                Path::new("/opt/musl/etc/ld-musl-x86_64.path")
+            );
+            assert_eq!(musl_arch("/lib/ld-musl-aarch64.so.1"), Some("aarch64"));
+            assert_eq!(musl_arch("/lib/libc.musl-x86_64.so.1"), None);
+            assert_eq!(musl_arch("/lib/ld-musl-.so.1"), None);
+        }
+
+        #[test]
+        fn a_missing_path_file_gives_the_defaults_and_an_empty_one_gives_nothing() {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let file = Path::new("/etc/ld-musl-x86_64.path");
+            assert_eq!(
+                musl_system_dirs(root, file),
+                MUSL_DEFAULT_DIRS.map(PathBuf::from)
+            );
+            fs::create_dir_all(root.join("etc")).unwrap();
+            fs::write(root.join("etc/ld-musl-x86_64.path"), b"").unwrap();
+            assert!(musl_system_dirs(root, file).is_empty());
+            // Relative entries are under the working directory, which a pack cannot know.
+            fs::write(root.join("etc/ld-musl-x86_64.path"), b"lib\n/usr/lib/x\n").unwrap();
+            assert_eq!(musl_system_dirs(root, file), [PathBuf::from("/usr/lib/x")]);
+            // A path file that is not a regular file cannot be read, and musl searches nothing.
+            fs::remove_file(root.join("etc/ld-musl-x86_64.path")).unwrap();
+            fs::create_dir(root.join("etc/ld-musl-x86_64.path")).unwrap();
+            assert!(musl_system_dirs(root, file).is_empty());
+        }
+
+        #[test]
+        fn the_reserved_libc_names_are_the_loader_and_are_not_searched() {
+            for name in [
+                "libc.so",
+                "libc.musl-x86_64.so.1",
+                "libm.so",
+                "libpthread.so.0",
+                "libc.so.6",
+                "libdl.so.2",
+                "libutil.so.1",
+                "libxnet.so",
+                "librt.so.1",
+            ] {
+                assert!(musl_reserved(name), "{name}");
+            }
+            for name in [
+                "libcrypt.so.1",
+                "libz.so.1",
+                "libmagic.so.1",
+                "c.so",
+                "libc",
+            ] {
+                assert!(!musl_reserved(name), "{name}");
+            }
+
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let exe = setup(root);
+            // A file of a reserved name on the search path is never reached. A glibc linker
+            // script named libc.so is what Debian has there.
+            fs::create_dir_all(root.join("usr/lib")).unwrap();
+            fs::write(root.join("usr/lib/libc.so"), b"/* GNU ld script */").unwrap();
+            touch(&root.join("lib/libcrypt.so.1"));
+            let infos = HashMap::from([(
+                canonical(&exe),
+                bin(&["libc.so", "libm.so", "libcrypt.so.1", LOADER], &[], &[]),
+            )]);
+            let res = resolve(&exe, root, infos);
+            let loader = canonical(&root.join(LOADER.trim_start_matches('/')));
+            assert_eq!(res.libs.len(), 1, "{:?}", res.libs);
+            assert_eq!(
+                path_of(&res, "libcrypt.so.1"),
+                canonical(&root.join("lib/libcrypt.so.1"))
+            );
+            for name in ["libc.so", "libm.so", LOADER] {
+                let edge = res.edges.iter().find(|e| e.soname == name).unwrap();
+                assert_eq!(edge.to.as_deref(), Some(loader.as_path()), "{name}");
+            }
+            assert!(res.missing.is_empty(), "{:?}", res.missing);
+            assert_eq!(
+                res.interpreter.as_ref().map(|i| i.image_path.clone()),
+                Some(PathBuf::from(LOADER))
+            );
+        }
+
+        #[test]
+        fn runpath_wins_over_rpath_and_is_inherited_by_every_dependency_below() {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let exe = setup(root);
+            touch(&root.join("opt/run/liba.so.1"));
+            touch(&root.join("opt/rpath/liba.so.1"));
+            // libb is needed two levels down, by liba's own child, and only the program's
+            // RUNPATH reaches it. glibc would not search it there.
+            touch(&root.join("opt/run/libb.so.1"));
+            touch(&root.join("opt/mid/libmid.so.1"));
+            let mut infos = HashMap::from([(
+                canonical(&exe),
+                bin(&["liba.so.1"], &["/opt/rpath"], &["/opt/run"]),
+            )]);
+            infos.insert(
+                canonical(&root.join("opt/run/liba.so.1")),
+                elf(&["libmid.so.1"], &[], &["/opt/mid"], None),
+            );
+            infos.insert(
+                canonical(&root.join("opt/mid/libmid.so.1")),
+                elf(&["libb.so.1"], &[], &[], None),
+            );
+            let res = resolve(&exe, root, infos);
+            assert_eq!(
+                path_of(&res, "liba.so.1"),
+                canonical(&root.join("opt/run/liba.so.1"))
+            );
+            assert_eq!(
+                path_of(&res, "libb.so.1"),
+                canonical(&root.join("opt/run/libb.so.1"))
+            );
+            assert!(res.missing.is_empty(), "{:?}", res.missing);
+            // Nothing came from the system dirs, so the image needs no path file entry.
+            assert!(res.musl.unwrap().system_dirs.is_empty());
+        }
+
+        #[test]
+        fn origin_expands_and_any_other_token_drops_the_whole_search_path() {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let exe = setup(root);
+            touch(&root.join("app/libs/liba.so.1"));
+            touch(&root.join("app/more/libb.so.1"));
+            touch(&root.join("app/x86_64/libc2.so.1"));
+            let infos = HashMap::from([(
+                canonical(&exe),
+                bin(
+                    &["liba.so.1", "libb.so.1"],
+                    &[],
+                    &["$ORIGIN/libs:${ORIGIN}/more"],
+                ),
+            )]);
+            let res = resolve(&exe, root, infos);
+            assert!(
+                has(&res, "liba.so.1") && has(&res, "libb.so.1"),
+                "{:?}",
+                res.libs
+            );
+            assert!(res.notes.is_empty(), "{:?}", res.notes);
+
+            // `$PLATFORM` is not expanded, so the `$ORIGIN` entry beside it is dropped too.
+            let infos = HashMap::from([(
+                canonical(&exe),
+                bin(&["liba.so.1"], &[], &["$ORIGIN/libs:/x/$PLATFORM\n"]),
+            )]);
+            let res = resolve(&exe, root, infos);
+            assert_eq!(res.missing, ["liba.so.1"]);
+            assert_eq!(
+                res.notes,
+                [format!(
+                    "musl ignores the search path \"$ORIGIN/libs:/x/$PLATFORM\\n\" in {}, \
+                     because it holds $PLATFORM. Only $ORIGIN is expanded.",
+                    canonical(&exe).display()
+                )]
+            );
+            assert_eq!(dollar_token("${LIB}/x"), "${LIB}");
+            assert_eq!(dollar_token("$LIB/x"), "$LIB");
+            assert_eq!(dollar_token("$"), "$");
+        }
+
+        // musl expands in one pass, so a `$ORIGIN` in the origin directory itself stays as is.
+        #[test]
+        fn origin_expands_in_one_pass() {
+            let obj = bin(&[], &[], &["$ORIGIN/a:${ORIGIN}x:/b"]);
+            let mut notes = Vec::new();
+            let dirs = musl_object_dirs(
+                &obj,
+                Path::new("/srv/$ORIGIN/exe"),
+                Path::new("/srv/$ORIGIN"),
+                Path::new("/"),
+                &mut notes,
+            );
+            assert!(notes.is_empty(), "{notes:?}");
+            assert_eq!(
+                dirs,
+                [
+                    PathBuf::from("/srv/$ORIGIN/a"),
+                    PathBuf::from("/srv/$ORIGINx"),
+                    PathBuf::from("/b"),
+                ]
+            );
+        }
+
+        #[test]
+        fn the_path_file_sets_the_system_dirs_and_records_the_ones_used() {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let exe = setup(root);
+            fs::create_dir_all(root.join("etc")).unwrap();
+            fs::write(
+                root.join("etc/ld-musl-x86_64.path"),
+                b"/usr/lib/x86_64-linux-musl\n/opt/sys\n",
+            )
+            .unwrap();
+            touch(&root.join("opt/sys/libz.so.1"));
+            touch(&root.join("app/libs/libown.so.1"));
+            // On the default list, which the path file replaces.
+            touch(&root.join("usr/lib/libgone.so.1"));
+            let infos = HashMap::from([(
+                canonical(&exe),
+                bin(
+                    &["libz.so.1", "libown.so.1", "libgone.so.1"],
+                    &[],
+                    &["$ORIGIN/libs"],
+                ),
+            )]);
+            let res = resolve(&exe, root, infos);
+            assert_eq!(
+                path_of(&res, "libz.so.1"),
+                canonical(&root.join("opt/sys/libz.so.1"))
+            );
+            assert_eq!(res.missing, ["libgone.so.1"]);
+            let musl = res.musl.unwrap();
+            assert_eq!(musl.path_file, Path::new("/etc/ld-musl-x86_64.path"));
+            assert_eq!(musl.system_dirs, [PathBuf::from("/opt/sys")]);
+        }
+
+        #[test]
+        fn a_loader_under_a_prefix_reads_the_path_file_under_that_prefix() {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let exe = root.join("app/exe");
+            touch(&exe);
+            let loader = "/opt/musl/lib/ld-musl-x86_64.so.1";
+            touch(&root.join(loader.trim_start_matches('/')));
+            fs::create_dir_all(root.join("opt/musl/etc")).unwrap();
+            fs::write(
+                root.join("opt/musl/etc/ld-musl-x86_64.path"),
+                b"/opt/musl/lib",
+            )
+            .unwrap();
+            touch(&root.join("opt/musl/lib/libz.so.1"));
+            let infos =
+                HashMap::from([(canonical(&exe), elf(&["libz.so.1"], &[], &[], Some(loader)))]);
+            let res = resolve(&exe, root, infos);
+            assert!(has(&res, "libz.so.1"), "{:?}", res.missing);
+            let musl = res.musl.unwrap();
+            assert_eq!(
+                musl.path_file,
+                Path::new("/opt/musl/etc/ld-musl-x86_64.path")
+            );
+            assert_eq!(musl.system_dirs, [PathBuf::from("/opt/musl/lib")]);
+        }
+
+        #[test]
+        fn a_loaded_file_name_is_not_searched_again_and_the_soname_is_never_read() {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let exe = setup(root);
+            touch(&root.join("app/libs/libz.so.1"));
+            touch(&root.join("lib/libz.so.1"));
+            touch(&root.join("lib/liba.so.1"));
+            touch(&root.join("lib/libalias.so"));
+            let mut infos = HashMap::from([(
+                canonical(&exe),
+                bin(&["libz.so.1", "liba.so.1"], &[], &["$ORIGIN/libs"]),
+            )]);
+            // liba has no search path that reaches app/libs, so only the loaded name finds
+            // that copy. Its DT_SONAME names another library, which musl never matches.
+            let mut z = elf(&[], &[], &[], None);
+            z.soname = Some("libalias.so".into());
+            infos.insert(canonical(&root.join("app/libs/libz.so.1")), z);
+            infos.insert(
+                canonical(&root.join("lib/liba.so.1")),
+                elf(&["libz.so.1", "libalias.so"], &[], &[], None),
+            );
+            let res = resolve(&exe, root, infos);
+            let z_edges: Vec<_> = res
+                .edges
+                .iter()
+                .filter(|e| e.soname == "libz.so.1")
+                .collect();
+            assert_eq!(z_edges.len(), 2);
+            assert!(z_edges
+                .iter()
+                .all(|e| e.to == Some(canonical(&root.join("app/libs/libz.so.1")))));
+            assert_eq!(
+                path_of(&res, "libalias.so"),
+                canonical(&root.join("lib/libalias.so"))
+            );
+        }
+
+        #[test]
+        fn the_same_file_under_two_names_is_one_object() {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let exe = setup(root);
+            touch(&root.join("lib/libz.so.1"));
+            fs::hard_link(root.join("lib/libz.so.1"), root.join("lib/libz-alias.so")).unwrap();
+            let infos = HashMap::from([(
+                canonical(&exe),
+                bin(&["libz.so.1", "libz-alias.so"], &[], &[]),
+            )]);
+            let res = resolve(&exe, root, infos);
+            assert_eq!(res.libs.len(), 1, "{:?}", res.libs);
+            let alias = res
+                .edges
+                .iter()
+                .find(|e| e.soname == "libz-alias.so")
+                .unwrap();
+            assert_eq!(alias.to, Some(canonical(&root.join("lib/libz.so.1"))));
+        }
+
+        #[test]
+        fn a_glibc_libc_fails_and_a_musl_libc_is_the_loader() {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let exe = setup(root);
+            touch(&root.join("lib/libg.so.6"));
+            let mut glibc = elf(&[], &[], &[], None);
+            glibc.libc = Some(Libc::Glibc);
+            let infos = HashMap::from([
+                (canonical(&exe), bin(&["libg.so.6"], &[], &[])),
+                (canonical(&root.join("lib/libg.so.6")), glibc),
+            ]);
+            let err = format!(
+                "{:#}",
+                resolve_with(&exe, &Sysroot::new(root), &[], &MapSource { infos }).unwrap_err()
+            );
+            assert_eq!(
+                err,
+                format!(
+                    "{} is a glibc libc, and {} uses musl. musl loads its own libc in its \
+                     place. Build the dependency against musl.",
+                    canonical(&root.join("lib/libg.so.6")).display(),
+                    canonical(&exe).display()
+                )
+            );
+
+            touch(&root.join("lib/libmuslcopy.so"));
+            let mut musl = elf(&["libnever.so.1"], &[], &[], None);
+            musl.libc = Some(Libc::Musl);
+            let infos = HashMap::from([
+                (
+                    canonical(&exe),
+                    bin(&["libmuslcopy.so", "libz.so.1"], &[], &[]),
+                ),
+                (canonical(&root.join("lib/libmuslcopy.so")), musl),
+                (
+                    canonical(&root.join("lib/libz.so.1")),
+                    elf(&["libmuslcopy.so"], &[], &[], None),
+                ),
+            ]);
+            touch(&root.join("lib/libz.so.1"));
+            let res = resolve(&exe, root, infos);
+            assert!(res.missing.is_empty(), "{res:?}");
+            assert_eq!(res.libs.len(), 1, "{res:?}");
+            // The second request, from libz, lands on the loader too, so no edge dangles.
+            let loader = Some(canonical(&root.join(LOADER.trim_start_matches('/'))));
+            let copy_edges: Vec<_> = res
+                .edges
+                .iter()
+                .filter(|e| e.soname == "libmuslcopy.so")
+                .collect();
+            assert_eq!(copy_edges.len(), 2, "{res:?}");
+            assert!(copy_edges.iter().all(|e| e.to == loader), "{res:?}");
+        }
+
+        #[test]
+        fn the_first_file_of_a_name_is_used_even_of_another_class() {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let exe = setup(root);
+            touch(&root.join("lib/libz.so.1"));
+            touch(&root.join("usr/lib/libz.so.1"));
+            let mut i386 = elf(&[], &[], &[], None);
+            i386.is_64 = false;
+            i386.machine = goblin::elf::header::EM_386;
+            let infos = HashMap::from([
+                (canonical(&exe), bin(&["libz.so.1"], &[], &[])),
+                (canonical(&root.join("lib/libz.so.1")), i386),
+            ]);
+            let res = resolve(&exe, root, infos);
+            // musl 1.2.5 opens the first file and fails on it, where glibc keeps searching.
+            assert_eq!(
+                path_of(&res, "libz.so.1"),
+                canonical(&root.join("lib/libz.so.1"))
+            );
+            assert_eq!(res.arch_warnings.len(), 1, "{:?}", res.arch_warnings);
+            assert!(
+                res.arch_warnings[0].contains("the first file of that name on the search path"),
+                "{:?}",
+                res.arch_warnings
+            );
+        }
+
+        #[test]
+        fn only_x86_64_musl_is_resolved() {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let exe = root.join("app/exe");
+            touch(&exe);
+            let err = |info: ElfInfo| {
+                let infos = HashMap::from([(canonical(&exe), info)]);
+                resolve_err(&exe, root, &[], &MapSource { infos })
+            };
+            let shown = canonical(&exe).display().to_string();
+            assert_eq!(
+                err(elf(&[], &[], &[], Some("/lib/ld-musl-aarch64.so.1"))),
+                format!("{shown} uses musl on aarch64. v2.3 packs x86_64 musl binaries only.")
+            );
+            assert_eq!(
+                err(elf(&[], &[], &[], Some("/lib/libc.musl-x86_64.so.1"))),
+                format!(
+                    "{shown} uses musl through the loader /lib/libc.musl-x86_64.so.1, which \
+                     does not have the form ld-musl-<arch>.so.1, so the search path file \
+                     cannot be named."
+                )
+            );
+            let mut arm = elf(&[], &[], &[], Some(LOADER));
+            arm.machine = goblin::elf::header::EM_AARCH64;
+            assert_eq!(
+                err(arm),
+                format!(
+                    "{shown} uses musl on 64-bit AARCH64. v2.3 packs x86_64 musl binaries only."
+                )
+            );
+        }
+
+        #[test]
+        fn a_missing_loader_is_missing_once_and_its_names_resolve_to_nothing() {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let exe = root.join("app/exe");
+            touch(&exe);
+            let infos =
+                HashMap::from([(canonical(&exe), bin(&["libc.musl-x86_64.so.1"], &[], &[]))]);
+            let res = resolve(&exe, root, infos);
+            assert_eq!(res.missing, [LOADER]);
+            assert_eq!(res.edges[0].to, None);
+            assert!(res.interpreter.is_none());
+        }
+
+        #[test]
+        fn a_needed_name_that_reaches_a_data_file_is_refused() {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let exe = setup(root);
+            let secret = secret(root);
+            let infos = HashMap::from([(
+                canonical(&exe),
+                bin(&["/home/user/.docker/config.json"], &[], &[]),
+            )]);
+            let err = resolve_err(&exe, root, &[], &MapSource { infos });
+            assert!(
+                err.contains("that file is not an ELF")
+                    && err.contains(&canonical(&secret).display().to_string()),
+                "{err}"
+            );
+            // The operator's --include may still name a data file, which stays a leaf.
+            let infos = HashMap::from([(canonical(&exe), bin(&[], &[], &[]))]);
+            let res = resolve_with(
+                &exe,
+                &Sysroot::new(root),
+                &["/home/user/.docker/config.json".to_string()],
+                &MapSource { infos },
+            )
+            .unwrap();
+            assert_eq!(res.libs.len(), 1);
+        }
+
+        #[test]
+        fn a_glibc_binary_carries_no_musl_facts() {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let exe = root.join("app/exe");
+            touch(&exe);
+            let infos = HashMap::from([(canonical(&exe), elf(&[], &[], &[], None))]);
+            assert_eq!(resolve(&exe, root, infos).musl, None);
+        }
+
+        #[test]
+        fn a_real_libc_is_told_apart_by_its_versions() {
+            let glibc = [
+                "/lib/x86_64-linux-gnu/libc.so.6",
+                "/lib64/libc.so.6",
+                "/usr/lib/libc.so.6",
+            ]
+            .into_iter()
+            .find(|p| Path::new(p).is_file());
+            let Some(glibc) = glibc else {
+                crate::test_support::skip_required("no glibc libc.so.6 on this host");
+                return;
+            };
+            assert_eq!(
+                read_elf_info(Path::new(glibc)).unwrap().libc,
+                Some(Libc::Glibc)
+            );
+            assert_eq!(read_elf_info(Path::new("/usr/bin/id")).unwrap().libc, None);
+            let musl = Path::new("/usr/lib/x86_64-linux-musl/libc.so");
+            if !musl.is_file() {
+                crate::test_support::skip_optional("musl-tools is not installed");
+                return;
+            }
+            assert_eq!(read_elf_info(musl).unwrap().libc, Some(Libc::Musl));
+        }
     }
 }
