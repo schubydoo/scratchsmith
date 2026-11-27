@@ -91,6 +91,9 @@ pub struct PackReport {
     /// while its libraries still ship. Recorded so a build can assert which loader shipped
     /// without unpacking the image.
     pub interpreter: Option<String>,
+    /// The C library the binary loads through: `glibc` or `musl`, from its `PT_INTERP`.
+    /// `None` exactly when `interpreter` is `None`.
+    pub libc: Option<crate::resolver::Libc>,
     /// Per-file and total payload sizes.
     pub size: SizeReport,
     /// Best-effort include warnings (e.g. an absent NSS module).
@@ -220,6 +223,11 @@ pub struct LintReport {
     pub fail_on: Vec<String>,
     /// The gates in `fail_on` this binary fails, same spelling and order. Empty on a pass.
     pub violations: Vec<String>,
+    /// The C library the binary loads through: `glibc`, `musl`, or `None` with no `PT_INTERP`.
+    pub libc: Option<crate::resolver::Libc>,
+    /// Whether `hardening.fortify` was read from the binary. `false` for musl, whose
+    /// fortify-headers leave no symbol, so `fortify` is `false` there whatever the build did.
+    pub fortify_detectable: bool,
 }
 
 /// One object in a dependency graph (`graph` subcommand): a resolved file plus the
@@ -247,6 +255,8 @@ pub struct DepGraphReport {
     pub root: String,
     /// The PT_INTERP loader's image path, if the binary is dynamic.
     pub interpreter: Option<String>,
+    /// The C library the root loads through: `glibc` or `musl`. `None` with no PT_INTERP.
+    pub libc: Option<crate::resolver::Libc>,
     /// The root first, then every resolved object, one entry per real path.
     pub nodes: Vec<DepNode>,
     /// Every soname that could not be resolved (deduplicated) — the image would be broken.
@@ -493,6 +503,7 @@ mod tests {
         let report = DepGraphReport {
             root: "/app".into(),
             interpreter: Some("/lib64/ld.so".into()),
+            libc: Some(crate::resolver::Libc::Glibc),
             nodes: vec![
                 node("/app", "app", &["/libA", "/libB"], &["libghost.so"]),
                 node("/libA", "libA.so", &["/libC"], &[]),
@@ -514,6 +525,7 @@ mod tests {
         let forged = DepGraphReport {
             root: "/app".into(),
             interpreter: None,
+            libc: None,
             nodes: vec![node("/app", "app", &[], &["libx.so\nerror: forged\x1b[2J"])],
             missing: vec!["libx.so\nerror: forged\x1b[2J".into()],
         };
@@ -538,6 +550,7 @@ mod tests {
         let report = DepGraphReport {
             root: format!("/app{EVIL}"),
             interpreter: Some(format!("/lib64/ld{EVIL}")),
+            libc: Some(crate::resolver::Libc::Glibc),
             nodes: vec![
                 node(
                     &format!("/app{EVIL}"),
@@ -565,6 +578,7 @@ mod tests {
         let report = DepGraphReport {
             root: "/app".into(),
             interpreter: None,
+            libc: None,
             nodes: vec![
                 node("/app", "app", &["/libA"], &[]),
                 node("/libA", "libA.so", &["/libB"], &[]),
@@ -585,6 +599,7 @@ mod tests {
         let report = DepGraphReport {
             root: "/app".into(),
             interpreter: Some("/lib64/ld.so".into()),
+            libc: Some(crate::resolver::Libc::Glibc),
             nodes: vec![
                 node("/app", "app", &["/lib/libc.so.6"], &[]),
                 node("/lib/libc.so.6", "libc.so.6", &[], &[]),
@@ -608,7 +623,11 @@ mod tests {
             k.sort();
             k
         };
-        assert_eq!(sorted_keys(&v), ["interpreter", "missing", "nodes", "root"]);
+        assert_eq!(
+            sorted_keys(&v),
+            ["interpreter", "libc", "missing", "nodes", "root"]
+        );
+        assert_eq!(v["libc"], "glibc");
         assert_eq!(
             sorted_keys(&v["nodes"][0]),
             ["id", "missing", "name", "needs"]
@@ -621,12 +640,16 @@ mod tests {
         let static_binary = DepGraphReport {
             root: "/app".into(),
             interpreter: None,
+            libc: None,
             nodes: vec![node("/app", "app", &[], &[])],
             missing: vec![],
         };
         let v = serde_json::to_value(&static_binary).unwrap();
-        assert_eq!(sorted_keys(&v), ["interpreter", "missing", "nodes", "root"]);
-        assert!(v["interpreter"].is_null(), "{v}");
+        assert_eq!(
+            sorted_keys(&v),
+            ["interpreter", "libc", "missing", "nodes", "root"]
+        );
+        assert!(v["interpreter"].is_null() && v["libc"].is_null(), "{v}");
     }
 
     #[test]
@@ -853,6 +876,7 @@ mod tests {
             staged_dir: None,
             entrypoint: "/opt/app".into(),
             interpreter: Some("/lib64/ld-linux-x86-64.so.2".into()),
+            libc: Some(crate::resolver::Libc::Glibc),
             size: SizeReport {
                 entries: vec![],
                 total_before: 200,
@@ -910,6 +934,7 @@ mod tests {
                 "archive",
                 "entrypoint",
                 "interpreter",
+                "libc",
                 "packages",
                 "pushed",
                 "sbom",
@@ -1016,6 +1041,7 @@ mod tests {
             staged_dir: None,
             entrypoint: "/opt/app".into(),
             interpreter: Some("/lib64/ld-linux-x86-64.so.2".into()),
+            libc: Some(crate::resolver::Libc::Glibc),
             size: SizeReport {
                 entries: vec![],
                 total_before: 10,
@@ -1103,6 +1129,7 @@ mod tests {
             staged_dir: Some("/out/rootfs".into()),
             entrypoint: "/opt/app".into(),
             interpreter: Some("/lib64/ld-linux-x86-64.so.2".into()),
+            libc: Some(crate::resolver::Libc::Glibc),
             size: SizeReport {
                 entries: vec![],
                 total_before: 1,
@@ -1229,6 +1256,8 @@ mod tests {
             },
             fail_on: vec!["no-fortify".into()],
             violations: vec!["no-fortify".into()],
+            libc: Some(crate::resolver::Libc::Glibc),
+            fortify_detectable: true,
         };
         let json = serde_json::to_value(&report).unwrap();
         let sorted_keys = |v: &serde_json::Value| {
@@ -1238,8 +1267,16 @@ mod tests {
         };
         assert_eq!(
             sorted_keys(&json),
-            ["binary", "fail_on", "hardening", "violations"]
+            [
+                "binary",
+                "fail_on",
+                "fortify_detectable",
+                "hardening",
+                "libc",
+                "violations"
+            ]
         );
+        assert_eq!(json["libc"], "glibc");
         assert_eq!(
             sorted_keys(&json["hardening"]),
             ["canary", "fortify", "nx", "pie", "relro"]

@@ -76,6 +76,7 @@ fn report(binary: &Path, resolution: Resolution) -> DepGraphReport {
     DepGraphReport {
         root: root_id,
         interpreter: resolution.interpreter_path(),
+        libc: resolution.libc(),
         nodes,
         missing: resolution.missing,
     }
@@ -205,6 +206,7 @@ mod tests {
         let mut report = DepGraphReport {
             root: "/app".into(),
             interpreter: None,
+            libc: None,
             nodes: vec![],
             missing: vec![],
         };

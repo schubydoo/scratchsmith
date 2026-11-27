@@ -3193,3 +3193,30 @@ fn verbose_prints_each_decision_on_stderr_and_changes_nothing_else() {
         );
     }
 }
+
+// Plan 025, AC 3: the glibc path did not move with the musl backend. A glibc pack still
+// reports `libc: "glibc"` and builds the same archive bytes twice, so a musl branch that ran
+// for it would show here as a drifting digest or a wrong libc.
+#[test]
+fn a_glibc_pack_is_unchanged_by_the_musl_backend() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pack = |name: &str| {
+        let archive = tmp.path().join(name);
+        let out = run(&[
+            "pack",
+            "--format",
+            "json",
+            "--oci-archive",
+            archive.to_str().unwrap(),
+            "/usr/bin/id",
+        ]);
+        assert!(out.status.success(), "{out:?}");
+        let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        (json, std::fs::read(&archive).unwrap())
+    };
+    let (first, a) = pack("a.tar");
+    let (second, b) = pack("b.tar");
+    assert_eq!(first["libc"], "glibc");
+    assert_eq!(first["libc"], second["libc"]);
+    assert!(a == b, "two packs of /usr/bin/id built different archives");
+}

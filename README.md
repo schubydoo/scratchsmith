@@ -72,7 +72,7 @@ build. It is purpose-built for the hard case and useful for the easy one.
 | Shell completions: `--completions <bash\|zsh\|fish>` | ✅ |
 | **Signed releases**: amd64 + arm64 binaries, cosign-signed `checksums.txt` + SLSA provenance, signed multi-arch GHCR image | ✅ |
 | **`:toolbox` image**: a runnable image (Wolfi + the full toolchain) that runs `pack` *inside* a container | ✅ |
-| Dynamic musl/Alpine binaries | ❌ rejected loudly (glibc comes first, and a musl backend is a future goal) |
+| **Dynamic musl/Alpine binaries**: x86_64, by musl's own loader rules (no NSS and no glibc locales; `lint` cannot read fortify) | ✅ |
 | **Daemonless OCI archive**: `--oci-archive <file>` (no daemon, and skopeo/buildah/registry-ready) | ✅ |
 | **Daemonless registry push**: `--push <ref>` (no daemon, and it uses your docker credentials) | ✅ |
 | **Signing the image `pack` produces**: `--push --sign` (cosign keyless, by digest) | ✅ |

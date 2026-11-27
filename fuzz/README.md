@@ -12,7 +12,7 @@ cargo +nightly fuzz run <target>
 
 | Target | Entry point | What it reaches |
 |---|---|---|
-| `parse_elf_info` | `resolver::parse_elf_info`, `ensure_glibc` | ELF header and dynamic-section parse (goblin). Asserts that the glibc-only refusal holds no character that breaks a line. |
+| `parse_elf_info` | `resolver::parse_elf_info`, `ensure_packable_musl` | ELF header and dynamic-section parse (goblin). Asserts that the musl loader and arch refusals hold no character that breaks a line. |
 | `glibc_versions` | `resolver::symbol_versions`, `glibc_release` | The `DT_VERNEED` and `DT_VERDEF` read behind the glibc version warning, and the `GLIBC_x.y` parse. |
 | `analyze_hardening` | `lint::hardening_from_bytes` | ELF hardening read (PIE, RELRO, NX, canary, fortify). |
 | `resolve_graph` | `resolver::resolve_with` | `ld.so` search: RPATH, RUNPATH, `$ORIGIN`, soname lookup, and the refusals: a corrupt, non-ELF, or wrong-type library or loader, and `$PLATFORM` with no value. Asserts that no hint or `$PLATFORM` error holds a character that breaks a line. Structured input. |

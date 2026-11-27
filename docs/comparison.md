@@ -34,12 +34,12 @@ Scratchsmith owns the one input the others do not serve: **an arbitrary prebuilt
 
 ## Limitations
 
-- **glibc / host-arch only (for now).** Dynamic musl/Alpine binaries are detected by their
-  interpreter and **rejected with a clear error** before anything is staged. You never get a
-  silently broken image. This is a scope choice, not a permanent boundary: musl uses a
-  different loader model and has no NSS, so it needs its own resolver backend (a possible
-  future addition). (A *static* musl binary is a single self-contained file and packs fine
-  today.) No cross-arch resolution yet.
+- **glibc and musl, host arch only (for now).** A dynamic glibc binary resolves by `ld.so`'s
+  rules. A dynamic musl binary resolves by musl's own loader rules, on x86_64 only. A musl
+  binary for another arch is **rejected with a clear error** before anything is staged, so you
+  never get a silently broken image. musl has no NSS and reads no glibc locales, so `--nss` and
+  `--locale` are refused for it. (A *static* binary of either libc is a single self-contained
+  file and packs fine.) No cross-arch resolution yet.
 - **`dlopen` is best-effort.** Libraries loaded at runtime via `dlopen` are invisible to
   static analysis. Scratchsmith *warns* about a `dlopen` reference in the binary's dynamic
   symbol table, and it lets you force-stage those libraries with `--include <lib>`. It is not

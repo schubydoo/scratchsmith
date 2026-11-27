@@ -113,37 +113,113 @@ fn resolves_a_real_binary_via_origin_rpath_and_versioned_soname() {
     );
 }
 
-#[test]
-fn musl_binaries_are_detected_and_pack_hard_fails() {
-    if !tool_available("musl-gcc") {
-        skip_optional("no musl-gcc");
-        return;
-    }
-    let tmp = tempfile::tempdir().unwrap();
-    let src = tmp.path().join("m.c");
-    std::fs::write(&src, "int main(void){return 0;}").unwrap();
-    let app = tmp.path().join("musl_app");
+fn musl_gcc(args: &[&str]) {
     let out = Command::new("musl-gcc")
-        .args([src.to_str().unwrap(), "-o", app.to_str().unwrap()])
+        .args(args)
         .output()
         .expect("run musl-gcc");
     assert!(
         out.status.success(),
-        "musl-gcc failed: {}",
+        "musl-gcc {args:?} failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
 
-    // The interpreter marks it as musl, and packing must refuse loudly.
+// Run `program` inside `rootfs` as an unprivileged root, with a fresh /proc, as
+// `tests/differential.rs` does. musl reads /proc/self/exe to expand the program's `$ORIGIN`.
+fn in_rootfs(rootfs: &Path, program: &Path) -> Command {
+    let mut cmd = Command::new("unshare");
+    cmd.args(["-r", "-m", "-p", "-f"])
+        .arg(format!("--mount-proc={}", rootfs.join("proc").display()))
+        .arg("chroot")
+        .arg(rootfs)
+        .arg(program);
+    cmd
+}
+
+// Build `dir/musl_app`, a dynamic musl program that prints 42 from `dir/libfoo.so.1`, which
+// it finds through an `$ORIGIN` RUNPATH.
+fn build_musl_app(dir: &Path) -> PathBuf {
+    std::fs::write(dir.join("foo.c"), "int foo(void){return 42;}").unwrap();
+    std::fs::write(
+        dir.join("main.c"),
+        "#include <stdio.h>\nextern int foo(void);\n\
+         int main(void){printf(\"%d\\n\", foo());return foo()==42?0:1;}",
+    )
+    .unwrap();
+    let lib = dir.join("libfoo.so.1");
+    musl_gcc(&[
+        "-shared",
+        "-fPIC",
+        "-Wl,-soname,libfoo.so.1",
+        "-o",
+        lib.to_str().unwrap(),
+        dir.join("foo.c").to_str().unwrap(),
+    ]);
+    let app = dir.join("musl_app");
+    musl_gcc(&[
+        "-Wl,--enable-new-dtags",
+        "-Wl,-rpath,$ORIGIN",
+        dir.join("main.c").to_str().unwrap(),
+        "-L",
+        dir.to_str().unwrap(),
+        "-l:libfoo.so.1",
+        "-o",
+        app.to_str().unwrap(),
+    ]);
+    app
+}
+
+// A dynamic musl program and its library, linked with an `$ORIGIN` RUNPATH, pack into a rootfs
+// that runs with no NSS files and no ld.so.cache (plan 025, AC 1 and AC 2 without Docker).
+#[test]
+fn a_musl_program_packs_and_runs() {
+    if !tool_available("musl-gcc") {
+        skip_required("no musl-gcc");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap();
+    let app = build_musl_app(&dir);
     let info = read_elf_info(&app).unwrap();
-    assert!(
-        info.is_musl(),
-        "expected musl interpreter, got {:?}",
-        info.interpreter
-    );
+    assert!(info.is_musl(), "not a musl program: {:?}", info.interpreter);
 
-    let dest = tmp.path().join("rootfs");
-    let err = scratchsmith::pack::stage_only(&app, &dest, &PackOptions::default()).unwrap_err();
-    assert!(err.to_string().contains("musl"), "got: {err}");
+    let rootfs = dir.join("rootfs");
+    let report = scratchsmith::pack::stage_only(&app, &rootfs, &PackOptions::default())
+        .expect("a musl program packs");
+    assert_eq!(report.libc, Some(scratchsmith::resolver::Libc::Musl));
+
+    // musl has no NSS and no cache: passwd and group only, and the loader as a real file at
+    // its PT_INTERP path.
+    let interp = info.interpreter.as_deref().unwrap();
+    let loader = rootfs.join(interp.trim_start_matches('/'));
+    assert!(
+        loader.symlink_metadata().unwrap().file_type().is_file(),
+        "the loader at {} is not a real file",
+        loader.display()
+    );
+    for absent in ["etc/nsswitch.conf", "etc/ld.so.cache", "etc/ld.so.conf"] {
+        assert!(!rootfs.join(absent).exists(), "{absent} was staged");
+    }
+    for present in ["etc/passwd", "etc/group"] {
+        assert!(rootfs.join(present).is_file(), "{present} is missing");
+    }
+
+    let probe = in_rootfs(Path::new("/"), Path::new("/bin/true")).output();
+    if !probe.is_ok_and(|out| out.status.success()) {
+        skip_required("no unprivileged user namespace for `unshare -r chroot`");
+        return;
+    }
+    // A container engine mounts /proc over the image; the rootfs only needs the mount point.
+    std::fs::create_dir_all(rootfs.join("proc")).unwrap();
+    let out = in_rootfs(&rootfs, &app).output().expect("run unshare");
+    assert!(
+        out.status.success(),
+        "the packed musl program failed: {}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "42\n");
 }
 
 #[test]
@@ -1180,4 +1256,162 @@ fn a_cpu_platform_copy_gets_a_note_or_a_hint_and_packs_as_before() {
             );
         }
     }
+}
+
+// A glibc-only option is a usage refusal (exit 2) for a musl binary, from the command line, the
+// config's base or a selected profile, and each message says where to remove it (plan 025, D5
+// and D6). A musl pack never runs ldconfig: a failing one on PATH does not stop it (D7).
+#[test]
+fn a_musl_pack_refuses_glibc_only_options_and_runs_no_ldconfig() {
+    if !tool_available("musl-gcc") {
+        skip_required("no musl-gcc");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap();
+    let app = build_musl_app(&dir);
+    let app_arg = app.to_str().unwrap();
+    let config = dir.join("scratchsmith.toml");
+    std::fs::write(
+        &config,
+        "nss = [\"files\"]\n[profile.loc]\nlocale = [\"en_US.UTF-8\"]\n",
+    )
+    .unwrap();
+    let cfg = config.to_str().unwrap();
+    let fake = dir.join("bin");
+    std::fs::create_dir(&fake).unwrap();
+    let ldconfig = fake.join("ldconfig");
+    std::fs::write(&ldconfig, "#!/bin/sh\necho fake ldconfig ran >&2\nexit 1\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&ldconfig, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        fake.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut n = 0;
+    let mut pack = |extra: &[&str]| {
+        n += 1;
+        let out_dir = dir.join(format!("out{n}"));
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .env("PATH", &path)
+            .arg("pack")
+            .args(extra)
+            .args(["-n", "-o", out_dir.to_str().unwrap(), app_arg])
+            .output()
+            .expect("run scratchsmith");
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let bin = app.display().to_string();
+    for (extra, want) in [
+        (
+            vec!["--nss", "files"],
+            format!(
+                "--nss selects glibc NSS modules, and {bin} uses musl, which has no NSS. \
+                 Drop --nss."
+            ),
+        ),
+        (
+            vec!["--locale", "C.UTF-8"],
+            format!(
+                "--locale compiles glibc locales, and {bin} uses musl, which does not read \
+                 them. musl has a built-in C.UTF-8. Drop --locale."
+            ),
+        ),
+        (
+            vec!["--config", cfg],
+            format!("The `nss` key is set in {cfg}: remove it there."),
+        ),
+        (
+            vec!["--config", cfg, "--profile", "loc", "--nss", "files,dns"],
+            "Drop --nss.".to_string(),
+        ),
+    ] {
+        let (code, err) = pack(&extra);
+        assert_eq!(code, Some(2), "{extra:?}: {err}");
+        assert!(err.contains(&want), "{extra:?}: {err}");
+    }
+    // A key set only in the selected profile names the profile.
+    std::fs::write(&config, "[profile.loc]\nlocale = [\"en_US.UTF-8\"]\n").unwrap();
+    let (code, err) = pack(&["--config", cfg, "--profile", "loc"]);
+    assert_eq!(code, Some(2), "{err}");
+    assert!(
+        err.contains(&format!(
+            "The `locale` key is set in {cfg} [profile.loc]: remove it there."
+        )),
+        "{err}"
+    );
+    // With no glibc-only value, the pack works, and the failing ldconfig never ran.
+    let (code, err) = pack(&[]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains("fake ldconfig ran"), "{err}");
+    // The fake is the ldconfig a pack finds: a glibc pack runs it and fails.
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .env("PATH", &path)
+        .args([
+            "pack",
+            "-n",
+            "-o",
+            dir.join("glibc").to_str().unwrap(),
+            "/usr/bin/id",
+        ])
+        .output()
+        .expect("run scratchsmith");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success() && err.contains("fake ldconfig ran"),
+        "{err}"
+    );
+}
+
+// `graph` and `lint` name the libc for a musl binary, and lint says it cannot read fortify,
+// so `--fail-on no-fortify` is a usage refusal there (plan 025, D12 and D13).
+#[test]
+fn graph_and_lint_name_musl() {
+    if !tool_available("musl-gcc") {
+        skip_required("no musl-gcc");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap();
+    let app = build_musl_app(&dir);
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(args)
+            .arg(&app)
+            .output()
+            .expect("run scratchsmith")
+    };
+    let graph = run(&["graph", "--format", "json"]);
+    assert!(graph.status.success(), "{graph:?}");
+    let json: serde_json::Value = serde_json::from_slice(&graph.stdout).unwrap();
+    assert_eq!(json["libc"], "musl");
+
+    let lint = run(&["lint", "--format", "json"]);
+    assert!(lint.status.success(), "{lint:?}");
+    let json: serde_json::Value = serde_json::from_slice(&lint.stdout).unwrap();
+    assert_eq!(json["libc"], "musl");
+    assert_eq!(json["fortify_detectable"], false);
+    let text = run(&["lint"]);
+    let shown = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        shown.contains("Fortify: unknown (musl's fortify-headers leave no symbol)"),
+        "{shown}"
+    );
+    let gate = run(&["lint", "--fail-on", "no-fortify"]);
+    let err = String::from_utf8_lossy(&gate.stderr);
+    assert_eq!(gate.status.code(), Some(2), "{err}");
+    assert!(
+        err.contains(&format!(
+            "--fail-on no-fortify cannot be checked for {}: it uses musl, and musl's \
+             fortify-headers leave no symbol to find. Drop no-fortify for musl binaries.",
+            app.display()
+        )),
+        "{err}"
+    );
+    // The other gates still apply.
+    assert!(run(&["lint", "--fail-on", "no-nx"]).status.success());
 }

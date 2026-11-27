@@ -17,7 +17,10 @@ A breaking change to any of these requires a new **major** version. This page is
   `--sbom-format cyclonedx-json`, `--scan-fail-on high`).
 - **`scratchsmith.toml`**: the config keys and their types.
 - **`--format json`**: the field names and types of the `pack`, `index`, `graph`, `diff`,
-  `unpack`, and `lint` reports (the schema CI gates consume).
+  `unpack`, and `lint` reports (the schema CI gates consume). A field added in a minor joins
+  the contract when it ships, as `libc` did in the `pack`, `graph` and `lint` reports, and
+  `fortify_detectable` in the `lint` report. `libc` is `"glibc"`, `"musl"` or null, and a new
+  value would be an additive enum value.
 - **Exit codes**: `0` on success. `2` on a usage error, which is any refusal of the command
   line. That is an argument-parse error from clap, or a refusal made after the parse. Examples
   are `--watch --format json`, `pack` with no binary, and a config value that conflicts with a

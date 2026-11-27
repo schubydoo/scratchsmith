@@ -160,12 +160,27 @@ impl std::fmt::Display for Hardening {
 /// Analyze and print the hardening report (the `lint` subcommand). When `gates` are
 /// given, fail (non-zero) if any is violated, naming the offending checks — without
 /// a gate, lint only reports and always succeeds. The report prints first, in either
-/// format, so a failing gate still leaves the whole report on stdout.
+/// format, so a failing gate still leaves the whole report on stdout. A gate that cannot be
+/// checked (`no-fortify` on a musl binary) is a usage error instead, before any report.
 pub fn run(binary: &Path, gates: &[Gate], format: crate::cli::Format) -> Result<()> {
     let hardening = analyze(binary)?;
-    let report = report(binary, hardening, gates);
+    // The libc only decides whether fortify can be read. A file goblin parses that the
+    // resolver cannot classify keeps the glibc report, as before.
+    let libc = crate::resolver::read_elf_info(binary)
+        .ok()
+        .and_then(|info| info.uses_libc());
+    let report = report(binary, hardening, libc, gates);
+    if !report.fortify_detectable && gates.contains(&Gate::NoFortify) {
+        // A gate that cannot see what it checks would fail every musl binary, fortified or not.
+        return Err(crate::cli::UsageError(format!(
+            "--fail-on no-fortify cannot be checked for {}: it uses musl, and musl's \
+             fortify-headers leave no symbol to find. Drop no-fortify for musl binaries.",
+            crate::resolver::printable(binary)
+        ))
+        .into());
+    }
     match format {
-        crate::cli::Format::Text => println!("{hardening}"),
+        crate::cli::Format::Text => println!("{}", text(&hardening, report.fortify_detectable)),
         crate::cli::Format::Json => println!("{}", serde_json::to_string_pretty(&report)?),
     }
     if !report.violations.is_empty() {
@@ -174,8 +189,28 @@ pub fn run(binary: &Path, gates: &[Gate], format: crate::cli::Format) -> Result<
     Ok(())
 }
 
+// The text report. musl's fortify-headers check in inline code and leave no `*_chk` symbol,
+// so for a musl binary the fortify row says it cannot tell, not "no".
+fn text(hardening: &Hardening, fortify_detectable: bool) -> String {
+    let shown = hardening.to_string();
+    if fortify_detectable {
+        return shown;
+    }
+    match shown.rsplit_once('\n') {
+        Some((rest, _)) => {
+            format!("{rest}\n  Fortify: unknown (musl's fortify-headers leave no symbol)")
+        }
+        None => shown,
+    }
+}
+
 // A gate given twice is asked for once, so the report lists it once, in the order first given.
-fn report(binary: &Path, hardening: Hardening, gates: &[Gate]) -> crate::report::LintReport {
+fn report(
+    binary: &Path,
+    hardening: Hardening,
+    libc: Option<crate::resolver::Libc>,
+    gates: &[Gate],
+) -> crate::report::LintReport {
     let mut asked: Vec<Gate> = Vec::new();
     for gate in gates {
         if !asked.contains(gate) {
@@ -191,6 +226,8 @@ fn report(binary: &Path, hardening: Hardening, gates: &[Gate]) -> crate::report:
             .map(gate_name)
             .collect(),
         fail_on: asked.into_iter().map(gate_name).collect(),
+        libc,
+        fortify_detectable: libc != Some(crate::resolver::Libc::Musl),
     }
 }
 
@@ -222,13 +259,18 @@ mod tests {
             Gate::PartialRelro,
             Gate::NoPie,
         ];
-        let r = report(Path::new("./app"), weak, &gates);
+        let r = report(
+            Path::new("./app"),
+            weak,
+            Some(crate::resolver::Libc::Glibc),
+            &gates,
+        );
         assert_eq!(r.binary, "./app");
         assert_eq!(r.fail_on, ["no-fortify", "no-pie", "partial-relro"]);
         assert_eq!(r.violations, ["no-fortify", "partial-relro"]);
         let json = serde_json::to_value(&r).unwrap();
         assert_eq!(json["hardening"]["relro"], "partial");
-        let none = report(Path::new("./app"), strong(), &[]);
+        let none = report(Path::new("./app"), strong(), None, &[]);
         assert!(none.fail_on.is_empty() && none.violations.is_empty());
         for (relro, name) in [(Relro::Full, "full"), (Relro::None, "none")] {
             assert_eq!(serde_json::to_value(relro).unwrap(), name);
@@ -309,6 +351,38 @@ mod tests {
             vec![Gate::PartialRelro]
         );
         assert!(strong().violations(&[Gate::PartialRelro]).is_empty());
+    }
+
+    #[test]
+    fn a_musl_binary_reports_fortify_as_unknown() {
+        let musl = report(
+            Path::new("./app"),
+            Hardening {
+                fortify: false,
+                ..strong()
+            },
+            Some(crate::resolver::Libc::Musl),
+            &[Gate::NoPie],
+        );
+        assert!(!musl.fortify_detectable);
+        let json = serde_json::to_value(&musl).unwrap();
+        assert_eq!(json["libc"], "musl");
+        assert_eq!(json["fortify_detectable"], false);
+        assert_eq!(json["hardening"]["fortify"], false);
+        let out = text(&musl.hardening, musl.fortify_detectable);
+        assert!(
+            out.ends_with("\n  Fortify: unknown (musl's fortify-headers leave no symbol)"),
+            "{out}"
+        );
+        assert!(out.contains("Canary:  yes"), "{out}");
+        // A static binary has no libc to name, and its fortify read stands.
+        let st = report(Path::new("./app"), strong(), None, &[]);
+        assert!(st.fortify_detectable);
+        assert_eq!(
+            serde_json::to_value(&st).unwrap()["libc"],
+            serde_json::Value::Null
+        );
+        assert_eq!(text(&st.hardening, true), st.hardening.to_string());
     }
 
     #[test]

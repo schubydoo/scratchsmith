@@ -7,17 +7,20 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(info) = scratchsmith::resolver::parse_elf_info(data) {
         // Also drive the accessors that classify the parsed (untrusted) facts.
         let _ = info.linking();
-        let _ = info.is_musl();
-        // The musl rejection quotes PT_INTERP, and main prints it to the user's terminal. It
+        let _ = info.uses_libc();
+        // The musl refusals quote PT_INTERP, and main prints them to the user's terminal. They
         // may not carry a character that breaks or reorders a line: a Cc control, a line or
         // paragraph separator, a bidi embedding, override or isolate. The set the escape uses.
-        if let Err(err) = scratchsmith::resolver::ensure_glibc(&info) {
-            use scratchsmith::resolver::breaks_a_line;
-            let text = format!("{err:#}");
-            assert!(
-                !text.chars().any(breaks_a_line),
-                "the musl rejection carries a character that breaks a line: {text:?}"
-            );
+        if info.is_musl() {
+            let path = std::path::Path::new("/fuzz/app");
+            if let Err(err) = scratchsmith::resolver::ensure_packable_musl(path, &info) {
+                use scratchsmith::resolver::breaks_a_line;
+                let text = format!("{err:#}");
+                assert!(
+                    !text.chars().any(breaks_a_line),
+                    "the musl refusal carries a character that breaks a line: {text:?}"
+                );
+            }
         }
     }
 });

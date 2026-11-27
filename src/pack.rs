@@ -4,7 +4,7 @@
 use crate::image::{self, ImageConfig};
 use crate::packages::{self, Owners, Package, PackagesSelection};
 use crate::report::{PackReport, Timings};
-use crate::resolver::{self, Sysroot};
+use crate::resolver::{self, Libc, Sysroot};
 use crate::stager::{self, AddFile, NssSelection, RuntimeExtras, SizeReport, StagedTree};
 use crate::supplychain::{self, SbomRequest, ScanRequest, ScanSource, ScanSummary};
 use anyhow::{bail, Context, Result};
@@ -126,6 +126,8 @@ struct StagedRootfs {
     warnings: Vec<String>,
     /// The loader's image path (`PT_INTERP`), or `None` for a static binary.
     interpreter: Option<String>,
+    /// The C library behind `interpreter`.
+    libc: Option<Libc>,
     /// The files staged so far that a package can own, as `(host path, image path)`.
     bundled: Vec<(PathBuf, PathBuf)>,
     clock: Clock,
@@ -167,8 +169,9 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
         timings: Timings::default(),
     };
     let info = resolver::read_elf_info(binary)?;
-    // Reject musl up front rather than staging a subtly broken image.
-    resolver::ensure_glibc(&info)?;
+    if info.is_musl() {
+        refuse_glibc_only_options(binary, opts)?;
+    }
 
     let mut warnings = opts.notes.clone();
     // dlopen'd plugins are invisible to the static graph; warn and point at the fix.
@@ -195,7 +198,7 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
     // Resolve against the host root for now; a pinned sysroot is future work.
     let mut resolution =
         resolver::resolve_with_includes(binary, &Sysroot::new("/"), &opts.includes)?;
-    add_binary_libs(&info, &mut resolution, &opts.add_binaries)?;
+    add_binary_libs(binary, &info, &mut resolution, &opts.add_binaries)?;
     resolution.print_notes();
     if !resolution.missing.is_empty() {
         resolution.print_hints();
@@ -204,11 +207,14 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
             resolver::missing_for_display(&resolution.missing)
         );
     }
-    warnings.extend(glibc_version_warnings(
-        binary,
-        &opts.add_binaries,
-        &resolution,
-    ));
+    // musl has no `GLIBC_` symbol versions, so there is nothing to compare.
+    if resolution.musl.is_none() {
+        warnings.extend(glibc_version_warnings(
+            binary,
+            &opts.add_binaries,
+            &resolution,
+        ));
+    }
     clock.timings.resolve_ms = millis(clock.started);
     let staging = Instant::now();
     let (tree, default_includes) =
@@ -231,6 +237,7 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
         opts.upx,
     )?;
     let interpreter = resolution.interpreter_path();
+    let libc = resolution.libc();
     let bundled = bundled_files(binary, &tree, &resolution, &default_includes.staged);
     clock.timings.stage_ms = millis(staging);
     Ok(StagedRootfs {
@@ -238,6 +245,7 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
         size: sizes,
         warnings,
         interpreter,
+        libc,
         bundled,
         clock,
     })
@@ -249,6 +257,7 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
 // covers the added ones too: ld.so.cache, `--deny`/`--require`, `--strip` and the package
 // records. One image has one loader, so an ELF for another loader or machine is refused.
 fn add_binary_libs(
+    binary: &Path,
     main: &resolver::ElfInfo,
     resolution: &mut resolver::Resolution,
     added: &[AddFile],
@@ -266,7 +275,7 @@ fn add_binary_libs(
                 e.context(format!("--add-binary {shown}"))
             }
         })?;
-        added_binary_fits(main, &info, &shown)?;
+        added_binary_fits(binary, main, &info, &shown)?;
         origin_fits(&info, add, &shown)?;
         let theirs = resolver::resolve(&add.src, &Sysroot::new("/"))
             .with_context(|| format!("--add-binary {shown}"))?;
@@ -276,11 +285,21 @@ fn add_binary_libs(
 }
 
 fn added_binary_fits(
+    binary: &Path,
     main: &resolver::ElfInfo,
     added: &resolver::ElfInfo,
     shown: &str,
 ) -> Result<()> {
-    resolver::ensure_glibc(added).with_context(|| format!("--add-binary {shown}"))?;
+    // One libc for every program in one image (D9). A static ELF or a library has none.
+    if let (Some(ours), Some(theirs)) = (main.uses_libc(), added.uses_libc()) {
+        if ours != theirs {
+            bail!(
+                "--add-binary {shown} uses {theirs}, and {} uses {ours}. Pack programs of one \
+                 libc in one image.",
+                resolver::printable(binary)
+            );
+        }
+    }
     if (added.machine, added.is_64) != (main.machine, main.is_64) {
         let arch = |i: &resolver::ElfInfo| {
             format!(
@@ -369,6 +388,48 @@ fn merge_resolution(into: &mut resolver::Resolution, theirs: resolver::Resolutio
     into.hints.extend(theirs.hints);
     into.notes.extend(theirs.notes);
     into.arch_warnings.extend(theirs.arch_warnings);
+    // One loader, so one path file: the added program's system dirs join the packed one's.
+    // Its found-path links join too, or musl cannot open those libraries in the image.
+    if let (Some(ours), Some(theirs)) = (&mut into.musl, theirs.musl) {
+        for dir in theirs.system_dirs {
+            if !ours.system_dirs.contains(&dir) {
+                ours.system_dirs.push(dir);
+            }
+        }
+        for link in theirs.links {
+            if !ours.links.contains(&link) {
+                ours.links.push(link);
+            }
+        }
+    }
+}
+
+// musl has no NSS and reads no compiled glibc locale, so `--nss` and `--locale` would do
+// nothing for a musl binary. Refuse an explicit value rather than drop it without a word. The
+// set-in places come from the raw values, before `--nss` falls back to `files,dns`.
+fn refuse_glibc_only_options(binary: &Path, opts: &PackOptions) -> Result<()> {
+    let bin = resolver::printable(binary);
+    let drop = |flag: &str, key: &str, set_in: &str| {
+        if set_in == "the command line" {
+            format!("Drop {flag}.")
+        } else {
+            format!("The `{key}` key is set in {set_in}: remove it there.")
+        }
+    };
+    if let Some(set_in) = &opts.nss_set_in {
+        bail!(crate::cli::UsageError(format!(
+            "--nss selects glibc NSS modules, and {bin} uses musl, which has no NSS. {}",
+            drop("--nss", "nss", set_in)
+        )));
+    }
+    if let Some(set_in) = &opts.locale_set_in {
+        bail!(crate::cli::UsageError(format!(
+            "--locale compiles glibc locales, and {bin} uses musl, which does not read them. \
+             musl has a built-in C.UTF-8. {}",
+            drop("--locale", "locale", set_in)
+        )));
+    }
+    Ok(())
 }
 
 // Resolution matches sonames, not symbol versions, so a binary built against a newer glibc
@@ -524,6 +585,34 @@ fn bundled_files(
 //
 // Returns the selection the rest of the pack goes by, beside the owners: the retry above can
 // turn `sbom` off, and the records staged later must follow that.
+// On an Alpine host the database is apk's, which `--packages` cannot read yet. Saying so
+// beats "this host has neither", which reads as a host with no package manager.
+fn no_records_error(asked: &str, apk: bool) -> String {
+    if apk {
+        format!(
+            "--packages {asked} needs a dpkg or rpm database to name the packages, and this \
+             host uses apk, which `--packages` does not read yet. Remove {asked} from \
+             --packages to pack without it"
+        )
+    } else {
+        format!(
+            "--packages {asked} needs a dpkg or rpm database to name the packages, and this \
+             host has neither. Remove {asked} from --packages to pack without it"
+        )
+    }
+}
+
+fn no_database_warning(apk: bool) -> String {
+    if apk {
+        "--packages: this host uses apk, which `--packages` does not read yet, so the report \
+         names no packages"
+            .to_string()
+    } else {
+        "--packages: this host has no dpkg or rpm database, so the report names no packages"
+            .to_string()
+    }
+}
+
 fn lookup_owners(
     files: &[(PathBuf, PathBuf)],
     conventions: &[(&str, PathBuf)],
@@ -536,18 +625,12 @@ fn lookup_owners(
     }
     let asked = selection.records_label();
     let Some(manager) = manager() else {
+        let apk = std::path::Path::new("/lib/apk/db/installed").exists();
         if selection.requires_records() {
-            bail!(
-                "--packages {asked} needs a dpkg or rpm database to name the packages, and \
-                 this host has neither. Remove {asked} from --packages to pack without it"
-            );
+            bail!("{}", no_records_error(asked, apk));
         }
         if selection.explicit {
-            warnings.push(
-                "--packages: this host has no dpkg or rpm database, so the report names no \
-                 packages"
-                    .to_string(),
-            );
+            warnings.push(no_database_warning(apk));
         }
         return Ok((selection, None));
     };
@@ -779,6 +862,11 @@ pub struct PackOptions {
     /// Warnings the caller found before the pack, such as a flag that has no effect. They lead
     /// the report's warnings.
     pub notes: Vec<String>,
+    /// Where an explicit `--nss` value is set (`the command line`, or the config file and
+    /// profile), before the default applies. A musl pack refuses one.
+    pub nss_set_in: Option<String>,
+    /// Where an explicit `--locale` value is set, as for `nss_set_in`.
+    pub locale_set_in: Option<String>,
 }
 
 /// Where a pack delivers its result. Every sink shares the resolve → stage pipeline and
@@ -902,6 +990,7 @@ enum Delivered {
 struct Common {
     entrypoint: String,
     interpreter: Option<String>,
+    libc: Option<Libc>,
     size: SizeReport,
     warnings: Vec<String>,
     sbom: Option<String>,
@@ -937,6 +1026,7 @@ fn report(delivered: Delivered, c: Common) -> PackReport {
         staged_dir,
         entrypoint: c.entrypoint,
         interpreter: c.interpreter,
+        libc: c.libc,
         size: c.size,
         warnings: c.warnings,
         smoke_ok,
@@ -1164,6 +1254,7 @@ fn to_rootfs(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<(Deliv
         size,
         mut warnings,
         interpreter,
+        libc,
         bundled,
         mut clock,
     } = build_rootfs(binary, out_dir, opts)?;
@@ -1177,6 +1268,7 @@ fn to_rootfs(binary: &Path, out_dir: &Path, opts: &PackOptions) -> Result<(Deliv
     let common = Common {
         entrypoint: tree.entrypoint.display().to_string(),
         interpreter,
+        libc,
         size,
         warnings,
         sbom,
@@ -1201,6 +1293,7 @@ struct StagedImage {
     scan: Option<ScanSummary>,
     /// The loader's image path, carried through to every image sink's report.
     interpreter: Option<String>,
+    libc: Option<Libc>,
     /// The report's `packages` field, ready to move into it.
     packages: Option<Vec<Package>>,
     clock: Clock,
@@ -1212,6 +1305,7 @@ impl StagedImage {
         Common {
             entrypoint: self.tree.entrypoint.display().to_string(),
             interpreter: self.interpreter,
+            libc: self.libc,
             size: self.size,
             warnings: self.warnings,
             sbom: self.sbom,
@@ -1230,6 +1324,7 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         size,
         mut warnings,
         interpreter,
+        libc,
         bundled,
         mut clock,
     } = build_rootfs(binary, &dest, opts)?;
@@ -1273,6 +1368,7 @@ fn stage_for_image(binary: &Path, opts: &PackOptions) -> Result<StagedImage> {
         sbom,
         scan,
         interpreter,
+        libc,
         packages: report_packages(&opts.packages, owners),
         clock,
     })
@@ -1513,7 +1609,9 @@ mod tests {
     #[test]
     fn an_added_binary_must_match_the_packed_binarys_loader_and_machine() {
         let main = resolver::read_elf_info(Path::new("/usr/bin/id")).unwrap();
-        let fits = |added: &resolver::ElfInfo| added_binary_fits(&main, added, "/x");
+        let fits = |added: &resolver::ElfInfo| {
+            added_binary_fits(Path::new("/usr/bin/id"), &main, added, "/x")
+        };
         assert!(fits(&main).is_ok());
         // A static ELF, or a shared library, names no loader and fits any image.
         let static_elf = resolver::ElfInfo {
@@ -1545,13 +1643,23 @@ mod tests {
             ..main.clone()
         };
         assert!(fits(&other_class).is_err());
-        // musl stays out of scope through --add-binary too.
+        // One libc for every program in one image (D9), in both directions.
         let musl = resolver::ElfInfo {
             interpreter: Some("/lib/ld-musl-x86_64.so.1".to_string()),
             ..main.clone()
         };
-        let err = format!("{:#}", fits(&musl).unwrap_err());
-        assert!(err.contains("musl"), "{err}");
+        assert_eq!(
+            format!("{:#}", fits(&musl).unwrap_err()),
+            "--add-binary /x uses musl, and /usr/bin/id uses glibc. Pack programs of one libc \
+             in one image."
+        );
+        let err = added_binary_fits(Path::new("/app"), &musl, &main, "/x").unwrap_err();
+        assert_eq!(
+            format!("{err:#}"),
+            "--add-binary /x uses glibc, and /app uses musl. Pack programs of one libc in one \
+             image."
+        );
+        assert!(added_binary_fits(Path::new("/app"), &musl, &musl, "/x").is_ok());
     }
 
     #[test]
@@ -1638,6 +1746,44 @@ mod tests {
     }
 
     #[test]
+    fn an_added_musl_programs_system_dirs_and_links_join_once() {
+        let link = |at: &str, to: &str| (PathBuf::from(at), PathBuf::from(to));
+        let search = |dirs: &[&str], links: Vec<(PathBuf, PathBuf)>| resolver::MuslSearch {
+            path_file: PathBuf::from("/etc/ld-musl-x86_64.path"),
+            system_dirs: dirs.iter().map(PathBuf::from).collect(),
+            links,
+        };
+        let shared = link("/usr/lib64/libz.so.1", "/usr/lib/libz.so.1");
+        let mut into = resolver::Resolution {
+            musl: Some(search(&["/usr/lib64"], vec![shared.clone()])),
+            ..Default::default()
+        };
+        let theirs = resolver::Resolution {
+            musl: Some(search(
+                &["/usr/lib64", "/opt/sys"],
+                vec![
+                    shared.clone(),
+                    link("/app/libs/libown.so.1", "/opt/other/libown.so.1.0"),
+                ],
+            )),
+            ..Default::default()
+        };
+        merge_resolution(&mut into, theirs);
+        let musl = into.musl.unwrap();
+        assert_eq!(
+            musl.system_dirs,
+            [PathBuf::from("/usr/lib64"), PathBuf::from("/opt/sys")]
+        );
+        assert_eq!(
+            musl.links,
+            [
+                shared,
+                link("/app/libs/libown.so.1", "/opt/other/libown.so.1.0")
+            ]
+        );
+    }
+
+    #[test]
     fn a_binary_built_for_this_hosts_glibc_packs_with_no_version_warning() {
         let resolution = resolver::resolve(Path::new("/usr/bin/id"), &Sysroot::new("/")).unwrap();
         assert_eq!(
@@ -1674,10 +1820,27 @@ mod tests {
     }
 
     #[test]
+    fn an_apk_host_is_named_when_packages_cannot_be_read() {
+        let apk = no_records_error("sbom", true);
+        assert!(
+            apk.contains("this host uses apk, which `--packages` does not read yet"),
+            "{apk}"
+        );
+        assert!(
+            apk.ends_with("Remove sbom from --packages to pack without it"),
+            "{apk}"
+        );
+        assert!(no_records_error("sbom", false).contains("this host has neither"));
+        assert!(no_database_warning(true).contains("uses apk"));
+        assert!(no_database_warning(false).contains("no dpkg or rpm database"));
+    }
+
+    #[test]
     fn each_delivery_fills_only_its_own_report_fields() {
         let common = || Common {
             entrypoint: "/app".into(),
             interpreter: None,
+            libc: None,
             size: SizeReport::default(),
             warnings: Vec::new(),
             sbom: None,
