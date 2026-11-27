@@ -1,7 +1,8 @@
-# Nightly differential sweep: tests/differential.rs with thousands of cases from a fresh seed.
-# Every PR runs the same test with 64 fixed cases in ci.yml. This run reaches layouts those
-# cases never generate. A failure prints the seed of each broken case: repeat one locally with
-# SCRATCHSMITH_DIFF_SEED=<seed> SCRATCHSMITH_DIFF_CASES=1 cargo test --test differential.
+# Nightly differential sweep: tests/differential.rs (glibc) and tests/differential_musl.rs
+# (musl), each with thousands of cases from a fresh seed. Every PR runs the same tests with 64
+# fixed cases in ci.yml. This run reaches layouts those cases never generate. A failure prints
+# the seed of each broken case: repeat one locally with
+# SCRATCHSMITH_DIFF_SEED=<seed> SCRATCHSMITH_DIFF_CASES=1 cargo test --test <test>.
 # NOT a required check.
 name: Differential sweep
 
@@ -22,14 +23,18 @@ permissions: {}
 
 jobs:
   sweep:
-    name: differential sweep
+    name: differential sweep (${{ matrix.test }})
     runs-on: ubuntu-latest
-    # About 85 ms a case, plus the build.
+    strategy:
+      fail-fast: false
+      matrix:
+        test: [differential, differential_musl]
+    # About 85 ms a glibc case and 140 ms a musl case, plus the build.
     timeout-minutes: 30
     permissions:
       contents: read
     concurrency:
-      group: ${{ github.workflow }}
+      group: ${{ github.workflow }}-${{ matrix.test }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,6 +44,10 @@ jobs:
         with:
           toolchain: stable
           rustflags: ""
+      # musl-gcc and musl's loader at /lib, for tests/differential_musl.rs.
+      - name: Install musl-tools
+        if: matrix.test == 'differential_musl'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools binutils
       - name: Allow unprivileged user namespaces
         run: |
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
@@ -49,25 +58,28 @@ jobs:
           SEED_INPUT: ${{ inputs.seed }}
           CASES_INPUT: ${{ inputs.cases }}
           RUN_ID: ${{ github.run_id }}
+          TEST: ${{ matrix.test }}
         run: |
           set -euo pipefail
           export SCRATCHSMITH_DIFF_SEED="${SEED_INPUT:-$RUN_ID}"
           export SCRATCHSMITH_DIFF_CASES="${CASES_INPUT:-3000}"
           echo "seed $SCRATCHSMITH_DIFF_SEED, $SCRATCHSMITH_DIFF_CASES cases"
-          cargo test --test differential -- --nocapture 2>&1 | tee sweep.log
+          cargo test --test "$TEST" -- --nocapture 2>&1 | tee sweep.log
       # The failure email links to this run. Put each broken case at the top of it, so the
       # reader does not have to search a long log for the seeds.
       - name: Summarize broken cases
         if: failure()
+        env:
+          TEST: ${{ matrix.test }}
         run: |
           set -euo pipefail
           {
-            echo "## Differential sweep failed"
+            echo "## Differential sweep failed ($TEST)"
             echo
             echo "Each line is one broken case. To repeat one, run:"
             echo
             echo '```sh'
-            echo 'SCRATCHSMITH_DIFF_SEED=<seed> SCRATCHSMITH_DIFF_CASES=1 cargo test --test differential'
+            echo "SCRATCHSMITH_DIFF_SEED=<seed> SCRATCHSMITH_DIFF_CASES=1 cargo test --test $TEST"
             echo '```'
             echo
             if [ -f sweep.log ] && grep -qE '^seed 0x[0-9a-f]+: ' sweep.log; then

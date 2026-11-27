@@ -23,36 +23,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 mod common;
+use common::differential::{chroot_available, env_u64, in_rootfs, run, text, Rng};
 use common::{cc_available, skip_required};
 
 const DEFAULT_SEED: u64 = 0x5eed_2000;
 // About 85 ms a case. The nightly `differential` workflow runs thousands from a fresh seed.
 const DEFAULT_CASES: u64 = 64;
-
-// xorshift64*: enough randomness for layouts, and no dev-dependency.
-struct Rng(u64);
-
-impl Rng {
-    fn new(seed: u64) -> Self {
-        // A zero state never leaves zero.
-        Rng(seed ^ 0x9e37_79b9_7f4a_7c15)
-    }
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 >> 12;
-        self.0 ^= self.0 << 25;
-        self.0 ^= self.0 >> 27;
-        self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
-    }
-    fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
-    }
-    fn chance(&mut self, percent: u64) -> bool {
-        self.next() % 100 < percent
-    }
-    fn pick<T: Copy>(&mut self, items: &[T]) -> T {
-        items[self.below(items.len())]
-    }
-}
 
 #[derive(Clone, Copy, Debug)]
 enum Name {
@@ -387,42 +363,6 @@ fn build(layout: &Layout, root: &Path) -> PathBuf {
     app
 }
 
-fn run(cmd: &mut Command) -> Output {
-    cmd.env_remove("LD_LIBRARY_PATH")
-        .env_remove("LD_PRELOAD")
-        .output()
-        .expect("spawn")
-}
-
-fn text(out: &Output) -> String {
-    format!(
-        "exit {:?}\nstdout: {}\nstderr: {}",
-        out.status.code(),
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    )
-}
-
-// Run `program` inside `rootfs` as an unprivileged root, with a fresh /proc as every container
-// engine gives an image. Without /proc, ld.so cannot read /proc/self/exe, so it drops each
-// `$ORIGIN` entry of the main program and the run fails for a reason no image has.
-fn in_rootfs(rootfs: &Path, program: &Path) -> Command {
-    let mut cmd = Command::new("unshare");
-    cmd.args(["-r", "-m", "-p", "-f"])
-        .arg(format!("--mount-proc={}", rootfs.join("proc").display()))
-        .arg("chroot")
-        .arg(rootfs)
-        .arg(program);
-    cmd
-}
-
-// Can this host run `in_rootfs`?
-fn chroot_available() -> bool {
-    run(&mut in_rootfs(Path::new("/"), Path::new("/bin/true")))
-        .status
-        .success()
-}
-
 // One case. Returns whether pack succeeded, or a description of the broken invariant.
 fn check(seed: u64) -> Result<bool, String> {
     let tmp = tempfile::tempdir().unwrap();
@@ -465,20 +405,6 @@ fn check(seed: u64) -> Result<bool, String> {
         return Err(report("the host loader runs it but pack refuses", &pack));
     }
     Ok(pack.status.success())
-}
-
-fn env_u64(name: &str, default: u64) -> u64 {
-    match std::env::var(name) {
-        Ok(v) => {
-            let v = v.trim();
-            let parsed = match v.strip_prefix("0x") {
-                Some(hex) => u64::from_str_radix(hex, 16),
-                None => v.parse(),
-            };
-            parsed.unwrap_or_else(|_| panic!("{name}={v:?} is not a number"))
-        }
-        Err(_) => default,
-    }
 }
 
 #[test]
