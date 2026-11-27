@@ -76,8 +76,8 @@ for f in /bin/* /sbin/* /usr/bin/* /usr/sbin/*; do
 done
 rm -f "$seen"
 echo "musl oracle: $checked dynamic programs checked, $failed failed"
-# Alpine's base has a handful of dynamic programs, and curl and binutils add more. Zero checked means
-# the walk found none, which is a broken check, not a pass.
+# Alpine's base has a handful of dynamic programs, and curl and binutils add more. Zero
+# checked means the walk found none, which is a broken check, not a pass.
 [ "$checked" -gt 0 ] || { echo "the oracle checked no program"; exit 1; }
 [ "$failed" -eq 0 ]
 
