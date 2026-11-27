@@ -947,7 +947,7 @@ the <code>packages</code> input to <code>none</code>.</p>
 <tr>
 <td><code>add-binary</code></td>
 <td></td>
-<td>Copy host ELF programs into the image with the shared libraries they need, one <code>SRC:DST</code> per line. A bare absolute <code>SRC</code> keeps its own path. Each program's libraries resolve by the same loader rules as the packed binary, and a library both need is staged once. An ELF for another architecture, a program for another loader, or a program or library that uses the other libc fails the pack, and so does one that uses <code>$ORIGIN</code> with a <code>DST</code> outside its real directory. A path may hold spaces, which <code>args</code> cannot pass. See <a href="../usage/#add-a-program-with-its-libraries">Usage</a>. Needs scratchsmith v2.1.0 or later.</td>
+<td>Copy host ELF programs into the image with the shared libraries they need, one <code>SRC:DST</code> per line. A bare absolute <code>SRC</code> keeps its own path. Each program's libraries resolve by its own loader's rules, and an added shared library's by glibc's rules for now (check a musl image by running something that loads the library). A library both need is staged once. An ELF for another architecture, a program for another loader, or a program or library that uses the other libc fails the pack, and so does one that uses <code>$ORIGIN</code> with a <code>DST</code> outside its real directory. A path may hold spaces, which <code>args</code> cannot pass. See <a href="../usage/#add-a-program-with-its-libraries">Usage</a>. Needs scratchsmith v2.1.0 or later.</td>
 </tr>
 <tr>
 <td><code>locale</code></td>

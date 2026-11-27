@@ -854,7 +854,7 @@ file</strong>.</p>
 <tr>
 <td><code>add-binary</code></td>
 <td><code>--add-binary</code></td>
-<td>Copy a host ELF into the image with the shared libraries it needs (list, same <code>SRC:DST</code> or <code>SRC</code> form as <code>add-file</code>). Its libraries are resolved with the packed binary's loader rules (glibc's or musl's) and staged once. An ELF for another architecture, a program for another loader, or a program or library that uses the other libc fails the pack, and so does one that uses <code>$ORIGIN</code> with a <code>DST</code> outside its real directory. See <a href="../usage/#add-a-program-with-its-libraries">Usage</a>.</td>
+<td>Copy a host ELF into the image with the shared libraries it needs (list, same <code>SRC:DST</code> or <code>SRC</code> form as <code>add-file</code>). A program's libraries are resolved by its own loader's rules (glibc's or musl's), and an added shared library's by glibc's rules for now (check a musl image by running something that loads the library). They are staged once. An ELF for another architecture, a program for another loader, or a program or library that uses the other libc fails the pack, and so does one that uses <code>$ORIGIN</code> with a <code>DST</code> outside its real directory. See <a href="../usage/#add-a-program-with-its-libraries">Usage</a>.</td>
 </tr>
 <tr>
 <td><code>locale</code></td>
