@@ -251,9 +251,9 @@ fn build_rootfs(binary: &Path, dest: &Path, opts: &PackOptions) -> Result<Staged
     })
 }
 
-// `--add-binary`: each added ELF is resolved on its own, by the same ld.so rules as the packed
-// binary (`$ORIGIN` names the added file's own directory), and its libraries join the
-// resolution. So a library both need stages once, and everything that reads the resolution
+// `--add-binary`: each added ELF is resolved on its own, a program by its own loader's rules and
+// a library by glibc's for now (`$ORIGIN` names the added file's own directory), and its
+// libraries join the resolution. So a library both need stages once, and everything that reads the resolution
 // covers the added ones too: ld.so.cache, `--deny`/`--require`, `--strip` and the package
 // records. One image has one loader, so an ELF for another loader or machine is refused.
 fn add_binary_libs(
@@ -288,7 +288,8 @@ fn add_binary_libs(
             resolution.notes.push(format!(
                 "--add-binary {shown} is a shared library, so the libraries it needs were \
                  resolved by glibc's search rules, not musl's. They usually find the same files \
-                 on Alpine. Run the image with --smoke to check."
+                 on Alpine. To check, run the image on a path that loads this library: --smoke \
+                 only checks that the entrypoint starts."
             ));
         }
     }
