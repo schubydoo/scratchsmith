@@ -30,36 +30,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 mod common;
+use common::differential::{chroot_available, env_u64, in_rootfs, run, text, Rng};
 use common::skip_required;
 
 const DEFAULT_SEED: u64 = 0x5eed_3000;
 // About 140 ms a case. The nightly `differential` workflow runs thousands from a fresh seed.
 const DEFAULT_CASES: u64 = 64;
 const LOADER: &str = "/lib/ld-musl-x86_64.so.1";
-
-// xorshift64*, as in tests/differential.rs.
-struct Rng(u64);
-
-impl Rng {
-    fn new(seed: u64) -> Self {
-        Rng(seed ^ 0x9e37_79b9_7f4a_7c15)
-    }
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 >> 12;
-        self.0 ^= self.0 << 25;
-        self.0 ^= self.0 >> 27;
-        self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
-    }
-    fn below(&mut self, n: usize) -> usize {
-        (self.next() % n as u64) as usize
-    }
-    fn chance(&mut self, percent: u64) -> bool {
-        self.next() % 100 < percent
-    }
-    fn pick<T: Copy>(&mut self, items: &[T]) -> T {
-        items[self.below(items.len())]
-    }
-}
 
 #[derive(Clone, Copy, Debug)]
 enum Name {
@@ -464,40 +441,6 @@ fn build(layout: &Layout, root: &Path) -> PathBuf {
     app
 }
 
-fn run(cmd: &mut Command) -> Output {
-    cmd.env_remove("LD_LIBRARY_PATH")
-        .env_remove("LD_PRELOAD")
-        .output()
-        .expect("spawn")
-}
-
-fn text(out: &Output) -> String {
-    format!(
-        "exit {:?}\nstdout: {}\nstderr: {}",
-        out.status.code(),
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    )
-}
-
-// Run `program` inside `rootfs` as an unprivileged root, with a fresh /proc: musl reads
-// /proc/self/exe to expand the program's `$ORIGIN`.
-fn in_rootfs(rootfs: &Path, program: &Path) -> Command {
-    let mut cmd = Command::new("unshare");
-    cmd.args(["-r", "-m", "-p", "-f"])
-        .arg(format!("--mount-proc={}", rootfs.join("proc").display()))
-        .arg("chroot")
-        .arg(rootfs)
-        .arg(program);
-    cmd
-}
-
-fn chroot_available() -> bool {
-    run(&mut in_rootfs(Path::new("/"), Path::new("/bin/true")))
-        .status
-        .success()
-}
-
 fn real(path: &str) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
 }
@@ -587,20 +530,6 @@ fn check(seed: u64) -> Result<bool, String> {
         return Err(report("pack exited 0 but the packed image fails", &image));
     }
     Ok(true)
-}
-
-fn env_u64(name: &str, default: u64) -> u64 {
-    match std::env::var(name) {
-        Ok(v) => {
-            let v = v.trim();
-            let parsed = match v.strip_prefix("0x") {
-                Some(hex) => u64::from_str_radix(hex, 16),
-                None => v.parse(),
-            };
-            parsed.unwrap_or_else(|_| panic!("{name}={v:?} is not a number"))
-        }
-        Err(_) => default,
-    }
 }
 
 #[test]

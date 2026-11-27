@@ -14,6 +14,8 @@
 use std::path::Path;
 use std::process::Command;
 
+pub mod differential;
+
 /// A tiny dynamic-glibc binary to pack in tests that exercise delivery or config rather than
 /// the binary itself.
 ///
