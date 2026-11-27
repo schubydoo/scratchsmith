@@ -41,3 +41,13 @@
 "x86_64"
 "haswell"
 "xeon_phi"
+# The musl walk: its loader and reserved libc names, its default system dir, the one only a
+# path file names, and the newline that path entries also split on.
+"/lib/ld-musl-x86_64.so.1"
+"libc.musl-x86_64.so.1"
+"libc.so"
+"libm.so"
+"/lib"
+"/opt/sys"
+"\x0a"
+"/opt/sys\x0a/lib"

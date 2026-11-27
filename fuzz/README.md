@@ -37,6 +37,12 @@ fail before the walk starts. Its line-break assertion exercises the search-path 
 `$PLATFORM` error. It does not exercise a file name, because every file name that the target
 creates is a safe one.
 
+With `musl` set, the binary loads through `/lib/ld-musl-x86_64.so.1`, so the same graph runs
+the musl walk instead. `musl_path_file` writes the bytes of musl's search path file, and the
+target first checks that `parse_musl_path_file` splits them into entries with no `:`, newline
+or NUL. The musl walk's note quotes a search path string, so the target checks that no note
+carries a character that breaks a line.
+
 ## Seeds
 
 A target whose entry point parses a concrete format starts from a seed corpus. The

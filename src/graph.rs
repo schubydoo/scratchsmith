@@ -31,6 +31,19 @@ pub fn build(binary: &Path, includes: &[String]) -> Result<DepGraphReport> {
             .entry(lib.path.display().to_string())
             .or_insert_with(|| lib.soname.clone());
     }
+    // musl's loader is also its libc, which the binary and its libraries need by name, and it
+    // is staged only as the interpreter. Give it a node so those edges do not dangle.
+    if let (Some(_), Some(interp)) = (&resolution.musl, &resolution.interpreter) {
+        if resolution
+            .edges
+            .iter()
+            .any(|e| e.to.as_ref() == Some(&interp.source))
+        {
+            name_by_id
+                .entry(interp.source.display().to_string())
+                .or_insert_with(|| file_name(&interp.image_path));
+        }
+    }
 
     // Group edges by parent: resolved children become `needs` (child ids), unresolved
     // sonames become that node's `missing`.
@@ -101,6 +114,40 @@ mod tests {
     #[test]
     fn file_name_falls_back_to_full_path() {
         assert_eq!(file_name(Path::new("/usr/bin/id")), "id");
+    }
+
+    // A musl binary needs its libc, which is the loader. The graph lists the loader as a node.
+    #[test]
+    fn a_musl_binary_s_libc_edge_lands_on_the_loader_node() {
+        if std::process::Command::new("musl-gcc")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            crate::test_support::skip_optional("musl-gcc is not installed");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("m.c");
+        std::fs::write(&src, "int main(void){return 0;}\n").unwrap();
+        let exe = tmp.path().join("m");
+        let built = std::process::Command::new("musl-gcc")
+            .arg("-o")
+            .arg(&exe)
+            .arg(&src)
+            .status()
+            .unwrap();
+        assert!(built.success());
+        let report = build(&exe, &[]).unwrap();
+        let root = &report.nodes[0];
+        assert_eq!(root.needs.len(), 1, "{:?}", report.nodes);
+        let loader = report
+            .nodes
+            .iter()
+            .find(|n| n.id == root.needs[0])
+            .unwrap_or_else(|| panic!("no node for {}: {:?}", root.needs[0], report.nodes));
+        assert_eq!(loader.name, "ld-musl-x86_64.so.1");
+        assert!(report.missing.is_empty());
     }
 
     #[test]

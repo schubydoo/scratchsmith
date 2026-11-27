@@ -1565,6 +1565,7 @@ mod tests {
             hints: vec![],
             notes: vec![],
             arch_warnings: vec![],
+            musl: None,
         };
         stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
 
@@ -1874,6 +1875,7 @@ mod tests {
             hints: vec![],
             notes: vec![],
             arch_warnings: vec![],
+            musl: None,
         };
         stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
 
@@ -2265,6 +2267,7 @@ mod tests {
             hints: vec![],
             notes: vec![],
             arch_warnings: vec![],
+            musl: None,
         };
         let err = stage_files(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap_err();
         assert!(err.to_string().contains("libmissing.so"));
@@ -2292,6 +2295,7 @@ mod tests {
             hints: vec![],
             notes: vec![],
             arch_warnings: vec![],
+            musl: None,
         };
         let report = stage_default_includes(&res, &dest, &NssSelection::default()).unwrap();
 
@@ -2331,6 +2335,7 @@ mod tests {
             hints: vec![],
             notes: vec![],
             arch_warnings: vec![],
+            musl: None,
         };
         let report = stage_default_includes(&res, &dest, &NssSelection::default()).unwrap();
 
@@ -2361,6 +2366,7 @@ mod tests {
             hints: vec![],
             notes: vec![],
             arch_warnings: vec![],
+            musl: None,
         };
         (tmp, res, dest)
     }
