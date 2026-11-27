@@ -80,6 +80,7 @@ corpus first, then read it:
 
 ```sh
 cargo +nightly fuzz run parse_elf_info -- -max_total_time=60
+cargo +nightly fuzz run glibc_versions -- -max_total_time=60
 cargo +nightly fuzz run analyze_hardening -- -max_total_time=60
 cargo +nightly fuzz run unpack -- -max_total_time=60
 cargo +nightly fuzz run registry_parse -- -max_total_time=60
@@ -90,9 +91,8 @@ cargo llvm-cov --test fuzz_corpus_replay -- --ignored
 
 `tests/fuzz_corpus_replay.rs` replays the byte-in corpora from `fuzz/corpus/`. It is
 `#[ignore]`d, so a normal `cargo test` and CI skip it. The `resolve_graph` and
-`unpack_structured` targets take structured input, so the local replay skips them. The byte-in
-`glibc_versions` target has no replay yet, so it is skipped too. The weekly report covers all
-three, because it replays every target's stored corpus.
+`unpack_structured` targets take structured input, so the local replay skips them. The weekly
+report covers both, because it replays every target's stored corpus.
 
 ## Checking it compiles
 

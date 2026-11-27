@@ -14,7 +14,7 @@ curl -fsSL https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install
 
 Piping to `bash` runs [`install.sh`](https://github.com/schubydoo/scratchsmith/blob/main/install.sh).
 You can read it first. The `VERSION` and `BIN_DIR` env vars override the tag and install
-directory. `VERSION` takes the tag with its leading `v`, for example
+directory. `VERSION` takes the tag with or without its leading `v`, for example
 `curl -fsSL …/install.sh | VERSION=v2.2.0 bash`. Without cosign, the script warns and verifies only the SHA-256. With cosign
 installed, a missing signature bundle stops the install. The `INSECURE_ALLOW_MISSING_SIGNATURE=1`
 env var installs anyway and verifies only the SHA-256. A signature that fails to verify still
