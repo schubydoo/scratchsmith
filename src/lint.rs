@@ -160,7 +160,8 @@ impl std::fmt::Display for Hardening {
 /// Analyze and print the hardening report (the `lint` subcommand). When `gates` are
 /// given, fail (non-zero) if any is violated, naming the offending checks — without
 /// a gate, lint only reports and always succeeds. The report prints first, in either
-/// format, so a failing gate still leaves the whole report on stdout.
+/// format, so a failing gate still leaves the whole report on stdout. A gate that cannot be
+/// checked (`no-fortify` on a musl binary) is a usage error instead, before any report.
 pub fn run(binary: &Path, gates: &[Gate], format: crate::cli::Format) -> Result<()> {
     let hardening = analyze(binary)?;
     // The libc only decides whether fortify can be read. A file goblin parses that the

@@ -389,10 +389,16 @@ fn merge_resolution(into: &mut resolver::Resolution, theirs: resolver::Resolutio
     into.notes.extend(theirs.notes);
     into.arch_warnings.extend(theirs.arch_warnings);
     // One loader, so one path file: the added program's system dirs join the packed one's.
+    // Its found-path links join too, or musl cannot open those libraries in the image.
     if let (Some(ours), Some(theirs)) = (&mut into.musl, theirs.musl) {
         for dir in theirs.system_dirs {
             if !ours.system_dirs.contains(&dir) {
                 ours.system_dirs.push(dir);
+            }
+        }
+        for link in theirs.links {
+            if !ours.links.contains(&link) {
+                ours.links.push(link);
             }
         }
     }
@@ -1737,6 +1743,44 @@ mod tests {
         );
         assert_eq!(into.missing, ["libgone.so.1", "libnew.so.2"]);
         assert_eq!(into.notes, ["a note"]);
+    }
+
+    #[test]
+    fn an_added_musl_programs_system_dirs_and_links_join_once() {
+        let link = |at: &str, to: &str| (PathBuf::from(at), PathBuf::from(to));
+        let search = |dirs: &[&str], links: Vec<(PathBuf, PathBuf)>| resolver::MuslSearch {
+            path_file: PathBuf::from("/etc/ld-musl-x86_64.path"),
+            system_dirs: dirs.iter().map(PathBuf::from).collect(),
+            links,
+        };
+        let shared = link("/usr/lib64/libz.so.1", "/usr/lib/libz.so.1");
+        let mut into = resolver::Resolution {
+            musl: Some(search(&["/usr/lib64"], vec![shared.clone()])),
+            ..Default::default()
+        };
+        let theirs = resolver::Resolution {
+            musl: Some(search(
+                &["/usr/lib64", "/opt/sys"],
+                vec![
+                    shared.clone(),
+                    link("/app/libs/libown.so.1", "/opt/other/libown.so.1.0"),
+                ],
+            )),
+            ..Default::default()
+        };
+        merge_resolution(&mut into, theirs);
+        let musl = into.musl.unwrap();
+        assert_eq!(
+            musl.system_dirs,
+            [PathBuf::from("/usr/lib64"), PathBuf::from("/opt/sys")]
+        );
+        assert_eq!(
+            musl.links,
+            [
+                shared,
+                link("/app/libs/libown.so.1", "/opt/other/libown.so.1.0")
+            ]
+        );
     }
 
     #[test]
