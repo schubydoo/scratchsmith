@@ -307,6 +307,28 @@ jobs:
           set -euo pipefail
           [ "$OUTCOME" = "failure" ] || { echo "::error::add-file of a directory packed anyway — was the --add-file wiring dropped from action.yml?"; exit 1; }
           echo "add-file directory guard verified"
+      # tmp and add-binary in one rootfs pack. curl needs libcurl, which id does not, so a staged
+      # libcurl proves add-binary resolved the added program's own libraries. The DST holds a
+      # space, which the args input would split, so it also pins the per-line wiring.
+      - name: Pack with tmp and add-binary → rootfs
+        id: tmpaddbin
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          output: ./staged-tmp-add-binary
+          tmp: true
+          add-binary: |
+            /usr/bin/curl:/opt/my tools/curl
+      - name: Assert tmp and add-binary staged
+        env:
+          ROOTFS: ${{ steps.tmpaddbin.outputs.rootfs }}
+        run: |
+          set -euo pipefail
+          [ -n "$ROOTFS" ] || { echo "::error::tmp/add-binary pack produced no rootfs"; exit 1; }
+          [ "$(stat -c %a "$ROOTFS/tmp")" = 1777 ] || { echo "::error::tmp: true did not stage /tmp at mode 1777 — is --tmp wired in action.yml?"; exit 1; }
+          test -f "$ROOTFS/opt/my tools/curl" || { echo "::error::add-binary did not copy /usr/bin/curl to '/opt/my tools/curl' — is --add-binary wired in action.yml?"; exit 1; }
+          find "$ROOTFS" -name 'libcurl.so.4*' | grep -q . || { echo "::error::add-binary staged curl but not libcurl"; exit 1; }
+          echo "tmp and add-binary inputs wired"
       # --locale stages a COMPILED locale, so the runner must be able to supply one. The runner
       # image ships no en_US directory, so localedef compiles it from /usr/share/i18n. Assert
       # that source rather than skipping when it is absent: a self-skipping selftest proves
