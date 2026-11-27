@@ -268,38 +268,6 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
     },
-    /// Check the keyless cosign signature on a registry image, and with --sbom its SBOM
-    /// attestation, against the signer identity and issuer you expect (needs cosign).
-    #[command(group(
-        clap::ArgGroup::new("identity")
-            .required(true)
-            .args(["certificate_identity", "certificate_identity_regexp"])
-    ))]
-    Verify {
-        /// The image to check, by tag or digest, e.g. `ghcr.io/you/app@sha256:…`. A tag is
-        /// resolved to its digest once, and cosign checks that digest.
-        image: String,
-        /// The exact signer identity the certificate must name (an email, or a workflow URL).
-        #[arg(long = "certificate-identity", value_name = "ID")]
-        certificate_identity: Option<String>,
-        /// A pattern the signer identity must match. It must start with `^`, since cosign
-        /// matches a pattern anywhere in the identity.
-        #[arg(long = "certificate-identity-regexp", value_name = "REGEX")]
-        certificate_identity_regexp: Option<String>,
-        /// The OIDC issuer the certificate must name, e.g.
-        /// `https://token.actions.githubusercontent.com`.
-        #[arg(long = "certificate-oidc-issuer", value_name = "URL")]
-        certificate_oidc_issuer: String,
-        /// Also check the SBOM attestation that `pack --push --sign --sbom` attaches.
-        #[arg(long)]
-        sbom: bool,
-        /// The SBOM attestation format to check (with --sbom; defaults to cyclonedx-json).
-        #[arg(long = "sbom-format", value_enum, requires = "sbom")]
-        sbom_format: Option<crate::supplychain::SbomFormat>,
-        /// Report format.
-        #[arg(long, value_enum, default_value_t = Format::Text)]
-        format: Format,
-    },
     /// Print a binary's resolved dependency tree (the libraries `pack` resolves; NSS modules
     /// and --add-binary are not shown).
     Graph {
@@ -333,6 +301,38 @@ pub enum Command {
         archive: PathBuf,
         /// Directory to extract the image rootfs into (created if absent).
         output: PathBuf,
+        /// Report format.
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
+    },
+    /// Check the keyless cosign signature on a registry image, and with --sbom its SBOM
+    /// attestation, against the signer identity and issuer you expect (needs cosign).
+    #[command(group(
+        clap::ArgGroup::new("identity")
+            .required(true)
+            .args(["certificate_identity", "certificate_identity_regexp"])
+    ))]
+    Verify {
+        /// The image to check, by tag or digest, e.g. `ghcr.io/you/app@sha256:…`. A tag is
+        /// resolved to its digest once, and cosign checks that digest.
+        image: String,
+        /// The exact signer identity the certificate must name (an email, or a workflow URL).
+        #[arg(long = "certificate-identity", value_name = "ID")]
+        certificate_identity: Option<String>,
+        /// A pattern the signer identity must match. It must start with `^`, since cosign
+        /// matches a pattern anywhere in the identity.
+        #[arg(long = "certificate-identity-regexp", value_name = "REGEX")]
+        certificate_identity_regexp: Option<String>,
+        /// The OIDC issuer the certificate must name, e.g.
+        /// `https://token.actions.githubusercontent.com`.
+        #[arg(long = "certificate-oidc-issuer", value_name = "URL")]
+        certificate_oidc_issuer: String,
+        /// Also check the SBOM attestation that `pack --push --sign --sbom` attaches.
+        #[arg(long)]
+        sbom: bool,
+        /// The SBOM attestation format to check (with --sbom; defaults to cyclonedx-json).
+        #[arg(long = "sbom-format", value_enum, requires = "sbom")]
+        sbom_format: Option<crate::supplychain::SbomFormat>,
         /// Report format.
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
