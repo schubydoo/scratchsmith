@@ -2930,7 +2930,7 @@ fn the_documented_full_config_passes_every_sink_check() {
             "got: {stderr}"
         );
     };
-    pack(&[], "./dist/app");
+    pack(&[], "/opt/app/bin/app");
     pack(&["--push", "ghcr.io/you/app:dev", "./other"], "./other");
 }
 
