@@ -20,7 +20,7 @@ A clear description of the bug, and what you expected instead.
 
 - What is it? [for example: curl, ffmpeg, a closed-source vendor binary]
 - If it is relevant, the `scratchsmith lint <binary>` output (PIE/RELRO/NX/…)
-- glibc or musl? (musl is out of scope by design)
+- glibc or musl? (musl is supported on x86_64 only)
 - Does it `dlopen` plugins? [yes / no / unsure]
 
 > Please do not attach proprietary binaries. Send the output of `scratchsmith lint` or
@@ -33,6 +33,7 @@ A clear description of the bug, and what you expected instead.
 - Install method: [install.sh / Homebrew / cargo / release binary / container image / GitHub Action / from source]
 - OS & arch: [for example: Debian 13 amd64]
 - glibc / `ldconfig --version` (first line): [for example: 2.41]
+- For a musl binary, the musl version (run `/lib/ld-musl-x86_64.so.1` with no arguments): [for example: 1.2.5]
 - `docker --version` (or podman/nerdctl, per `--runtime`) if the default load sink is used: [for example: 27.x]
 - `scratchsmith doctor` output (which external tools are present)
 

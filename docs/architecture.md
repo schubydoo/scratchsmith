@@ -52,10 +52,11 @@
 
 ## The musl backend
 
-The binary's program interpreter (`PT_INTERP`) picks the rules. A loader named `ld-musl-*`
-selects musl's rules for the whole graph, and any other loader selects the glibc rules above,
-which do not change. musl's loader (1.2.5) differs from glibc's in these ways, and Scratchsmith
-copies each one:
+The binary's program interpreter (`PT_INTERP`) picks the rules. A loader named `ld-musl-*` selects
+musl's rules for the whole graph, and any other loader selects the glibc rules above, which do not
+change. The musl backend supports x86_64 only, and a musl binary for any other architecture fails
+the pack. musl's loader (1.2.5) differs from glibc's in these ways, and Scratchsmith copies each
+one:
 
 1. **No cache.** musl has no `ld.so.cache` and no `ldconfig`, so `pack` writes neither and never
    runs `ldconfig`. musl opens a library only at the path its search found. When that path is
@@ -81,6 +82,9 @@ copies each one:
 8. **A glibc libc is not loaded.** musl takes a library that defines `__libc_start_main` and
    `stdin` for its own libc. Scratchsmith fails the pack on a glibc libc in a musl graph, and
    maps a copy of musl's libc to the loader.
+9. **No skip on class or machine.** glibc skips a library file of another ELF class or
+   machine and keeps searching. musl opens the first file of the needed name and fails to load
+   it. Scratchsmith takes that file too, and warns.
 
 musl has no NSS: it reads `/etc/passwd`, `/etc/group`, `/etc/hosts` and `/etc/resolv.conf`
 directly. A musl image always gets the minimal `/etc/passwd` and `/etc/group`, and no
@@ -93,11 +97,12 @@ Scratchsmith follows [Semantic Versioning](https://semver.org/). As of **1.0**, 
 stable contract. A breaking change to any of them requires a new major version:
 
 - **CLI flags**: the names and meaning of `pack` / `lint` / `doctor` / `index` / `graph` / `diff` /
-  `unpack` flags, and the top-level `--completions` and `--verbose`. New flags arrive in minor
-  releases. A removed or renamed flag, or a changed default, is a major change.
+  `unpack` / `verify` flags, and the top-level `--completions` and `--verbose`. New flags arrive in
+  minor releases. A removed or renamed flag, or a changed default, is a major change.
 - **`scratchsmith.toml`**: the configuration keys and their types (the [Configuration](configuration.md) reference).
-- **`--format json`**: the field names and types of the `pack`, `index`, `graph`, `diff`, `unpack`,
-  and `lint` reports (the schema CI gates consume). Each is pinned by a golden test, so a change is always deliberate.
+- **`--format json`**: the field names and types of the `pack`, `index`, `verify`, `graph`, `diff`,
+  `unpack`, and `lint` reports (the schema CI gates consume). Each is pinned by a golden test, so a
+  change is always deliberate.
 - **Exit codes**: `0` on success. `2` on a usage error: an argument-parse error, or a command line
   that scratchsmith refuses after the parse, such as `--watch --format json` or `pack` with no
   binary. `1` on any other failure, such as a failed pack. Before 2.0.0, a refusal made after the

@@ -30,19 +30,22 @@ Scratchsmith's reason-for-existing constraints. A change that breaks one is wron
 if tests pass — flag it Important:
 
 1. **Fail loud, never silently.** A missing library, missing loader, musl binary on an
-   architecture other than x86_64, or a missing external tool
-   (`ldconfig`/`syft`/`cosign`/`strip`/`upx`) must exit non-zero with a fix hint — never
-   a silent skip that ships a broken image. A silently-skipped
-   step is the worst outcome. No swallowed errors.
-2. **Determinism over host-trust.** Dependency resolution must emulate `ld.so`, never
-   scrape host `ldd` / `ld.so.cache` / `LD_LIBRARY_PATH`. Same binary + sysroot ⇒ same
-   result, independent of host env. Reading env into resolution is a finding.
+   architecture other than x86_64, glibc and musl mixed in one image, or a missing external
+   tool (`ldconfig`/`syft`/`cosign`/`strip`/`upx`) must exit non-zero with a fix hint —
+   never a silent skip that ships a broken image. A silently-skipped step is the worst
+   outcome. No swallowed errors.
+2. **Determinism over host-trust.** Dependency resolution must emulate the binary's loader
+   (glibc's `ld.so`, or musl's), never scrape host `ldd` / `ld.so.cache` /
+   `LD_LIBRARY_PATH`. Same binary + sysroot ⇒ same result, independent of host env. Reading
+   env into resolution is a finding.
 3. **diff_id vs layer digest.** `config.rootfs.diff_ids` = sha256 of the **uncompressed**
    tar; `manifest.layers[].digest` = sha256 of the **gzip**. Conflating them yields
    unpullable images. Any change here needs the reproducibility test to still hold.
-4. **Resolver correctness.** RPATH is transitive; **RUNPATH is not inherited**; `$ORIGIN`
-   expands per owning-object (not the top binary); the `PT_INTERP` loader must be staged
-   at its verbatim path; versioned sonames need the real file **plus** the soname symlink.
+4. **Resolver correctness.** For glibc, RPATH is transitive and **RUNPATH is not
+   inherited**. For musl, RPATH and RUNPATH are one value (RUNPATH wins), and it **is**
+   inherited, by design (docs/architecture.md, "The musl backend"). `$ORIGIN` expands per
+   owning-object (not the top binary); the `PT_INTERP` loader must be staged at its verbatim
+   path; versioned sonames need the real file **plus** the soname symlink.
 5. **NSS / dlopen silent-failure trap.** glibc `dlopen`s NSS modules outside the NEEDED
    graph. Changes touching the default-include set or the smoke-run must keep name
    lookups working in-image; weakening the smoke-run guard is Important.

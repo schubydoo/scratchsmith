@@ -51,7 +51,8 @@ structure, so they take no seed. `.clusterfuzzlite/build.sh` generates the seeds
 they are not committed:
 
 - `parse_elf_info`, `glibc_versions` and `analyze_hardening`: a real dynamic executable plus link-variant ELFs
-  (RPATH, RUNPATH with `$ORIGIN`, a shared object, a static PIE, and a full-RELRO build).
+  (RPATH, RUNPATH with `$ORIGIN`, a shared object, a static PIE, and a full-RELRO build), plus
+  two musl-shaped ELFs (x86_64 and aarch64).
 - `unpack`: a real OCI-layout archive whose blob digests match.
 - `registry_parse`: a valid child manifest, config blob, token response, and an index with no `mediaType`.
 - `rpm_headers`: one small valid header with a name, a version, a release and an architecture.

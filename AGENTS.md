@@ -18,9 +18,9 @@ CLI. See `README.md` for the product story and `CONTRIBUTING.md` for the flow.
 - `src/resolver.rs`: `ld.so`-faithful dependency resolution (RPATH/RUNPATH/`$ORIGIN`, interpreter, sonames), with a separate backend that follows musl's loader rules. Never scrapes host `ldd`/cache.
 - `src/stager.rs`: copies interpreter + libs, recreates soname symlinks, regenerates `ld.so.cache` (glibc only; musl gets an `ld-musl-*.path` file when needed), stages glibc NSS/passwd (musl gets passwd and group only).
 - `src/image.rs`: reproducible layer/config, plus the container-engine load (`--runtime` docker/podman/nerdctl) and `write_oci_archive`.
-- `src/registry.rs`: daemonless `--push` and the `index` subcommand (multi-arch image index) via `oci-client`. Docker-config auth includes the identity-token OAuth2 exchange.
+- `src/registry.rs`: daemonless `--push`, the `index` subcommand (multi-arch image index) and `verify`'s digest lookup via `oci-client`. Docker-config auth includes the identity-token OAuth2 exchange.
 - `src/pack.rs`: orchestration. Delivery goes through a `Sink` enum (`Rootfs`/`DockerLoad`/`OciArchive`/`Push`).
-- `src/supplychain.rs`: SBOM (syft), scan (grype) + image signing/attestation (cosign), shelled out.
+- `src/supplychain.rs`: SBOM (syft), scan (grype) + image signing/attestation and `verify`'s checks (cosign), shelled out.
 - `src/packages.rs` + `src/rpm.rs`: `--packages`, which package owns each bundled file (dpkg, rpm), and the records for the SBOM and the image.
 - `src/watch.rs`: `pack --watch`.
 - `src/verbose.rs`: the global `--verbose` decision lines (used by the resolver and stager).

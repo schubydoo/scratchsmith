@@ -2,12 +2,12 @@
 #
 #   brew install schubydoo/scratchsmith/scratchsmith
 #
-# scratchsmith packs a prebuilt dynamic glibc *Linux* ELF into a FROM scratch OCI
+# scratchsmith packs a prebuilt dynamic *Linux* ELF (glibc, or musl on x86_64) into a FROM scratch OCI
 # image, so it is Linux-only (Homebrew on Linux / WSL). Version + checksums are
 # auto-bumped per release by packaging-bump.yml in the main repo, from the release
 # checksums.txt; this tap mirrors that canonical file via sync-formula.yml.
 class Scratchsmith < Formula
-  desc "Pack a dynamic glibc Linux binary into a minimal non-root scratch container"
+  desc "Pack a dynamic glibc or musl Linux binary into a minimal non-root scratch container"
   homepage "https://github.com/schubydoo/scratchsmith"
   version "2.2.0"
   license "MIT"

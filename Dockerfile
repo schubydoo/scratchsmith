@@ -10,7 +10,7 @@
 # syft/grype/cosign/strip/upx/tini for the options that use them), so it does not work
 # here. `index` without `--sign` does: with no certificate store in the image, it falls
 # back to the Mozilla roots compiled into the binary.
-# Everything else does too, `doctor` included — it probes for each tool and reports
+# Everything else does too except `verify`, which needs cosign, `doctor` included — it probes for each tool and reports
 # them all missing, which is the right answer. To run `pack` in a container, use the
 # `:toolbox` image instead (Dockerfile.toolbox, a Wolfi base with the
 # toolchain) — see docs/usage.md, which lists the subcommands.

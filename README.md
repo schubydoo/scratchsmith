@@ -49,7 +49,7 @@ build. It is purpose-built for the hard case and useful for the easy one.
 | Capability | State |
 |---|---|
 | Pack a dynamic glibc ELF, or an x86_64 musl one (see below) → runnable `FROM scratch` image | ✅ (loaded via `docker`/`podman`/`nerdctl`) |
-| `ld.so`-faithful dependency resolution (RPATH/RUNPATH/`$ORIGIN`, interpreter, sonames) | ✅ |
+| Loader-faithful dependency resolution, glibc's `ld.so` or musl's (RPATH/RUNPATH/`$ORIGIN`, interpreter, sonames) | ✅ |
 | glibc **NSS** support staged, so name-service lookups like `getent hosts` work. Trim the modules with `--nss` | ✅ |
 | **Non-root** by default (UID 65532), reproducible layers | ✅ |
 | **SBOM** generation: `--sbom` (CycloneDX or SPDX, via syft) | ✅ |
