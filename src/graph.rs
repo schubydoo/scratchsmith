@@ -3,7 +3,7 @@
 //! audit view: it stages nothing.
 
 use crate::report::{DepGraphReport, DepNode};
-use crate::resolver::{self, push_unique, Sysroot};
+use crate::resolver::{self, push_unique, Resolution, Sysroot};
 use anyhow::{bail, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -15,7 +15,11 @@ use std::path::Path;
 pub fn build(binary: &Path, includes: &[String]) -> Result<DepGraphReport> {
     let resolution = resolver::resolve_with_includes(binary, &Sysroot::new("/"), includes)?;
     resolution.print_hints();
+    Ok(report(binary, resolution))
+}
 
+// The graph of one resolution, split from `build` so a test can feed a resolution by hand.
+fn report(binary: &Path, resolution: Resolution) -> DepGraphReport {
     // The resolver canonicalizes the binary; its edges' `from` uses that path, so match it.
     let root_id = std::fs::canonicalize(binary)
         .unwrap_or_else(|_| binary.to_path_buf())
@@ -69,12 +73,12 @@ pub fn build(binary: &Path, includes: &[String]) -> Result<DepGraphReport> {
     // Root first, then the rest by id — a stable, testable order.
     nodes.sort_by(|a, b| (a.id != root_id, &a.id).cmp(&(b.id != root_id, &b.id)));
 
-    Ok(DepGraphReport {
+    DepGraphReport {
         root: root_id,
         interpreter: resolution.interpreter_path(),
         nodes,
         missing: resolution.missing,
-    })
+    }
 }
 
 /// Fail loudly when the graph has unresolved dependencies, so a text-mode CI gate
@@ -114,6 +118,52 @@ mod tests {
     #[test]
     fn file_name_falls_back_to_full_path() {
         assert_eq!(file_name(Path::new("/usr/bin/id")), "id");
+    }
+
+    // The loader gets a node only in a musl resolution with an edge to it. A glibc resolution
+    // never has one, so its graph is unchanged.
+    #[test]
+    fn the_musl_loader_gets_a_node_only_when_an_edge_lands_on_it() {
+        use crate::resolver::{DepEdge, MuslSearch, ResolvedInterp, ResolvedLib};
+        use std::path::PathBuf;
+        let loader = PathBuf::from("/lib/ld-musl-x86_64.so.1");
+        let lib = PathBuf::from("/usr/lib/libz.so.1.3");
+        let bin = Path::new("/nonexistent/app");
+        let edge = |from: &Path, soname: &str, to: &Path| DepEdge {
+            from: from.to_path_buf(),
+            soname: soname.into(),
+            to: Some(to.to_path_buf()),
+        };
+        let resolution = |musl: bool, edges: Vec<DepEdge>| Resolution {
+            interpreter: Some(ResolvedInterp {
+                image_path: loader.clone(),
+                source: loader.clone(),
+            }),
+            libs: vec![ResolvedLib {
+                soname: "libz.so.1".into(),
+                path: lib.clone(),
+            }],
+            edges,
+            musl: musl.then(MuslSearch::default),
+            ..Resolution::default()
+        };
+        let both = vec![
+            edge(bin, "libz.so.1", &lib),
+            edge(bin, "libc.musl-x86_64.so.1", &loader),
+            edge(&lib, "libc.musl-x86_64.so.1", &loader),
+        ];
+        let graph = report(bin, resolution(true, both.clone()));
+        let names: Vec<_> = graph.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["app", "ld-musl-x86_64.so.1", "libz.so.1"]);
+        let loader_id = loader.display().to_string();
+        assert!(graph.nodes[0].needs.contains(&loader_id));
+        assert_eq!(graph.nodes[2].needs, [loader_id]);
+
+        // No edge to the loader, or not musl: no loader node.
+        let graph = report(bin, resolution(true, vec![edge(bin, "libz.so.1", &lib)]));
+        assert_eq!(graph.nodes.len(), 2);
+        let graph = report(bin, resolution(false, both));
+        assert!(graph.nodes.iter().all(|n| n.name != "ld-musl-x86_64.so.1"));
     }
 
     // A musl binary needs its libc, which is the loader. The graph lists the loader as a node.

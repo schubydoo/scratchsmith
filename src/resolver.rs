@@ -1092,10 +1092,19 @@ fn musl_object_dirs(
     let Some(raw) = obj.runpaths.last().or(obj.rpaths.last()) else {
         return Vec::new();
     };
+    // One left-to-right pass, as musl's `fixup_rpath` does, so a `$ORIGIN` inside the origin
+    // directory itself is copied, not expanded again.
+    let origin = origin_dir.to_string_lossy();
+    let mut expanded = String::with_capacity(raw.len());
     let mut rest = raw.as_str();
     while let Some(at) = rest.find('$') {
+        expanded.push_str(&rest[..at]);
         let token = &rest[at..];
-        if !token.starts_with("$ORIGIN") && !token.starts_with("${ORIGIN}") {
+        let skip = if token.starts_with("${ORIGIN}") {
+            "${ORIGIN}".len()
+        } else if token.starts_with("$ORIGIN") {
+            "$ORIGIN".len()
+        } else {
             push_unique(
                 notes,
                 format!(
@@ -1107,13 +1116,11 @@ fn musl_object_dirs(
                 ),
             );
             return Vec::new();
-        }
-        rest = &token[1..];
+        };
+        expanded.push_str(&origin);
+        rest = &token[skip..];
     }
-    let origin = origin_dir.to_string_lossy();
-    let expanded = raw
-        .replace("${ORIGIN}", &origin)
-        .replace("$ORIGIN", &origin);
+    expanded.push_str(rest);
     parse_musl_path_file(expanded.as_bytes())
         .into_iter()
         .filter(|dir| dir.is_absolute())
@@ -1196,6 +1203,8 @@ fn resolve_musl(
     }
 
     let mut visited = HashSet::new();
+    // Real paths of musl libc copies, which load as the loader (rule 8).
+    let mut libc_copies: HashSet<PathBuf> = HashSet::new();
     visited.insert(root_path.to_path_buf());
     // The names a loaded object answers to: the last path part a search found it at (musl's
     // `shortname`), never DT_SONAME. And each loaded file by device and inode.
@@ -1301,7 +1310,13 @@ fn resolve_musl(
                 continue;
             }
             if !visited.insert(real.clone()) {
-                resolution.edges.push(edge(Some(real)));
+                // A musl libc copy is never staged, so a later request for it is the loader too.
+                let to = if libc_copies.contains(&real) {
+                    loader.clone()
+                } else {
+                    Some(real)
+                };
+                resolution.edges.push(edge(to));
                 continue;
             }
             // The name came out of an ELF. Refuse a file that is not a regular one before the
@@ -1327,6 +1342,7 @@ fn resolve_musl(
                     printable(root_path)
                 ),
                 Some(Libc::Musl) => {
+                    libc_copies.insert(real);
                     resolution.edges.push(edge(loader.clone()));
                     continue;
                 }
@@ -5417,6 +5433,29 @@ mod tests {
             assert_eq!(dollar_token("$"), "$");
         }
 
+        // musl expands in one pass, so a `$ORIGIN` in the origin directory itself stays as is.
+        #[test]
+        fn origin_expands_in_one_pass() {
+            let obj = bin(&[], &[], &["$ORIGIN/a:${ORIGIN}x:/b"]);
+            let mut notes = Vec::new();
+            let dirs = musl_object_dirs(
+                &obj,
+                Path::new("/srv/$ORIGIN/exe"),
+                Path::new("/srv/$ORIGIN"),
+                Path::new("/"),
+                &mut notes,
+            );
+            assert!(notes.is_empty(), "{notes:?}");
+            assert_eq!(
+                dirs,
+                [
+                    PathBuf::from("/srv/$ORIGIN/a"),
+                    PathBuf::from("/srv/$ORIGINx"),
+                    PathBuf::from("/b"),
+                ]
+            );
+        }
+
         #[test]
         fn the_path_file_sets_the_system_dirs_and_records_the_ones_used() {
             let tmp = tempfile::tempdir().unwrap();
@@ -5567,15 +5606,29 @@ mod tests {
             let mut musl = elf(&["libnever.so.1"], &[], &[], None);
             musl.libc = Some(Libc::Musl);
             let infos = HashMap::from([
-                (canonical(&exe), bin(&["libmuslcopy.so"], &[], &[])),
+                (
+                    canonical(&exe),
+                    bin(&["libmuslcopy.so", "libz.so.1"], &[], &[]),
+                ),
                 (canonical(&root.join("lib/libmuslcopy.so")), musl),
+                (
+                    canonical(&root.join("lib/libz.so.1")),
+                    elf(&["libmuslcopy.so"], &[], &[], None),
+                ),
             ]);
+            touch(&root.join("lib/libz.so.1"));
             let res = resolve(&exe, root, infos);
-            assert!(res.libs.is_empty() && res.missing.is_empty(), "{res:?}");
-            assert_eq!(
-                res.edges[0].to,
-                Some(canonical(&root.join(LOADER.trim_start_matches('/'))))
-            );
+            assert!(res.missing.is_empty(), "{res:?}");
+            assert_eq!(res.libs.len(), 1, "{res:?}");
+            // The second request, from libz, lands on the loader too, so no edge dangles.
+            let loader = Some(canonical(&root.join(LOADER.trim_start_matches('/'))));
+            let copy_edges: Vec<_> = res
+                .edges
+                .iter()
+                .filter(|e| e.soname == "libmuslcopy.so")
+                .collect();
+            assert_eq!(copy_edges.len(), 2, "{res:?}");
+            assert!(copy_edges.iter().all(|e| e.to == loader), "{res:?}");
         }
 
         #[test]
