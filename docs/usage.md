@@ -536,6 +536,10 @@ What changes for a musl binary:
 - **No glibc locales.** musl has a built-in C.UTF-8 and does not read compiled glibc locales, so
   `--locale`, or a `locale` key, exits `2`.
 - **One libc per image.** An `--add-binary` program of the other libc fails the pack.
+- **`--ca-certs`.** Alpine's OpenSSL and curl read the CA bundle at `/etc/ssl/cert.pem`, not at
+  `/etc/ssl/certs/ca-certificates.crt`. `--ca-certs` stages the bundle at the second path and
+  links the first to it, as Alpine does, so TLS works with no `--cacert` flag. A file that
+  `--add-file` puts at `/etc/ssl/cert.pem` is kept, and no link is made.
 - **`--packages`.** An Alpine host keeps an apk database, which `--packages` does not read yet.
   The report says null there, as on any host with no dpkg or rpm database.
 
