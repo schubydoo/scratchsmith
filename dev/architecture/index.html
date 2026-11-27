@@ -863,8 +863,8 @@ one:</p>
 </ol>
 <p>musl has no NSS: it reads <code>/etc/passwd</code>, <code>/etc/group</code>, <code>/etc/hosts</code> and <code>/etc/resolv.conf</code>
 directly. A musl image always gets the minimal <code>/etc/passwd</code> and <code>/etc/group</code>, and no
-<code>nsswitch.conf</code> or NSS module. One image has one libc, so an <code>--add-binary</code> program of the other
-libc fails the pack.</p>
+<code>nsswitch.conf</code> or NSS module. One image has one libc, so an <code>--add-binary</code> program or library of
+the other libc fails the pack.</p>
 <h2 id="stability">Stability<a class="headerlink" href="#stability" title="Permanent link">&para;</a></h2>
 <p>Scratchsmith follows <a href="https://semver.org/">Semantic Versioning</a>. As of <strong>1.0</strong>, these surfaces are a
 stable contract. A breaking change to any of them requires a new major version:</p>
