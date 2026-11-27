@@ -776,8 +776,8 @@ runner, verifies it against the release checksums, and runs <code>pack</code>:</
 <a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">binary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./dist/app</span>
 <a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">push</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/${{ github.repository }}:latest</span><span class="w">   </span><span class="c1"># must be lowercase: spell it out if the name has capitals</span>
 </code></pre></div>
-<p>Nine inputs take <strong>one value per line</strong>: <code>cmd</code>, <code>env</code>, <code>label</code>, <code>healthcheck</code>, <code>add-file</code>,
-<code>locale</code>, <code>include</code>, <code>deny</code>, and <code>require</code>. Set image metadata, gate on vulnerabilities, or cap
+<p>Ten inputs take <strong>one value per line</strong>: <code>cmd</code>, <code>env</code>, <code>label</code>, <code>healthcheck</code>, <code>add-file</code>,
+<code>add-binary</code>, <code>locale</code>, <code>include</code>, <code>deny</code>, and <code>require</code>. Set image metadata, gate on vulnerabilities, or cap
 the size:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schubydoo/scratchsmith@v&lt;ver&gt;</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span>
@@ -931,9 +931,19 @@ the <code>packages</code> input to <code>none</code>.</p>
 <td>Add a minimal init (tini) as pid 1 wrapping the entrypoint.</td>
 </tr>
 <tr>
+<td><code>tmp</code></td>
+<td><code>false</code></td>
+<td>Add an empty, writable <code>/tmp</code> (mode <code>1777</code>, owned by uid 0), so the non-root user can write there with no <code>--tmpfs</code> mount. See <a href="../usage/#add-a-writable-tmp">Usage</a>. Needs scratchsmith v2.1.0 or later.</td>
+</tr>
+<tr>
 <td><code>add-file</code></td>
 <td></td>
 <td>Copy host files into the image, one <code>SRC:DST</code> per line. A bare absolute <code>SRC</code> keeps its own path. Regular files only, and a missing source, a directory, or a <code>DST</code> already in the image fails the pack. A <code>symlinks</code> mode that stages a link changes two of those rules for a symlink source. A preserved link is staged as a link, so a link to a directory no longer fails. Under <code>skip-unsafe</code>, an entry the pack cannot honor stages nothing and warns. A taken <code>DST</code> still fails under every mode. The file lands owned by uid 0 at mode <code>0644</code>, or <code>0755</code> for an executable source, so do not add a secret this way.</td>
+</tr>
+<tr>
+<td><code>add-binary</code></td>
+<td></td>
+<td>Copy host ELF programs into the image with the shared libraries they need, one <code>SRC:DST</code> per line. A bare absolute <code>SRC</code> keeps its own path. Each program's libraries resolve by the same <code>ld.so</code> rules as the packed binary, and a library both need is staged once. An ELF for another architecture or loader fails the pack, and so does one that uses <code>$ORIGIN</code> with a <code>DST</code> outside its real directory. A path may hold spaces, which <code>args</code> cannot pass. See <a href="../usage/#add-a-program-with-its-libraries">Usage</a>. Needs scratchsmith v2.1.0 or later.</td>
 </tr>
 <tr>
 <td><code>locale</code></td>
