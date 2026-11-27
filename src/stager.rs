@@ -2,10 +2,11 @@
 //! at the paths the runtime expects, recreate soname symlinks, and regenerate the
 //! loader cache. Consumes the [`Resolution`] produced by [`crate::resolver`].
 
-use crate::resolver::{Resolution, ResolvedLib};
+use crate::resolver::{MuslSearch, Resolution, ResolvedLib, MUSL_DEFAULT_DIRS};
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -690,7 +691,8 @@ nonroot:x:65532:
 nobody:x:65534:
 ";
 
-/// Stage `binary` and its resolved dependencies under `dest`, then build the cache.
+/// Stage `binary` and its resolved dependencies under `dest`, then build the loader's cache, or
+/// for musl its search path file.
 pub fn stage(
     binary: &Path,
     resolution: &Resolution,
@@ -698,7 +700,7 @@ pub fn stage(
     symlinks: SymlinkMode,
 ) -> Result<StagedTree> {
     let tree = stage_files(binary, resolution, dest, symlinks)?;
-    generate_ld_cache(dest, resolution)?;
+    configure_loader(dest, resolution)?;
     Ok(tree)
 }
 
@@ -715,7 +717,7 @@ pub fn stage_with_includes(
 ) -> Result<(StagedTree, IncludeReport)> {
     let tree = stage_files(binary, resolution, dest, symlinks)?;
     let includes = stage_default_includes(resolution, dest, nss)?;
-    generate_ld_cache(dest, resolution)?;
+    configure_loader(dest, resolution)?;
     Ok((tree, includes))
 }
 
@@ -730,6 +732,13 @@ pub fn stage_default_includes(
     nss: &NssSelection,
 ) -> Result<IncludeReport> {
     let mut report = IncludeReport::default();
+
+    // musl has no NSS and reads passwd and group itself, so a musl image gets the two files
+    // and nothing else here, whatever `nss` selects.
+    if resolution.musl.is_some() {
+        write_user_db(dest, &mut report)?;
+        return Ok(report);
+    }
 
     if let Some(body) = nss.nsswitch() {
         write_into(dest, Path::new("/etc/nsswitch.conf"), body.as_bytes())?;
@@ -767,17 +776,23 @@ pub fn stage_default_includes(
     // a lie — an image with /etc/passwd whose getpwuid() still returns null. Stage them
     // only when `files` is staged.
     if nss.files {
-        for (path, body) in [
-            ("/etc/passwd", MINIMAL_PASSWD),
-            ("/etc/group", MINIMAL_GROUP),
-        ] {
-            write_into(dest, Path::new(path), body.as_bytes())?;
-            crate::verbose::line(|| format!("wrote {path}"));
-            report.staged.push(PathBuf::from(path));
-        }
+        write_user_db(dest, &mut report)?;
     }
 
     Ok(report)
+}
+
+// The minimal /etc/passwd and /etc/group.
+fn write_user_db(dest: &Path, report: &mut IncludeReport) -> Result<()> {
+    for (path, body) in [
+        ("/etc/passwd", MINIMAL_PASSWD),
+        ("/etc/group", MINIMAL_GROUP),
+    ] {
+        write_into(dest, Path::new(path), body.as_bytes())?;
+        crate::verbose::line(|| format!("wrote {path}"));
+        report.staged.push(PathBuf::from(path));
+    }
+    Ok(())
 }
 
 /// One staged ELF file's size, before and after an optional strip.
@@ -1074,6 +1089,11 @@ fn stage_files(
             });
         }
     }
+    if let Some(search) = &resolution.musl {
+        for (at, real) in &search.links {
+            link_found_path(dest, at, real)?;
+        }
+    }
 
     Ok(StagedTree {
         root: dest.to_path_buf(),
@@ -1193,6 +1213,46 @@ fn image_dir(dest: &Path, dir: &Path, create: bool) -> Result<PathBuf> {
         }
     }
     Ok(at)
+}
+
+// Give the loader what it needs to find the staged libraries: glibc's ld.so.cache, or musl's
+// search path file. musl reads no cache, and an Alpine host has no glibc `ldconfig`, so a musl
+// image skips the cache before any `ldconfig` call.
+fn configure_loader(dest: &Path, resolution: &Resolution) -> Result<()> {
+    match &resolution.musl {
+        Some(search) => write_musl_path_file(dest, search),
+        None => generate_ld_cache(dest, resolution),
+    }
+}
+
+// Write musl's search path file only when the system search found a library outside musl's
+// default directories. Once the file exists, musl searches only what it lists, so it lists
+// those directories and the defaults, sorted, one per line. A library found through the
+// binary's own search path needs no entry, because that search path works in the image too.
+fn write_musl_path_file(dest: &Path, search: &MuslSearch) -> Result<()> {
+    let defaults: Vec<PathBuf> = MUSL_DEFAULT_DIRS.iter().map(PathBuf::from).collect();
+    if search.system_dirs.iter().all(|dir| defaults.contains(dir)) {
+        return Ok(());
+    }
+    let dirs: BTreeSet<&PathBuf> = search.system_dirs.iter().chain(&defaults).collect();
+    // The raw bytes, as musl reads them: `display()` would turn a non-UTF-8 name into U+FFFD.
+    let body: Vec<u8> = dirs
+        .iter()
+        .flat_map(|d| d.as_os_str().as_bytes().iter().chain(b"\n"))
+        .copied()
+        .collect();
+    write_into(dest, &search.path_file, &body)?;
+    crate::verbose::line(|| {
+        format!(
+            "wrote {} for {}",
+            search.path_file.display(),
+            dirs.iter()
+                .map(|d| d.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    });
+    Ok(())
 }
 
 // Regenerate /etc/ld.so.cache inside the staged root. A fresh root has no
@@ -1358,6 +1418,28 @@ fn symlink_soname(root: &Path, real_abs: &Path, soname: &str) -> Result<()> {
             target
         )
     })?;
+    Ok(())
+}
+
+// Link a path musl's loader opens to the staged file it opens there. musl reads no cache, so a
+// library found through a directory link (`/usr/lib64 -> lib`), or a library link into
+// another directory, needs that path in the image too. A path already staged is left alone,
+// and so is a file that was never staged (a musl libc copy, which the loader replaces).
+fn link_found_path(root: &Path, at: &Path, real_abs: &Path) -> Result<()> {
+    if is_staged(root, at) || !is_staged(root, real_abs) {
+        return Ok(());
+    }
+    let shown = |p: &Path| crate::resolver::escape_for_display(&p.to_string_lossy());
+    let name = at.file_name().context("a found library has no file name")?;
+    let dir = image_dir(root, at.parent().unwrap_or(Path::new("/")), true)?;
+    let real_dir = real_abs.parent().context("library has no parent dir")?;
+    let real_name = real_abs.file_name().context("library has no file name")?;
+    let real_image = image_dir(root, real_dir, false)?.join(real_name);
+    let target = relative_link_value(&dir, &real_image);
+    let link = under(root, &dir.join(name));
+    std::os::unix::fs::symlink(&target, &link)
+        .with_context(|| format!("linking {} -> {}", shown(at), shown(&target)))?;
+    crate::verbose::line(|| format!("linked {} to {}", at.display(), real_abs.display()));
     Ok(())
 }
 
@@ -1575,6 +1657,143 @@ mod tests {
             "loader must be at its PT_INTERP path"
         );
         assert_eq!(fs::read(&staged_loader).unwrap(), b"LOADER");
+    }
+
+    // A musl resolution under `src`: the loader, and the system dirs its search used.
+    fn musl_res(src: &Path, system_dirs: &[&str]) -> Resolution {
+        let loader = make_file(&src.join("lib/ld-musl-x86_64.so.1"), b"MUSL");
+        let mut res = with_interp("/lib/ld-musl-x86_64.so.1", &loader);
+        res.musl = Some(MuslSearch {
+            path_file: PathBuf::from("/etc/ld-musl-x86_64.path"),
+            system_dirs: system_dirs.iter().map(PathBuf::from).collect(),
+            links: Vec::new(),
+        });
+        res
+    }
+
+    // D7: a musl image gets no ld.so.conf or ld.so.cache, so `ldconfig` never runs. D3: no path
+    // file while every library the system search found is in a default directory.
+    #[test]
+    fn a_musl_stage_builds_no_cache_and_needs_no_path_file_in_the_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&src.join("app"), b"binary");
+        let res = musl_res(&src, &["/lib", "/usr/lib"]);
+        stage(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+        assert_eq!(
+            fs::read(dest.join("lib/ld-musl-x86_64.so.1")).unwrap(),
+            b"MUSL"
+        );
+        for absent in [
+            "etc/ld.so.conf",
+            "etc/ld.so.cache",
+            "etc/ld-musl-x86_64.path",
+        ] {
+            assert!(!dest.join(absent).exists(), "{absent} was written");
+        }
+    }
+
+    // D3: a library outside the defaults puts its dir and the defaults, sorted, in the file.
+    #[test]
+    fn a_musl_library_outside_the_defaults_writes_the_path_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&src.join("app"), b"binary");
+        let res = musl_res(&src, &["/usr/lib", "/opt/sys", "/lib"]);
+        stage(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+        assert_eq!(
+            fs::read_to_string(dest.join("etc/ld-musl-x86_64.path")).unwrap(),
+            "/lib\n/opt/sys\n/usr/lib\n/usr/local/lib\n"
+        );
+        assert!(!dest.join("etc/ld.so.cache").exists());
+    }
+
+    // musl opens a library by the path its search found. A path away from the staged file is
+    // linked to it inside the image, the directory made as needed. A path whose file was never
+    // staged (a musl libc copy) gets no link.
+    #[test]
+    fn a_musl_found_path_links_to_the_staged_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&src.join("app"), b"binary");
+        let libz = make_file(&src.join("usr/lib/libz.so.1"), b"Z");
+        let own = make_file(&src.join("opt/other/libown.so.1.0"), b"OWN");
+        let mut res = musl_res(&src, &["/usr/lib64"]);
+        res.libs = vec![
+            ResolvedLib {
+                soname: "libz.so.1".into(),
+                path: libz.clone(),
+            },
+            ResolvedLib {
+                soname: "libown.so.1".into(),
+                path: own.clone(),
+            },
+        ];
+        let found_z = src.join("usr/lib64/libz.so.1");
+        let found_own = src.join("app.d/libs/libown.so.1");
+        let found_copy = src.join("usr/lib64/libc.so");
+        res.musl.as_mut().unwrap().links = vec![
+            (found_z.clone(), libz),
+            (found_own.clone(), own),
+            (found_copy.clone(), src.join("usr/lib/libc.so")),
+        ];
+        stage(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+        for (found, body) in [(&found_z, &b"Z"[..]), (&found_own, &b"OWN"[..])] {
+            let link = under(&dest, found);
+            let value = fs::read_link(&link).expect("the found path is a link");
+            assert!(value.is_relative(), "{value:?}");
+            assert_eq!(fs::read(&link).unwrap(), body);
+        }
+        assert!(under(&dest, &found_copy).symlink_metadata().is_err());
+    }
+
+    // musl reads its path file as bytes, so a directory name that is not UTF-8 is written as
+    // it is, not with U+FFFD in its place.
+    #[test]
+    fn a_musl_path_file_keeps_a_non_utf8_dir() {
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&src.join("app"), b"binary");
+        let mut res = musl_res(&src, &[]);
+        res.musl.as_mut().unwrap().system_dirs =
+            vec![PathBuf::from(OsStr::from_bytes(b"/opt/\xff"))];
+        stage(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+        assert_eq!(
+            fs::read(dest.join("etc/ld-musl-x86_64.path")).unwrap(),
+            b"/lib\n/opt/\xff\n/usr/lib\n/usr/local/lib\n"
+        );
+    }
+
+    // D5: musl has no NSS, so whatever `--nss` selects, a musl image gets passwd and group and
+    // no nsswitch.conf or module.
+    #[test]
+    fn a_musl_image_gets_passwd_and_group_and_no_nss() {
+        for nss in [NssSelection::default(), NssSelection::NONE] {
+            let tmp = tempfile::tempdir().unwrap();
+            let src = tmp.path().join("src");
+            let dest = tmp.path().join("dest");
+            let res = musl_res(&src, &[]);
+            let report = stage_default_includes(&res, &dest, &nss).unwrap();
+            assert_eq!(
+                report.staged,
+                [PathBuf::from("/etc/passwd"), PathBuf::from("/etc/group")]
+            );
+            assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+            assert_eq!(
+                fs::read_to_string(dest.join("etc/passwd")).unwrap(),
+                MINIMAL_PASSWD
+            );
+            assert_eq!(
+                fs::read_to_string(dest.join("etc/group")).unwrap(),
+                MINIMAL_GROUP
+            );
+            assert!(!dest.join("etc/nsswitch.conf").exists());
+        }
     }
 
     #[test]

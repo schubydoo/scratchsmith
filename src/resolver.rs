@@ -995,6 +995,12 @@ pub struct MuslSearch {
     /// order found. A library found through the binary's own search path is not listed,
     /// because that search path works in the image as it is.
     pub system_dirs: Vec<PathBuf>,
+    /// Each path the loader opens that is not beside the real file it opens there, as
+    /// `(path, real file)`, in the order found. A search directory that is a link
+    /// (`/usr/lib64 -> lib`), or a library that is a link into another directory, puts the
+    /// file in a directory the image would not have. musl reads no cache, so the stager
+    /// links each path to the staged file.
+    pub links: Vec<(PathBuf, PathBuf)>,
 }
 
 /// The entries of a musl search path file, such as `/etc/ld-musl-x86_64.path`, in order. musl
@@ -1189,6 +1195,7 @@ fn resolve_musl(
     let mut search = MuslSearch {
         path_file,
         system_dirs: Vec::new(),
+        links: Vec::new(),
     };
 
     let loader = find_loader(sysroot, interp, root_path, source)?.map(|(real, _)| real);
@@ -1298,6 +1305,15 @@ fn resolve_musl(
                 continue;
             };
             let real = canonical(&found);
+            // The loader opens `found` by that path, and a bare name is the only kind the
+            // stager does not already place there (a slash-name gets its soname link).
+            if bare
+                && found.is_absolute()
+                && found.parent() != real.parent()
+                && !search.links.iter().any(|(at, _)| *at == found)
+            {
+                search.links.push((found.clone(), real.clone()));
+            }
             let loads_at_start = at_start && i < declared;
             // A file already loaded under another name is that object (rule 7).
             if let Some(loaded) = file_id(&real).and_then(|id| by_file.get(&id)).cloned() {
@@ -5488,6 +5504,58 @@ mod tests {
             let musl = res.musl.unwrap();
             assert_eq!(musl.path_file, Path::new("/etc/ld-musl-x86_64.path"));
             assert_eq!(musl.system_dirs, [PathBuf::from("/opt/sys")]);
+        }
+
+        // musl opens a library by the path its search found, and reads no cache, so a path that
+        // is not beside the real file is recorded for the stager: a search dir that is a link,
+        // and a library that is a link into another dir. A link beside its file is not.
+        #[test]
+        fn a_found_path_away_from_the_real_file_is_recorded() {
+            use std::os::unix::fs::symlink;
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            let exe = setup(root);
+            fs::create_dir_all(root.join("etc")).unwrap();
+            fs::write(root.join("etc/ld-musl-x86_64.path"), b"/usr/lib64\n/lib\n").unwrap();
+            touch(&root.join("usr/lib/libz.so.1"));
+            symlink("lib", root.join("usr/lib64")).unwrap();
+            touch(&root.join("opt/other/libown.so.1.0"));
+            fs::create_dir_all(root.join("app/libs")).unwrap();
+            symlink(
+                "../../opt/other/libown.so.1.0",
+                root.join("app/libs/libown.so.1"),
+            )
+            .unwrap();
+            touch(&root.join("lib/libnear.so.1.2"));
+            symlink("libnear.so.1.2", root.join("lib/libnear.so.1")).unwrap();
+            let infos = HashMap::from([(
+                canonical(&exe),
+                bin(
+                    &["libz.so.1", "libown.so.1", "libnear.so.1"],
+                    &[],
+                    &["$ORIGIN/libs"],
+                ),
+            )]);
+            let res = resolve(&exe, root, infos);
+            assert!(res.missing.is_empty(), "{:?}", res.missing);
+            let musl = res.musl.unwrap();
+            assert_eq!(
+                musl.links,
+                [
+                    (
+                        root.join("usr/lib64/libz.so.1"),
+                        canonical(&root.join("usr/lib/libz.so.1"))
+                    ),
+                    (
+                        canonical(&root.join("app/libs")).join("libown.so.1"),
+                        canonical(&root.join("opt/other/libown.so.1.0"))
+                    ),
+                ]
+            );
+            assert_eq!(
+                musl.system_dirs,
+                [PathBuf::from("/usr/lib64"), PathBuf::from("/lib")]
+            );
         }
 
         #[test]
