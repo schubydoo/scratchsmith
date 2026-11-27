@@ -12,7 +12,7 @@ cargo +nightly fuzz run <target>
 
 | Target | Entry point | What it reaches |
 |---|---|---|
-| `parse_elf_info` | `resolver::parse_elf_info` | ELF header and dynamic-section parse (goblin). |
+| `parse_elf_info` | `resolver::parse_elf_info`, `ensure_glibc` | ELF header and dynamic-section parse (goblin). Asserts that the glibc-only refusal holds no character that breaks a line. |
 | `glibc_versions` | `resolver::symbol_versions`, `glibc_release` | The `DT_VERNEED` and `DT_VERDEF` read behind the glibc version warning, and the `GLIBC_x.y` parse. |
 | `analyze_hardening` | `lint::hardening_from_bytes` | ELF hardening read (PIE, RELRO, NX, canary, fortify). |
 | `resolve_graph` | `resolver::resolve_with` | `ld.so` search: RPATH, RUNPATH, `$ORIGIN`, soname lookup, and the refusals: a corrupt, non-ELF, or wrong-type library or loader, and `$PLATFORM` with no value. Asserts that no hint or `$PLATFORM` error holds a character that breaks a line. Structured input. |
@@ -90,8 +90,9 @@ cargo llvm-cov --test fuzz_corpus_replay -- --ignored
 
 `tests/fuzz_corpus_replay.rs` replays the byte-in corpora from `fuzz/corpus/`. It is
 `#[ignore]`d, so a normal `cargo test` and CI skip it. The `resolve_graph` and
-`unpack_structured` targets take structured input, so the local replay skips them. The weekly
-report covers them, because it replays every target's stored corpus.
+`unpack_structured` targets take structured input, so the local replay skips them. The byte-in
+`glibc_versions` target has no replay yet, so it is skipped too. The weekly report covers all
+three, because it replays every target's stored corpus.
 
 ## Checking it compiles
 

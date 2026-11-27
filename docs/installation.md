@@ -13,8 +13,9 @@ curl -fsSL https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install
 ```
 
 Piping to `bash` runs [`install.sh`](https://github.com/schubydoo/scratchsmith/blob/main/install.sh).
-You can read it first. `VERSION` and `BIN_DIR` env vars override the tag and install
-directory. Without cosign, the script warns and verifies only the SHA-256. With cosign
+You can read it first. The `VERSION` and `BIN_DIR` env vars override the tag and install
+directory. `VERSION` takes the tag with its leading `v`, for example
+`curl -fsSL …/install.sh | VERSION=v2.2.0 bash`. Without cosign, the script warns and verifies only the SHA-256. With cosign
 installed, a missing signature bundle stops the install. The `INSECURE_ALLOW_MISSING_SIGNATURE=1`
 env var installs anyway and verifies only the SHA-256. A signature that fails to verify still
 stops the install.
@@ -37,8 +38,11 @@ brew install schubydoo/scratchsmith/scratchsmith
 Build and install from source with Cargo (Rust **1.96+**):
 
 ```sh
-cargo install scratchsmith
+cargo install --locked scratchsmith
 ```
+
+`--locked` builds with the dependency versions the release was tested with. Without it, Cargo
+resolves the dependencies fresh and can pick crates that need a newer Rust than 1.96.
 
 ## Release binary
 
@@ -64,6 +68,11 @@ tool, `index` included. It does **not** run `pack`, because a scratch image carr
 tools `pack` needs. To run `pack` inside a container, pull
 the **`:toolbox`** image instead (Wolfi base + the full toolchain). The
 [toolbox section in Usage](usage.md) lists which subcommands run where.
+
+To pin a release, use `:X.Y.Z` or `:X.Y` (for example `:2.2.0` or `:2.2`). The toolbox
+equivalents are `:X.Y.Z-toolbox` and `:X.Y-toolbox`. There is no major-only tag. Both images are
+multi-arch (amd64 and arm64) and signed. Verify them with the `cosign verify` command in
+[Verifying releases](verifying.md).
 
 ## Build from source
 

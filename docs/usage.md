@@ -27,7 +27,7 @@ scratchsmith pack --runtime podman ./app
 Inspect the rootfs without building an image (**no Docker daemon needed**):
 
 ```sh
-scratchsmith pack --no-build --output ./rootfs ./app
+scratchsmith pack --no-build --output ./rootfs ./app    # or -n -o ./rootfs
 ```
 
 Give `--output` a new directory or an empty one. Scratchsmith does not empty the directory, so
@@ -107,14 +107,26 @@ scratchsmith lint --format json --fail-on no-fortify ./app     # the same report
 `canary` and `fortify` as booleans, `relro` as `"full"`, `"partial"` or `"none"`), `fail_on`
 (the gates asked for) and `violations` (the gates this binary fails). Gates use the `--fail-on`
 spelling, each listed once in the order given, so a CI script can feed a violation back to the
-flag. The report prints in full before a failing gate exits `1`. `canary` and `fortify` mean the
-binary imports the guard or a `*_chk` wrapper, so a static binary reads `false`.
+flag. The report prints in full before a failing gate exits `1`. The six gates are:
+
+| Gate | Fails when |
+|---|---|
+| `no-pie` | the binary is not PIE |
+| `no-relro` | it has no RELRO |
+| `partial-relro` | its RELRO is not full (so it also fails with no RELRO) |
+| `no-nx` | its stack is executable |
+| `no-canary` | it imports no stack-protector guard |
+| `no-fortify` | it imports no `*_chk` wrapper |
+
+`canary` and `fortify` mean the binary imports the guard or a `*_chk` wrapper, so a static binary
+reads `false`.
 
 `--smoke` runs the image once and fails the pack only when the binary could not start: a
 missing library or loader, or an entrypoint the runtime could not exec. An app that starts and
 exits with an error passes, unless the code is 126 or 127, which shells use for a command
 that could not run. A binary still running after 15 seconds counts as started, and its
-container is removed.
+container is removed. `--smoke` needs the default load sink: with `--no-build`, `--oci-archive`
+or `--push` (or a `push` key in the configuration file) it is a usage error, exit code 2.
 
 syft, grype and cosign each have a time limit: syft 15 minutes, grype 30 minutes, and cosign
 10 minutes. A run past its limit is stopped, and the pack fails with an error that names the tool
@@ -176,6 +188,25 @@ scratchsmith pack --format json --sbom --oci-archive app.tar ./app | jq .timings
 A phase that did not run is `null`. With `--no-build`, `deliver_ms` is `null`, because no image
 is built. The phases add up to a little less than `total_ms`. The text report does not show the
 timings.
+
+The other fields of the pack report:
+
+- `tag`, `archive`, `pushed`, `staged_dir`: where the image went. The one for the sink you used
+  is set and the others are null: the loaded image tag, the `--oci-archive` path, the `--push`
+  reference, or the `--no-build` directory.
+- `entrypoint`: the packed binary's path in the image. It does not change with `--entrypoint`
+  or `--init`.
+- `size`: `entries` (each with `path`, `before` and `after` in bytes), `total_before`,
+  `total_after`, and the booleans `stripped` and `upx`. It covers the ELF payload: the binary,
+  the loader, the libraries and the NSS modules. An `--add-binary` program's libraries are
+  included, and the added program itself is not.
+- `warnings`: a list of warning lines, empty when there are none.
+- `smoke_ok`: `true` after a passing `--smoke`, otherwise null.
+- `sbom`: the SBOM path with `--sbom`, otherwise null.
+- `scan`: with `--scan`, the finding counts `critical`, `high`, `medium`, `low`, `negligible`,
+  `unknown` and `total`. Otherwise null.
+- `signed`: the by-digest reference that `--sign` signed, otherwise null.
+- `packages`: see the next section.
 
 ## Name the packages behind the bundled files
 
@@ -471,7 +502,7 @@ list. Locale data counts toward `--max-size`.
 
 ## Inspect the dependency graph
 
-To see what `pack` stages without building an image, run `graph`:
+To see the libraries `pack` resolves for the binary, without building an image, run `graph`:
 
 ```sh
 scratchsmith graph ./app                            # ASCII tree of the resolved deps
@@ -483,6 +514,16 @@ The tree shows each library in full the first time. A later repeat is marked `(*
 a shared dependency or a cycle does not print twice. A dependency that does not resolve is
 shown as `(missing)`, and `graph` then exits with code 1 after it prints the tree. If the binary
 has a loader (`PT_INTERP`), the last line names it.
+
+`graph` shows the binary's own dependency tree and `--include`. It does not show the NSS modules
+(`libnss_files.so.2`, `libnss_dns.so.2` and `libresolv.so.2` by default) or an `--add-binary`
+program and its libraries, which `pack` also stages. The pack report lists the NSS modules
+under its payload sizes (`size.entries` in `--format json`).
+
+`graph --format json` prints one object: `root` (the binary's real path), `interpreter` (the
+loader, or null), `nodes` and `missing` (every soname that did not resolve). Each node has `id`
+(its real path), `name` (the soname the loader searched for, or the binary's file name), `needs`
+(the ids of the nodes it needs) and `missing` (its own sonames that did not resolve).
 
 ## See each decision with `--verbose`
 
@@ -513,7 +554,8 @@ scratchsmith pack --require libseccomp.so.2 ./app  # fail if seccomp is missing
 ```
 
 Both flags repeat and match exactly, by soname or staged file name. The resolved libraries,
-the loader, and the NSS modules are all in scope. Read the names from `scratchsmith graph`.
+the loader, and the NSS modules are all in scope. Read the library names from
+`scratchsmith graph`. The NSS modules are not in `graph`, so read those from the pack report.
 The same keys work in `scratchsmith.toml` as `deny` and `require`.
 
 ## Diff two builds
@@ -533,9 +575,10 @@ prints as `~ path (mode 0755 -> 0644)`, so a lost exec bit or a world-writable d
 `--exit-code`. A symlink has no mode of its own, so only its target is compared. An empty
 directory in only one tree prints as `+ path/ (empty directory)` or `- path/ (empty directory)`.
 A directory that holds anything shows through the files in it. `diff` then prints the total
-size delta. `--format json` emits the same data for a machine, with the mode changes in
-`mode_changed` (each with `path`, `before` and `after` as four octal digits) and the empty
-directories in `dirs_added` and `dirs_removed`.
+size delta. `--format json` emits the same data for a machine: `added` and `removed` (each
+entry has `path` and `size`), `changed` (a list of paths), `mode_changed` (each with `path`,
+`before` and `after` as four octal digits), the empty directories in `dirs_added` and
+`dirs_removed`, and the total file bytes of each tree in `size_before` and `size_after`.
 
 A staged rootfs keeps the modes from the host: a directory gets its mode from the umask, and a
 file keeps the mode of its source. The image layer rewrites them, to `0755` for a directory and
@@ -585,7 +628,9 @@ container runtime mounts by default. Without `/proc`, `unpack` fails and names t
 `unpack` clears the setuid and setgid bits on every file and directory it writes. An untrusted
 image cannot then plant a setuid program owned by the user who unpacks it. `unpack` prints one
 warning line on standard error for each path in the final image that had one of those bits.
-The `stripped_setid` field of `--format json` lists the same paths.
+The `stripped_setid` field of `--format json` lists the same paths. The other fields are
+`source` (the archive), `dir` (where it was extracted), `layers` (how many were applied) and
+`files` (how many files and symlinks were written).
 
 `unpack` applies the mode of each directory after the last layer, so a directory without owner
 write permission, such as `/root` in a Fedora image, unpacks for a user who is not root. Until
@@ -634,15 +679,19 @@ index by digest.
 Set what the image runs: entrypoint, arguments, environment, working directory, and user:
 
 ```sh
-scratchsmith pack ./app \
-  --entrypoint /app --cmd serve --env LANG=C.UTF-8 --workdir /data --user 65532:65532 \
-  --label role=api --healthcheck /app --healthcheck --health
+scratchsmith pack /opt/app/bin/app \
+  --cmd serve --env LANG=C.UTF-8 --workdir /data --user 65532:65532 \
+  --label role=api --healthcheck /opt/app/bin/app --healthcheck --health
 ```
 
+The packed binary keeps its host path in the image (its real path, after symlinks), and that path
+is the default entrypoint. So an `--entrypoint` or `--healthcheck` that runs the binary must name
+that path. Scratchsmith does not check either one.
+
 `--healthcheck` (like `--cmd`) is repeatable, and each token is one argument of a single exec
-command. So `--healthcheck /app --healthcheck --health` is the one command `["/app", "--health"]`,
-not two healthchecks. It is the same as `healthcheck = ["/app", "--health"]` in the
-[configuration file](configuration.md).
+command. So `--healthcheck /opt/app/bin/app --healthcheck --health` is the one command
+`["/opt/app/bin/app", "--health"]`, not two healthchecks. It is the same as
+`healthcheck = ["/opt/app/bin/app", "--health"]` in the [configuration file](configuration.md).
 
 Each `--env` and `--label` entry needs an `=`. An entry with no `=` is an error with exit code 2.
 To set an empty value, end the entry with `=`, as in `--label build=`.
@@ -675,8 +724,8 @@ halfway does not end the watch.
 
 `--watch` works with the default load and with `--oci-archive`. It refuses three things:
 
-- `--push`, and a `push` key from the configuration file. A registry is not the place for an
-  image from every save.
+- `--push`, and a `push` key from the configuration file unless `--oci-archive` replaces it. A
+  registry is not the place for an image from every save.
 - `--no-build`. That sink stages into one directory, and a second pack into the same directory
   is an error, because the directory is no longer empty.
 - `--format json`. Each pack prints a text report.
@@ -715,7 +764,8 @@ If `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, scratchsmith never uses the compile
 certificates. If the path that you set gives no certificates, the command fails and names the
 variable.
 
-One subcommand does not run there. `pack` needs ldconfig, strip, and the SBOM tools.
+One subcommand does not run there. `pack` needs ldconfig, plus a container engine for the
+default sink and strip, syft or grype for the options that use them.
 
 The **`:toolbox`** image bundles the `pack` toolchain (ldconfig, strip, syft, grype, cosign,
 upx, tini, the docker CLI) on a Wolfi base. With it, `pack` itself runs inside a container.
@@ -727,17 +777,21 @@ output that you set fails too. The default stays quiet.
 # Daemonless — no socket needed; write an OCI archive or push straight to a registry.
 docker run --rm -v "$PWD:/w" -w /w ghcr.io/schubydoo/scratchsmith:toolbox \
   pack --oci-archive app.oci.tar ./app
-docker run --rm -v "$PWD:/w" -w /w ghcr.io/schubydoo/scratchsmith:toolbox \
-  pack --push ghcr.io/you/app:1.0 ./app
+docker run --rm -v "$PWD:/w" -w /w \
+  -v "$HOME/.docker:/docker:ro" -e DOCKER_CONFIG=/docker \
+  ghcr.io/schubydoo/scratchsmith:toolbox pack --push ghcr.io/you/app:1.0 ./app
 ```
+
+`--push` reads the registry login from the Docker config, so mount one that holds the
+credentials themselves. A credential helper on the host is not available inside the container.
 
 Prefer the daemonless sinks (`--push` / `--oci-archive`) in CI. The **default `docker load` sink**
 needs a host engine, so mount its socket. That socket is **root-equivalent on the host**, so use
 it only where you trust the workflow:
 
 ```sh
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock ghcr.io/schubydoo/scratchsmith:toolbox \
-  pack ./app
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/w" -w /w \
+  ghcr.io/schubydoo/scratchsmith:toolbox pack ./app
 ```
 
 Tags: `:toolbox` (latest), `:X.Y.Z-toolbox`, `:X.Y-toolbox`. Verify its signature exactly like the

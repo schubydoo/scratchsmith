@@ -6,6 +6,7 @@ rust-version = "1.96"
 description = "Daemonless supply-chain packager for prebuilt dynamic Linux binaries"
 license = "MIT"
 repository = "https://github.com/schubydoo/scratchsmith"
+documentation = "https://schubydoo.github.io/scratchsmith/"
 readme = "README.md"
 keywords = ["container", "oci", "docker", "elf", "supply-chain"]
 categories = ["command-line-utilities"]

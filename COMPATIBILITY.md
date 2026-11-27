@@ -88,8 +88,11 @@ change:
   `tests/cli_surface.txt`. Any surface change fails until the golden is regenerated
   (`BLESS=1 cargo test --test cli_surface`). The golden records clap defaults only. A default
   that the code sets, such as the `--packages` default, does not change the golden, so review
-  such a change by hand.
-- **Config keys**: `parses_a_full_config` exercises every key, and `#[serde(deny_unknown_fields)]`
+  such a change by hand. It also does not record clap's `requires` and `conflicts_with` rules or
+  a flag's `global` setting. A new rule of that kind tightens validation without changing the
+  golden, so review it by hand too.
+- **Config keys**: `parses_a_full_config` exercises every top-level key,
+  `a_profile_layers_over_the_base` and its siblings cover the `[profile.<name>]` tables, and `#[serde(deny_unknown_fields)]`
   rejects a renamed/removed key.
 - **`--format json`**: `json_report_schema_is_stable`, `index_report_schema_is_stable`,
   `dep_graph_json_schema_is_stable`, `diff_report_schema_is_stable`,

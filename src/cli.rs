@@ -67,7 +67,7 @@ pub struct Cli {
     /// Emit a shell completion script to stdout and exit (bash, zsh, fish).
     #[arg(long, value_enum, value_name = "SHELL")]
     pub completions: Option<Shell>,
-    /// Print each library-resolution and staging decision on stderr.
+    /// Print each library-resolution and staging decision on stderr (pack and graph).
     #[arg(long, global = true)]
     pub verbose: bool,
     #[command(subcommand)]
@@ -92,7 +92,8 @@ pub enum Command {
         /// Apply a named `[profile.<name>]` from the config (layered over its base). Needs --config.
         #[arg(long, value_name = "NAME", requires = "config")]
         profile: Option<String>,
-        /// After loading, run the image once and fail if the binary can't start.
+        /// After loading, run the image once and fail if the binary can't start. Needs the
+        /// default load sink, not --no-build, --oci-archive or --push.
         #[arg(long, conflicts_with = "no_build")]
         smoke: bool,
         /// Stage the rootfs only; build no image. Requires --output.
@@ -101,7 +102,7 @@ pub enum Command {
         /// Directory to stage into (with --no-build).
         #[arg(short = 'o', long, value_name = "DIR", requires = "no_build")]
         output: Option<PathBuf>,
-        /// Write a daemonless OCI-archive tarball instead of loading into Docker.
+        /// Write a daemonless OCI-archive tarball instead of loading into the container engine.
         #[arg(long, value_name = "FILE", conflicts_with = "no_build")]
         oci_archive: Option<PathBuf>,
         /// Push the image straight to a registry reference, daemonless (uses your docker login).
@@ -267,7 +268,8 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
     },
-    /// Print a binary's resolved dependency tree (what `pack` would stage).
+    /// Print a binary's resolved dependency tree (the libraries `pack` resolves; NSS modules
+    /// and --add-binary are not shown).
     Graph {
         /// Path to the dynamically linked binary to inspect.
         binary: PathBuf,

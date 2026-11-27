@@ -21,7 +21,7 @@ Every tool here builds smaller and safer images. They differ mainly in **what yo
 
 | | Input | No Dockerfile | Prebuilt **dynamic glibc** binaries | Built-in SBOM + hardening | Daemonless build |
 |---|---|---|---|---|---|
-| **Scratchsmith** | a prebuilt dynamic ELF binary | ✅ | ✅ *(the whole point)* | ✅ SBOM + ELF hardening lint | ✅ `--push` / `--oci-archive` (the *default* sink uses `docker load`) |
+| **Scratchsmith** | a prebuilt dynamic ELF binary | ✅ | ✅ *(the whole point)* | ✅ SBOM (via syft) + built-in ELF hardening lint | ✅ `--push` / `--oci-archive` (the *default* sink uses `docker load`) |
 | Static + `FROM scratch` | source you can static-link | ✅ (`COPY`) | ❌ must be static | ❌ | ✅ |
 | Docker multi-stage | a Dockerfile + source | ❌ | ✅ (you hand-craft it) | ❌ | ❌ needs daemon / BuildKit |
 | [apko](https://github.com/chainguard-dev/apko) | apk packages | ✅ | ❌ needs apk packaging | ✅ | ✅ |
