@@ -1,7 +1,7 @@
 # Contributing to Scratchsmith
 
 Thanks for your interest! Scratchsmith is a Rust CLI that packs a prebuilt **dynamic
-glibc Linux** ELF binary (plus its resolved shared libraries) into a minimal
+glibc or musl Linux** ELF binary (plus its resolved shared libraries) into a minimal
 `FROM scratch` OCI image. This guide covers how to propose changes.
 
 Report bugs and request features through the [issue tracker][issues] first. For a bug,
@@ -11,18 +11,20 @@ use the Bug Report template. For an idea, use the Feature Request template.
 
 ## Scope
 
-Scratchsmith deliberately targets prebuilt **dynamic glibc** binaries. It does **not**
-resolve musl/Alpine binaries, do cross-arch resolution, or replace static linking for
-binaries you can rebuild static. Please check a proposal against that scope.
+Scratchsmith deliberately targets prebuilt **dynamic** binaries: glibc, and musl/Alpine on
+x86_64. It does **not** do cross-arch resolution, pack musl binaries for other
+architectures, or replace static linking for binaries you can rebuild static. Please check a
+proposal against that scope.
 
 ## Development setup
 
 You need a stable Rust toolchain (the crate builds on MSRV **1.96**). **One** external tool is
 required for `cargo test` to pass. The suite *fails* (not skips) without it:
 
-- **`ldconfig`** (glibc `libc-bin`): the stager/pack tests regenerate the loader cache and
-  bail without it. It is normally already present on any glibc system, so this rarely bites.
-  A stripped container image is one place it can be missing.
+- **`ldconfig`** (glibc `libc-bin`): the glibc stager/pack tests regenerate the loader cache
+  and bail without it. It is normally already present on any glibc system, so this rarely
+  bites. A stripped container image is one place it can be missing. A musl pack never calls
+  it, since musl reads no loader cache.
 
 On your own machine, everything else is optional. If the tool is absent, these tests **skip**
 and `cargo test` still passes:
@@ -86,9 +88,9 @@ cargo run -- doctor   # shows which external tools are present
 
 A change that breaks one of these is wrong, even with every test green:
 
-- **Fail loud, never silently.** A missing library/loader, a musl binary, or a missing
-  external tool exits non-zero with a fix hint. It is never a silent skip that ships a
-  broken image.
+- **Fail loud, never silently.** A missing library/loader, a musl binary on an architecture
+  other than x86_64, or a missing external tool exits non-zero with a fix hint. It is never a
+  silent skip that ships a broken image.
 - **Determinism over host-trust.** Resolution emulates `ld.so`. It never scrapes host
   `ldd` / `ld.so.cache` / `LD_LIBRARY_PATH`.
 - **Non-root + reproducible by default.** Images default to a non-root user, and layers are
