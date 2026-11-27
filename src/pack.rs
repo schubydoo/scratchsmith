@@ -281,6 +281,16 @@ fn add_binary_libs(
             .with_context(|| format!("--add-binary {shown}"))?;
         added_libs_fit(binary, main, &theirs, &shown)?;
         merge_resolution(resolution, theirs);
+        // A library names no loader, so `resolve` walks its dependencies by glibc's rules, in a
+        // musl image too. On Alpine they usually find the same files, so this is a note, not a
+        // refusal, until the walk can follow the packed binary's libc.
+        if main.is_musl() && info.interpreter.is_none() && !info.needed.is_empty() {
+            resolution.notes.push(format!(
+                "--add-binary {shown} is a shared library, so the libraries it needs were \
+                 resolved by glibc's search rules, not musl's. They usually find the same files \
+                 on Alpine. Run the image with --smoke to check."
+            ));
+        }
     }
     Ok(())
 }

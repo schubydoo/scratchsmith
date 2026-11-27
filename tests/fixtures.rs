@@ -1312,6 +1312,107 @@ fn a_glibc_library_added_to_a_musl_image_is_refused() {
     );
 }
 
+// A shared library names no loader, so its dependencies are walked by glibc's rules even in a
+// musl image. Those find the same files here, the pack succeeds, and a note says which rules ran.
+// An added program, or a library in a glibc image, is walked by its own rules and gets no note.
+#[test]
+fn only_a_library_added_to_a_musl_image_gets_the_glibc_walk_note() {
+    if !tool_available("musl-gcc") {
+        skip_required("no musl-gcc");
+        return;
+    }
+    if !tool_available("cc") {
+        skip_required("no cc");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap();
+    let app = build_musl_app(&dir);
+    let libs = dir.join("libs");
+    std::fs::create_dir(&libs).unwrap();
+    std::fs::write(libs.join("qux.c"), "int qux(void){return 7;}").unwrap();
+    std::fs::write(
+        libs.join("bar.c"),
+        "extern int qux(void);int bar(void){return qux();}",
+    )
+    .unwrap();
+    let qux = libs.join("libqux.so.1");
+    let bar = libs.join("libbar.so");
+    // `-nostdlib` keeps musl's `libc.so` out of NEEDED: glibc's walk would find the host's
+    // linker script for that name and fail the pack.
+    musl_gcc(&[
+        "-shared",
+        "-fPIC",
+        "-nostdlib",
+        "-Wl,-soname,libqux.so.1",
+        "-o",
+        qux.to_str().unwrap(),
+        libs.join("qux.c").to_str().unwrap(),
+    ]);
+    musl_gcc(&[
+        "-shared",
+        "-fPIC",
+        "-nostdlib",
+        "-Wl,--enable-new-dtags",
+        "-Wl,-rpath,$ORIGIN",
+        "-o",
+        bar.to_str().unwrap(),
+        libs.join("bar.c").to_str().unwrap(),
+        "-L",
+        libs.to_str().unwrap(),
+        "-l:libqux.so.1",
+    ]);
+    let glibc_lib = dir.join("libglibc.so");
+    let cc = Command::new("cc")
+        .args(["-shared", "-fPIC", "-o"])
+        .arg(&glibc_lib)
+        .arg(libs.join("qux.c"))
+        .output()
+        .expect("run cc");
+    assert!(
+        cc.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cc.stderr)
+    );
+    let pack = |name: &str, add: &str, binary: &Path| {
+        let out_dir = dir.join(name);
+        let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+            .args(["pack", "-n", "-o"])
+            .arg(&out_dir)
+            .args(["--add-binary", add])
+            .arg(binary)
+            .output()
+            .expect("run scratchsmith");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert_eq!(out.status.code(), Some(0), "{name}: {stderr}");
+        (out_dir, stderr)
+    };
+    let note = "is a shared library, so the libraries it needs were resolved by glibc's";
+    // A program keeps its own (musl) walk: `$ORIGIN` needs its real directory.
+    let copy = format!("{}:{}", app.display(), dir.join("musl_app2").display());
+    let (_, stderr) = pack("program", &copy, &app);
+    assert!(!stderr.contains(note), "{stderr}");
+    let (_, stderr) = pack(
+        "glibc",
+        glibc_lib.to_str().unwrap(),
+        Path::new("/usr/bin/true"),
+    );
+    assert!(!stderr.contains(note), "{stderr}");
+    let (out_dir, stderr) = pack("musl", bar.to_str().unwrap(), &app);
+    assert!(
+        stderr.contains(&format!(
+            "note: --add-binary {} is a shared library, so the libraries it needs were resolved \
+             by glibc's search rules, not musl's.",
+            bar.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        walk_contains(&out_dir, "libqux.so.1"),
+        "the added library's own dependency should be staged"
+    );
+}
+
 // A glibc-only option is a usage refusal (exit 2) for a musl binary, from the command line, the
 // config's base or a selected profile, and each message says where to remove it (plan 025, D5
 // and D6). A musl pack never runs ldconfig: a failing one on PATH does not stop it (D7).
