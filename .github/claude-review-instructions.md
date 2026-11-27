@@ -29,9 +29,10 @@ Style, naming, and refactoring suggestions are **Nit at most**, always.
 Scratchsmith's reason-for-existing constraints. A change that breaks one is wrong even
 if tests pass — flag it Important:
 
-1. **Fail loud, never silently.** A missing library, missing loader, musl binary, or a
-   missing external tool (`ldconfig`/`syft`/`cosign`/`strip`/`upx`) must exit non-zero
-   with a fix hint — never a silent skip that ships a broken image. A silently-skipped
+1. **Fail loud, never silently.** A missing library, missing loader, musl binary on an
+   architecture other than x86_64, or a missing external tool
+   (`ldconfig`/`syft`/`cosign`/`strip`/`upx`) must exit non-zero with a fix hint — never
+   a silent skip that ships a broken image. A silently-skipped
    step is the worst outcome. No swallowed errors.
 2. **Determinism over host-trust.** Dependency resolution must emulate `ld.so`, never
    scrape host `ldd` / `ld.so.cache` / `LD_LIBRARY_PATH`. Same binary + sysroot ⇒ same

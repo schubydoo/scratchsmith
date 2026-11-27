@@ -21,9 +21,10 @@ multi-stage builds, and the rest). Say why they fall short here.
 
 ## Scope check
 
-Scratchsmith targets **prebuilt dynamic glibc Linux binaries**. It deliberately
-does not: resolve musl binaries, resolve cross-arch deps, or replace static
-linking for binaries you can rebuild static. Does your request fit that scope?
+Scratchsmith targets **prebuilt dynamic Linux binaries**: glibc, and musl/Alpine
+on x86_64. It deliberately does not: resolve cross-arch deps, pack musl binaries
+for other architectures, or replace static linking for binaries you can rebuild
+static. Does your request fit that scope?
 
 ## Additional context
 
