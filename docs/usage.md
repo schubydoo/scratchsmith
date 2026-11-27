@@ -121,6 +121,12 @@ flag. The report prints in full before a failing gate exits `1`. The six gates a
 `canary` and `fortify` mean the binary imports the guard or a `*_chk` wrapper, so a static binary
 reads `false`.
 
+The report also carries `libc` (`"glibc"`, `"musl"`, or null for a binary with no loader) and
+`fortify_detectable`. musl's `fortify-headers` check in inline code and leave no `*_chk` symbol,
+so for a musl binary the text report shows `Fortify: unknown (musl's fortify-headers leave no
+symbol)`, `fortify` is `false` and `fortify_detectable` is `false`. `--fail-on no-fortify` cannot
+be checked there, so it exits `2` for a musl binary. The other gates work for musl as for glibc.
+
 `--smoke` runs the image once and fails the pack only when the binary could not start: a
 missing library or loader, or an entrypoint the runtime could not exec. An app that starts and
 exits with an error passes, unless the code is 126 or 127, which shells use for a command
@@ -152,6 +158,8 @@ case for a static binary.
 ```sh
 scratchsmith pack --format json ./app | jq -e '.interpreter == "/lib64/ld-linux-x86-64.so.2"'
 ```
+
+`libc` names the C library behind that loader: `"glibc"`, `"musl"`, or null with no loader.
 
 `--format json` also carries `timings`: the time that each phase of the pack took, in
 milliseconds. Use it to find the slow part of a pack in CI, or to turn the phases into the spans
@@ -370,7 +378,8 @@ address needs no NSS module. A program that reaches a host by name over TLS also
 certificates, which you add separately with `--ca-certs`. `--nss none` also skips the generated
 `/etc/nsswitch.conf`, and `--nss files` writes one that lists local files alone. A mode without
 `files` also drops `/etc/passwd` and `/etc/group`. Because glibc reads them through the `files`
-module, user and group lookups do not work there.
+module, user and group lookups do not work there. musl has no NSS, so `--nss` is refused for a
+musl binary (see [Pack a musl binary](#pack-a-musl-binary)).
 
 ## Add a writable /tmp
 
@@ -498,7 +507,34 @@ Staging the data does not select it. Set `LANG`, `LC_ALL`, or a per-category ent
 locale and set none of them, the pack warns and the program runs in the C locale. If a selector
 names a locale the pack did not stage, the pack warns as well. glibc falls back to the C locale
 for that category. The flag repeats, and the `locale` key in `scratchsmith.toml` takes the same
-list. Locale data counts toward `--max-size`.
+list. Locale data counts toward `--max-size`. musl does not read these locales, so `--locale` is
+refused for a musl binary.
+
+## Pack a musl binary
+
+A dynamic musl program, such as one built on Alpine or with `musl-gcc`, packs the same way as a
+glibc one. Scratchsmith sees musl in the binary's loader (`/lib/ld-musl-x86_64.so.1`) and
+resolves the libraries by musl's rules, which
+[Architecture](architecture.md#the-musl-backend) lists. Only x86_64 is supported for now.
+
+```sh
+scratchsmith pack ./app                      # on Alpine, or with musl's libraries in the host root
+scratchsmith pack --format json ./app | jq -e '.libc == "musl"'
+```
+
+What changes for a musl binary:
+
+- **No loader cache.** musl reads no `ld.so.cache`, so `pack` writes none and does not need
+  `ldconfig`. An Alpine host has no glibc `ldconfig`, and that is fine. When a library comes from
+  a directory outside musl's defaults (`/lib`, `/usr/local/lib`, `/usr/lib`), the image gets an
+  `/etc/ld-musl-x86_64.path` that lists it.
+- **No NSS.** musl reads `/etc/passwd` and `/etc/group` itself, so the image always gets the
+  minimal pair and no NSS module. `--nss`, or an `nss` key in `scratchsmith.toml`, exits `2`.
+- **No glibc locales.** musl has a built-in C.UTF-8 and does not read compiled glibc locales, so
+  `--locale`, or a `locale` key, exits `2`.
+- **One libc per image.** An `--add-binary` program of the other libc fails the pack.
+- **`--packages`.** An Alpine host keeps an apk database, which `--packages` does not read yet.
+  The report says null there, as on any host with no dpkg or rpm database.
 
 ## Inspect the dependency graph
 
@@ -521,7 +557,7 @@ program and its libraries, which `pack` also stages. The pack report lists the N
 under its payload sizes (`size.entries` in `--format json`).
 
 `graph --format json` prints one object: `root` (the binary's real path), `interpreter` (the
-loader, or null), `nodes` and `missing` (every soname that did not resolve). Each node has `id`
+loader, or null), `libc` (`"glibc"`, `"musl"`, or null with no loader), `nodes` and `missing` (every soname that did not resolve). Each node has `id`
 (its real path), `name` (the soname the loader searched for, or the binary's file name), `needs`
 (the ids of the nodes it needs) and `missing` (its own sonames that did not resolve).
 

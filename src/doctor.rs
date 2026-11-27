@@ -17,7 +17,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "ldconfig",
         version_args: &["--version"],
-        purpose: "regenerate the loader cache (core pack)",
+        purpose: "regenerate the loader cache (glibc binaries only)",
         hint: "install glibc tools (libc-bin)",
     },
     Tool {
@@ -79,7 +79,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "localedef",
         version_args: &["--version"],
-        purpose: "--locale (compile a locale the host has no directory for)",
+        purpose: "--locale, glibc binaries only (compile a locale the host has no directory for)",
         hint: "install glibc tools (libc-bin) and the locale sources (locales)",
     },
     // Absent on every host that is not Debian-based, and that is fine: an rpm host uses rpm,

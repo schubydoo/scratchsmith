@@ -532,6 +532,9 @@ impl SmokeOutcome {
         matches!(self.code, Some(126) | Some(127))
             || self.stderr.contains("error while loading shared libraries")
             || self.stderr.contains("cannot open shared object file")
+            // musl's loader: a missing library, and a symbol no loaded library defines.
+            || self.stderr.contains("Error loading shared library")
+            || self.stderr.contains("Error relocating")
             || self.stderr.lines().any(exec_not_found)
     }
 }
@@ -1092,6 +1095,17 @@ mod tests {
             "docker: Error response from daemon: failed to create task for container: \
              unable to start container process: exec: \"/app\": stat /app: no such file or \
              directory: unknown.",
+        ] {
+            assert!(outcome(Some(1), line).loader_failed(), "{line}");
+        }
+    }
+
+    #[test]
+    fn musls_loader_errors_are_loader_failures() {
+        // musl exits 127 on these too; the text catches a runtime that reports another code.
+        for line in [
+            "Error loading shared library libz.so.1: No such file or directory (needed by /app)",
+            "Error relocating /app: deflate: symbol not found",
         ] {
             assert!(outcome(Some(1), line).loader_failed(), "{line}");
         }

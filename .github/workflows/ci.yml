@@ -116,6 +116,11 @@ jobs:
       # under CI rather than skipping them. That is the point: a skip reads as a pass.
       - name: Install upx
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends upx-ucl
+      # The musl fixtures in tests/fixtures.rs build a dynamic musl program with musl-gcc, which
+      # needs binutils for the assembler.
+      # ⚠️ Required by tests/common::skip_required, like upx above.
+      - name: Install musl-tools
+        run: sudo apt-get install -y --no-install-recommends musl-tools binutils
       # syft isn't preinstalled. The `--packages sbom` test compares two real SBOMs, and
       # nothing else exercises the guard that takes the package records out of the image.
       # ⚠️ Required by tests/common::skip_required, like upx above.
@@ -170,6 +175,9 @@ jobs:
       # ⚠️ Required by tests/common::skip_required — see the note on the test job's copy.
       - name: Install upx and tini
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends upx-ucl tini
+      # ⚠️ Required by tests/common::skip_required — see the note on the test job's copy.
+      - name: Install musl-tools
+        run: sudo apt-get install -y --no-install-recommends musl-tools binutils
       # ⚠️ Required by tests/common::skip_required — see the note on the test job's copy.
       - name: Install syft
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3

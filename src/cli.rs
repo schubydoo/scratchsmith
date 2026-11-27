@@ -405,6 +405,23 @@ fn dispatch(cli: Cli) -> Result<()> {
                     (None, _) => "the command line".to_string(),
                 }
             };
+            // Where an explicit `nss` or `locale` value is set, before any default, for the
+            // musl refusals: the command line, the selected profile, or the base.
+            let set_in = |cli_set: bool, pick: fn(&crate::config::Config) -> bool| {
+                if cli_set {
+                    return Some("the command line".to_string());
+                }
+                let path = config.as_ref()?;
+                match &profile {
+                    Some(name) if file.profile.get(name).is_some_and(pick) => {
+                        Some(format!("{} [profile.{name}]", path.display()))
+                    }
+                    _ if pick(&file) => Some(path.display().to_string()),
+                    _ => None,
+                }
+            };
+            let nss_set_in = set_in(!nss.is_empty(), |c| !c.nss.is_empty());
+            let locale_set_in = set_in(!locale.is_empty(), |c| !c.locale.is_empty());
             let label_from = list_from(&label, |c| &c.label);
             let env_from = list_from(&env, |c| &c.env);
             // Where `smoke` and `sign` are set, for the refusals below: in the base, in the
@@ -599,6 +616,8 @@ fn dispatch(cli: Cli) -> Result<()> {
                     .transpose()?,
                 runtime: runtime.or(file_runtime).unwrap_or_default(),
                 notes,
+                nss_set_in,
+                locale_set_in,
                 packages: {
                     let selection =
                         crate::packages::PackagesSelection::from_outputs(if packages.is_empty() {

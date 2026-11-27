@@ -44,10 +44,48 @@
    `LD_LIBRARY_PATH`, so the result is deterministic.
 2. **Stage**: copy the interpreter to its verbatim path (another path to the loader becomes a
    relative symlink to that copy), mirror the libraries, recreate versioned-soname symlinks,
-   regenerate `ld.so.cache`, and add the glibc NSS pieces.
+   regenerate `ld.so.cache`, and add the glibc NSS pieces. A musl binary gets no cache and no
+   NSS (see [The musl backend](#the-musl-backend)).
 3. **Assemble**: build a non-root image with reproducible layers (sorted entries, zeroed
    mtime/uid/gid). The uncompressed `diff_id` and the gzip layer digest are computed
    separately, which avoids the classic unpullable-image bug.
+
+## The musl backend
+
+The binary's program interpreter (`PT_INTERP`) picks the rules. A loader named `ld-musl-*`
+selects musl's rules for the whole graph, and any other loader selects the glibc rules above,
+which do not change. musl's loader (1.2.5) differs from glibc's in these ways, and Scratchsmith
+copies each one:
+
+1. **No cache.** musl has no `ld.so.cache` and no `ldconfig`, so `pack` writes neither and never
+   runs `ldconfig`. musl opens a library only at the path its search found. When that path is
+   a link into another directory, or passes through a directory link, the image gets a link
+   at that path to the staged file.
+2. **libc is the loader.** A needed name of `lib` plus `c.`, `pthread.`, `rt.`, `m.`, `dl.`,
+   `util.` or `xnet.`, such as `libc.so`, `libc.musl-x86_64.so.1` or `libm.so`, is the loader
+   itself, found with no search. So is a name equal to the `PT_INTERP` string.
+3. **Search order.** A name with no `/` matches an object already loaded under that name first.
+   Then come the search path of the object that needs it, of the object that needed that one,
+   and so on up to the program, then the system path.
+4. **RPATH and RUNPATH are one value.** RUNPATH wins when both are set, and either one is
+   inherited by every dependency below it.
+5. **Only `$ORIGIN` expands.** A search path that holds any other `$` token, such as `$LIB`,
+   is dropped whole for that object, and `pack` prints a note.
+6. **The system path** comes from `<prefix>/etc/ld-musl-<arch>.path` in the host root, split on
+   `:` and on newlines. The prefix is the `PT_INTERP` path less its last two parts. With no such
+   file, it is `/lib:/usr/local/lib:/usr/lib`. When a library came from a directory outside
+   those defaults, the image gets its own path file that lists those directories and the
+   defaults.
+7. **"Already loaded" goes by file name.** musl never reads `DT_SONAME`. A name matches an
+   object found under the same file name, or the same file by device and inode.
+8. **A glibc libc is not loaded.** musl takes a library that defines `__libc_start_main` and
+   `stdin` for its own libc. Scratchsmith fails the pack on a glibc libc in a musl graph, and
+   maps a copy of musl's libc to the loader.
+
+musl has no NSS: it reads `/etc/passwd`, `/etc/group`, `/etc/hosts` and `/etc/resolv.conf`
+directly. A musl image always gets the minimal `/etc/passwd` and `/etc/group`, and no
+`nsswitch.conf` or NSS module. One image has one libc, so an `--add-binary` program of the other
+libc fails the pack.
 
 ## Stability
 

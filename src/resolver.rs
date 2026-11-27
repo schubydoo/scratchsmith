@@ -59,13 +59,24 @@ pub struct ElfInfo {
     pub libc: Option<Libc>,
 }
 
-/// A C library, as the musl backend tells one from another.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A C library, as the musl backend tells one from another. The JSON reports name it
+/// `"glibc"` or `"musl"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Libc {
     /// GNU libc.
     Glibc,
     /// musl libc.
     Musl,
+}
+
+impl std::fmt::Display for Libc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Libc::Glibc => "glibc",
+            Libc::Musl => "musl",
+        })
+    }
 }
 
 impl ElfInfo {
@@ -79,12 +90,21 @@ impl ElfInfo {
         }
     }
 
-    /// True when the interpreter is the musl loader. musl differs fundamentally from
-    /// glibc (no NSS, libc-is-the-loader), so Scratchsmith detects and rejects it.
+    /// True when the interpreter is the musl loader. musl differs from glibc (no NSS, no
+    /// ld.so.cache, libc is the loader), so a musl binary takes the musl resolver walk.
     pub fn is_musl(&self) -> bool {
         self.interpreter
             .as_deref()
             .is_some_and(|i| i.contains("ld-musl") || i.contains("libc.musl"))
+    }
+
+    /// The libc a program loads through: musl for a musl loader, glibc for any other, and
+    /// `None` for a file with no PT_INTERP (a static program or a library).
+    pub fn uses_libc(&self) -> Option<Libc> {
+        self.interpreter.as_ref().map(|_| match self.is_musl() {
+            true => Libc::Musl,
+            false => Libc::Glibc,
+        })
     }
 
     // The `$PLATFORM` token value. Only the arches Scratchsmith targets are named; anything
@@ -96,19 +116,6 @@ impl ElfInfo {
             _ => "",
         }
     }
-}
-
-/// Reject binaries Scratchsmith cannot correctly pack. musl is fundamentally
-/// different (loader path, no NSS module system), so it is hard-failed loudly rather
-/// than packed into a subtly broken image.
-pub fn ensure_glibc(info: &ElfInfo) -> Result<()> {
-    if info.is_musl() {
-        bail!(
-            "musl binaries are out of scope; Scratchsmith packs glibc binaries only (interpreter: {})",
-            escape_if_line_breaking(info.interpreter.as_deref().unwrap_or_default())
-        );
-    }
-    Ok(())
 }
 
 /// Read an ELF file and extract its dynamic-linking facts.
@@ -338,6 +345,17 @@ impl Resolution {
         self.interpreter
             .as_ref()
             .map(|i| i.image_path.display().to_string())
+    }
+
+    /// The C library the root loads through, for the `libc` field of the `pack` and `graph`
+    /// reports. `None` exactly when `interpreter_path` is.
+    pub fn libc(&self) -> Option<Libc> {
+        self.interpreter.as_ref()?;
+        Some(if self.musl.is_some() {
+            Libc::Musl
+        } else {
+            Libc::Glibc
+        })
     }
 
     /// Print each hint as one stderr line, never stdout: stdout carries the `--format json`
@@ -1152,6 +1170,36 @@ fn file_id(path: &Path) -> Option<(u64, u64)> {
     std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
 }
 
+/// Refuse a musl binary that v2.3 cannot pack, and give the arch its loader names. Only
+/// `ld-musl-x86_64.so.1` on a 64-bit x86_64 ELF passes. PT_INTERP comes out of the packed
+/// binary and the message quotes it, so it is escaped.
+pub fn ensure_packable_musl(path: &Path, info: &ElfInfo) -> Result<&'static str> {
+    let interp = info.interpreter.as_deref().unwrap_or_default();
+    let Some(arch) = musl_arch(interp) else {
+        bail!(
+            "{} uses musl through the loader {}, which does not have the form \
+             ld-musl-<arch>.so.1, so the search path file cannot be named.",
+            printable(path),
+            escape_for_display(interp)
+        );
+    };
+    if arch != "x86_64" {
+        bail!(
+            "{} uses musl on {}. v2.3 packs x86_64 musl binaries only.",
+            printable(path),
+            escape_for_display(arch)
+        );
+    }
+    if !info.is_64 || info.machine != goblin::elf::header::EM_X86_64 {
+        bail!(
+            "{} uses musl on {}. v2.3 packs x86_64 musl binaries only.",
+            printable(path),
+            arch_label(info.is_64, info.machine)
+        );
+    }
+    Ok("x86_64")
+}
+
 // Resolve a musl binary the way musl's loader does. `root_info.needed` already holds the
 // --include entries after its first `declared_needed` names.
 fn resolve_musl(
@@ -1162,28 +1210,7 @@ fn resolve_musl(
     source: &dyn LinkInfoSource,
 ) -> Result<Resolution> {
     let interp = root_info.interpreter.as_deref().unwrap_or_default();
-    let Some(arch) = musl_arch(interp) else {
-        bail!(
-            "{} uses musl through the loader {}, which does not have the form \
-             ld-musl-<arch>.so.1, so the search path file cannot be named.",
-            printable(root_path),
-            escape_for_display(interp)
-        );
-    };
-    if arch != "x86_64" {
-        bail!(
-            "{} uses musl on {}. v2.3 packs x86_64 musl binaries only.",
-            printable(root_path),
-            escape_for_display(arch)
-        );
-    }
-    if !root_info.is_64 || root_info.machine != goblin::elf::header::EM_X86_64 {
-        bail!(
-            "{} uses musl on {}. v2.3 packs x86_64 musl binaries only.",
-            printable(root_path),
-            arch_label(root_info.is_64, root_info.machine)
-        );
-    }
+    let arch = ensure_packable_musl(root_path, root_info)?;
 
     let mut resolution = Resolution::default();
     let path_file = musl_path_file(interp, arch);
@@ -2113,7 +2140,7 @@ fn reroot(root: &Path, path: &Path) -> PathBuf {
 // A path for a warning line. The search-path text comes out of the packed binary, and a file
 // name can hold anything but `/` and NUL, so escape control characters: a raw newline or
 // terminal escape would let the input forge a line of scratchsmith's own output.
-fn printable(path: &Path) -> String {
+pub fn printable(path: &Path) -> String {
     escape_for_display(&path.to_string_lossy())
 }
 
@@ -2326,39 +2353,32 @@ mod tests {
     }
 
     #[test]
-    fn musl_is_detected_and_rejected() {
+    fn musl_is_detected_and_names_its_libc() {
         let musl = info(Some("/lib/ld-musl-x86_64.so.1"), &["libc.so"]);
         assert!(musl.is_musl());
-        let err = ensure_glibc(&musl).unwrap_err();
-        assert!(err.to_string().contains("musl"));
+        assert_eq!(musl.uses_libc(), Some(Libc::Musl));
+        assert_eq!(info(None, &[]).uses_libc(), None);
+        assert_eq!(Libc::Musl.to_string(), "musl");
+        assert_eq!(serde_json::to_string(&Libc::Glibc).unwrap(), "\"glibc\"");
     }
 
     #[test]
-    fn the_musl_rejection_escapes_the_interpreter() {
-        // An honest loader path reads exactly as before.
-        let honest = info(Some("/lib/ld-musl-x86_64.so.1"), &[]);
-        assert_eq!(
-            format!("{:#}", ensure_glibc(&honest).unwrap_err()),
-            "musl binaries are out of scope; Scratchsmith packs glibc binaries only \
-             (interpreter: /lib/ld-musl-x86_64.so.1)"
-        );
-
+    fn the_musl_loader_refusal_escapes_the_interpreter() {
         // PT_INTERP is a raw string out of the packed binary, and main prints this error to
         // the terminal. A newline, a terminal escape, a line separator or a bidi isolate in it
         // must not let the binary forge a line of scratchsmith's own output.
-        let forged = info(
-            Some("/lib/ld-musl-x86_64.so.1\nerror: forged\r\x1b[2J\u{2028}\u{2067}"),
+        let mut forged = info(
+            Some("/lib/ld-musl\nerror: forged\r\x1b[2J\u{2028}\u{2067}"),
             &[],
         );
-        let err = format!("{:#}", ensure_glibc(&forged).unwrap_err());
-        assert!(!err.chars().any(breaks_a_line), "{err:?}");
-        assert!(
-            err.ends_with(
-                "(interpreter: /lib/ld-musl-x86_64.so.1\\nerror: forged\\r\
-                 \\u{1b}[2J\\u{2028}\\u{2067})"
-            ),
-            "{err}"
+        forged.is_64 = true;
+        forged.machine = goblin::elf::header::EM_X86_64;
+        let err = format!(
+            "{:#}",
+            ensure_packable_musl(Path::new("/app"), &forged).unwrap_err()
         );
+        assert!(!err.chars().any(breaks_a_line), "{err:?}");
+        assert!(err.contains("which does not have the form"), "{err}");
     }
 
     #[test]
@@ -2395,7 +2415,7 @@ mod tests {
     fn glibc_is_accepted() {
         let glibc = info(Some("/lib64/ld-linux-x86-64.so.2"), &["libc.so.6"]);
         assert!(!glibc.is_musl());
-        assert!(ensure_glibc(&glibc).is_ok());
+        assert_eq!(glibc.uses_libc(), Some(Libc::Glibc));
     }
 
     // --- ld.so search-order emulation ------------------------------------------
