@@ -781,7 +781,9 @@
    entry loads from the image's <code>ld.so.cache</code>, if <code>ldconfig</code> caches it under the needed name by
    the rule above. <code>pack</code> prints one note on stderr for the entry, and the note names any
    library that the cache does not list, which the image then cannot load. On x86_64,
-   <code>$PLATFORM</code> is read as <code>x86_64</code>. glibc reads it as <code>haswell</code> or <code>xeon_phi</code> on some Intel CPUs,
+   <code>$PLATFORM</code> is read as <code>x86_64</code>, and on aarch64 as <code>aarch64</code>. On any other architecture the
+   token has no value, and a search path that holds it fails the pack wherever the loader
+   would search it. glibc reads it as <code>haswell</code> or <code>xeon_phi</code> on some Intel CPUs,
    but those copies are optimized builds that not every CPU can run, so they never stage. A
    library missing as <code>x86_64</code> but present under such a name gets a hint, and a library that
    ships while <code>ld.so</code> on such a CPU would load such a copy gets a note on stderr. <code>$LIB</code> takes

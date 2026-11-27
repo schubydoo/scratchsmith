@@ -1225,7 +1225,7 @@ Pack on a host whose glibc is as new as the one the binary was built against.</p
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--runtime<span class="w"> </span>podman<span class="w"> </span>./app
 </code></pre></div>
 <p>Inspect the rootfs without building an image (<strong>no Docker daemon needed</strong>):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>./rootfs<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--no-build<span class="w"> </span>--output<span class="w"> </span>./rootfs<span class="w"> </span>./app<span class="w">    </span><span class="c1"># or -n -o ./rootfs</span>
 </code></pre></div>
 <p>Give <code>--output</code> a new directory or an empty one. Scratchsmith does not empty the directory, so
 a directory that holds anything is an error, and nothing is staged. A file is an error
@@ -1283,13 +1283,49 @@ parseable. A failed cosign run is reported with its exit status, and its own mes
 <code>canary</code> and <code>fortify</code> as booleans, <code>relro</code> as <code>"full"</code>, <code>"partial"</code> or <code>"none"</code>), <code>fail_on</code>
 (the gates asked for) and <code>violations</code> (the gates this binary fails). Gates use the <code>--fail-on</code>
 spelling, each listed once in the order given, so a CI script can feed a violation back to the
-flag. The report prints in full before a failing gate exits <code>1</code>. <code>canary</code> and <code>fortify</code> mean the
-binary imports the guard or a <code>*_chk</code> wrapper, so a static binary reads <code>false</code>.</p>
+flag. The report prints in full before a failing gate exits <code>1</code>. The six gates are:</p>
+<table>
+<thead>
+<tr>
+<th>Gate</th>
+<th>Fails when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>no-pie</code></td>
+<td>the binary is not PIE</td>
+</tr>
+<tr>
+<td><code>no-relro</code></td>
+<td>it has no RELRO</td>
+</tr>
+<tr>
+<td><code>partial-relro</code></td>
+<td>its RELRO is not full (so it also fails with no RELRO)</td>
+</tr>
+<tr>
+<td><code>no-nx</code></td>
+<td>its stack is executable</td>
+</tr>
+<tr>
+<td><code>no-canary</code></td>
+<td>it imports no stack-protector guard</td>
+</tr>
+<tr>
+<td><code>no-fortify</code></td>
+<td>it imports no <code>*_chk</code> wrapper</td>
+</tr>
+</tbody>
+</table>
+<p><code>canary</code> and <code>fortify</code> mean the binary imports the guard or a <code>*_chk</code> wrapper, so a static binary
+reads <code>false</code>.</p>
 <p><code>--smoke</code> runs the image once and fails the pack only when the binary could not start: a
 missing library or loader, or an entrypoint the runtime could not exec. An app that starts and
 exits with an error passes, unless the code is 126 or 127, which shells use for a command
 that could not run. A binary still running after 15 seconds counts as started, and its
-container is removed.</p>
+container is removed. <code>--smoke</code> needs the default load sink: with <code>--no-build</code>, <code>--oci-archive</code>
+or <code>--push</code> (or a <code>push</code> key in the configuration file) it is a usage error, exit code 2.</p>
 <p>syft, grype and cosign each have a time limit: syft 15 minutes, grype 30 minutes, and cosign
 10 minutes. A run past its limit is stopped, and the pack fails with an error that names the tool
 and the limit. grype's limit leaves room for its first run, which downloads its vulnerability
@@ -1370,6 +1406,25 @@ of a build trace.</p>
 <p>A phase that did not run is <code>null</code>. With <code>--no-build</code>, <code>deliver_ms</code> is <code>null</code>, because no image
 is built. The phases add up to a little less than <code>total_ms</code>. The text report does not show the
 timings.</p>
+<p>The other fields of the pack report:</p>
+<ul>
+<li><code>tag</code>, <code>archive</code>, <code>pushed</code>, <code>staged_dir</code>: where the image went. The one for the sink you used
+  is set and the others are null: the loaded image tag, the <code>--oci-archive</code> path, the <code>--push</code>
+  reference, or the <code>--no-build</code> directory.</li>
+<li><code>entrypoint</code>: the packed binary's path in the image. It does not change with <code>--entrypoint</code>
+  or <code>--init</code>.</li>
+<li><code>size</code>: <code>entries</code> (each with <code>path</code>, <code>before</code> and <code>after</code> in bytes), <code>total_before</code>,
+  <code>total_after</code>, and the booleans <code>stripped</code> and <code>upx</code>. It covers the ELF payload: the binary,
+  the loader, the libraries and the NSS modules. An <code>--add-binary</code> program's libraries are
+  included, and the added program itself is not.</li>
+<li><code>warnings</code>: a list of warning lines, empty when there are none.</li>
+<li><code>smoke_ok</code>: <code>true</code> after a passing <code>--smoke</code>, otherwise null.</li>
+<li><code>sbom</code>: the SBOM path with <code>--sbom</code>, otherwise null.</li>
+<li><code>scan</code>: with <code>--scan</code>, the finding counts <code>critical</code>, <code>high</code>, <code>medium</code>, <code>low</code>, <code>negligible</code>,
+  <code>unknown</code> and <code>total</code>. Otherwise null.</li>
+<li><code>signed</code>: the by-digest reference that <code>--sign</code> signed, otherwise null.</li>
+<li><code>packages</code>: see the next section.</li>
+</ul>
 <h2 id="name-the-packages-behind-the-bundled-files">Name the packages behind the bundled files<a class="headerlink" href="#name-the-packages-behind-the-bundled-files" title="Permanent link">&para;</a></h2>
 <p>Scratchsmith copies libraries from the build host into the image. The image has no package
 database, so an SBOM of it names almost none of those libraries, and a vulnerability scan cannot
@@ -1697,7 +1752,7 @@ names a locale the pack did not stage, the pack warns as well. glibc falls back 
 for that category. The flag repeats, and the <code>locale</code> key in <code>scratchsmith.toml</code> takes the same
 list. Locale data counts toward <code>--max-size</code>.</p>
 <h2 id="inspect-the-dependency-graph">Inspect the dependency graph<a class="headerlink" href="#inspect-the-dependency-graph" title="Permanent link">&para;</a></h2>
-<p>To see what <code>pack</code> stages without building an image, run <code>graph</code>:</p>
+<p>To see the libraries <code>pack</code> resolves for the binary, without building an image, run <code>graph</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>scratchsmith<span class="w"> </span>graph<span class="w"> </span>./app<span class="w">                            </span><span class="c1"># ASCII tree of the resolved deps</span>
 <a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>scratchsmith<span class="w"> </span>graph<span class="w"> </span>--format<span class="w"> </span>json<span class="w"> </span>./app<span class="w">              </span><span class="c1"># machine-readable adjacency list</span>
 <a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>scratchsmith<span class="w"> </span>graph<span class="w"> </span>--include<span class="w"> </span>libplugin.so.1<span class="w"> </span>./app<span class="w">   </span><span class="c1"># add a dlopen'd library, like pack</span>
@@ -1706,6 +1761,14 @@ list. Locale data counts toward <code>--max-size</code>.</p>
 a shared dependency or a cycle does not print twice. A dependency that does not resolve is
 shown as <code>(missing)</code>, and <code>graph</code> then exits with code 1 after it prints the tree. If the binary
 has a loader (<code>PT_INTERP</code>), the last line names it.</p>
+<p><code>graph</code> shows the binary's own dependency tree and <code>--include</code>. It does not show the NSS modules
+(<code>libnss_files.so.2</code>, <code>libnss_dns.so.2</code> and <code>libresolv.so.2</code> by default) or an <code>--add-binary</code>
+program and its libraries, which <code>pack</code> also stages. The pack report lists the NSS modules
+under its payload sizes (<code>size.entries</code> in <code>--format json</code>).</p>
+<p><code>graph --format json</code> prints one object: <code>root</code> (the binary's real path), <code>interpreter</code> (the
+loader, or null), <code>nodes</code> and <code>missing</code> (every soname that did not resolve). Each node has <code>id</code>
+(its real path), <code>name</code> (the soname the loader searched for, or the binary's file name), <code>needs</code>
+(the ids of the nodes it needs) and <code>missing</code> (its own sonames that did not resolve).</p>
 <h2 id="see-each-decision-with-verbose">See each decision with <code>--verbose</code><a class="headerlink" href="#see-each-decision-with-verbose" title="Permanent link">&para;</a></h2>
 <p>To see why a library was picked, or where a file was staged, add <code>--verbose</code>. It works before
 or after the subcommand:</p>
@@ -1726,7 +1789,8 @@ one:</p>
 <a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--require<span class="w"> </span>libseccomp.so.2<span class="w"> </span>./app<span class="w">  </span><span class="c1"># fail if seccomp is missing</span>
 </code></pre></div>
 <p>Both flags repeat and match exactly, by soname or staged file name. The resolved libraries,
-the loader, and the NSS modules are all in scope. Read the names from <code>scratchsmith graph</code>.
+the loader, and the NSS modules are all in scope. Read the library names from
+<code>scratchsmith graph</code>. The NSS modules are not in <code>graph</code>, so read those from the pack report.
 The same keys work in <code>scratchsmith.toml</code> as <code>deny</code> and <code>require</code>.</p>
 <h2 id="diff-two-builds">Diff two builds<a class="headerlink" href="#diff-two-builds" title="Permanent link">&para;</a></h2>
 <p>To catch image drift, stage two builds and compare their rootfs directories:</p>
@@ -1741,9 +1805,10 @@ prints as <code>~ path (mode 0755 -&gt; 0644)</code>, so a lost exec bit or a wo
 <code>--exit-code</code>. A symlink has no mode of its own, so only its target is compared. An empty
 directory in only one tree prints as <code>+ path/ (empty directory)</code> or <code>- path/ (empty directory)</code>.
 A directory that holds anything shows through the files in it. <code>diff</code> then prints the total
-size delta. <code>--format json</code> emits the same data for a machine, with the mode changes in
-<code>mode_changed</code> (each with <code>path</code>, <code>before</code> and <code>after</code> as four octal digits) and the empty
-directories in <code>dirs_added</code> and <code>dirs_removed</code>.</p>
+size delta. <code>--format json</code> emits the same data for a machine: <code>added</code> and <code>removed</code> (each
+entry has <code>path</code> and <code>size</code>), <code>changed</code> (a list of paths), <code>mode_changed</code> (each with <code>path</code>,
+<code>before</code> and <code>after</code> as four octal digits), the empty directories in <code>dirs_added</code> and
+<code>dirs_removed</code>, and the total file bytes of each tree in <code>size_before</code> and <code>size_after</code>.</p>
 <p>A staged rootfs keeps the modes from the host: a directory gets its mode from the umask, and a
 file keeps the mode of its source. The image layer rewrites them, to <code>0755</code> for a directory and
 <code>0755</code> or <code>0644</code> for a file by its exec bit. So two staged trees from builders with different
@@ -1782,7 +1847,9 @@ container runtime mounts by default. Without <code>/proc</code>, <code>unpack</c
 <p><code>unpack</code> clears the setuid and setgid bits on every file and directory it writes. An untrusted
 image cannot then plant a setuid program owned by the user who unpacks it. <code>unpack</code> prints one
 warning line on standard error for each path in the final image that had one of those bits.
-The <code>stripped_setid</code> field of <code>--format json</code> lists the same paths.</p>
+The <code>stripped_setid</code> field of <code>--format json</code> lists the same paths. The other fields are
+<code>source</code> (the archive), <code>dir</code> (where it was extracted), <code>layers</code> (how many were applied) and
+<code>files</code> (how many files and symlinks were written).</p>
 <p><code>unpack</code> applies the mode of each directory after the last layer, so a directory without owner
 write permission, such as <code>/root</code> in a Fedora image, unpacks for a user who is not root. Until
 then such a directory stays open to its owner, so a failed unpack leaves a tree that its owner
@@ -1821,14 +1888,17 @@ index by digest.</p>
 </ul>
 <h2 id="image-metadata-and-entrypoint">Image metadata and entrypoint<a class="headerlink" href="#image-metadata-and-entrypoint" title="Permanent link">&para;</a></h2>
 <p>Set what the image runs: entrypoint, arguments, environment, working directory, and user:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>./app<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="w">  </span>--entrypoint<span class="w"> </span>/app<span class="w"> </span>--cmd<span class="w"> </span>serve<span class="w"> </span>--env<span class="w"> </span><span class="nv">LANG</span><span class="o">=</span>C.UTF-8<span class="w"> </span>--workdir<span class="w"> </span>/data<span class="w"> </span>--user<span class="w"> </span><span class="m">65532</span>:65532<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="w">  </span>--label<span class="w"> </span><span class="nv">role</span><span class="o">=</span>api<span class="w"> </span>--healthcheck<span class="w"> </span>/app<span class="w"> </span>--healthcheck<span class="w"> </span>--health
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>/opt/app/bin/app<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="w">  </span>--cmd<span class="w"> </span>serve<span class="w"> </span>--env<span class="w"> </span><span class="nv">LANG</span><span class="o">=</span>C.UTF-8<span class="w"> </span>--workdir<span class="w"> </span>/data<span class="w"> </span>--user<span class="w"> </span><span class="m">65532</span>:65532<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="w">  </span>--label<span class="w"> </span><span class="nv">role</span><span class="o">=</span>api<span class="w"> </span>--healthcheck<span class="w"> </span>/opt/app/bin/app<span class="w"> </span>--healthcheck<span class="w"> </span>--health
 </code></pre></div>
+<p>The packed binary keeps its host path in the image (its real path, after symlinks), and that path
+is the default entrypoint. So an <code>--entrypoint</code> or <code>--healthcheck</code> that runs the binary must name
+that path. Scratchsmith does not check either one.</p>
 <p><code>--healthcheck</code> (like <code>--cmd</code>) is repeatable, and each token is one argument of a single exec
-command. So <code>--healthcheck /app --healthcheck --health</code> is the one command <code>["/app", "--health"]</code>,
-not two healthchecks. It is the same as <code>healthcheck = ["/app", "--health"]</code> in the
-<a href="../configuration/">configuration file</a>.</p>
+command. So <code>--healthcheck /opt/app/bin/app --healthcheck --health</code> is the one command
+<code>["/opt/app/bin/app", "--health"]</code>, not two healthchecks. It is the same as
+<code>healthcheck = ["/opt/app/bin/app", "--health"]</code> in the <a href="../configuration/">configuration file</a>.</p>
 <p>Each <code>--env</code> and <code>--label</code> entry needs an <code>=</code>. An entry with no <code>=</code> is an error with exit code 2.
 To set an empty value, end the entry with <code>=</code>, as in <code>--label build=</code>.</p>
 <h2 id="pack-again-on-every-change">Pack again on every change<a class="headerlink" href="#pack-again-on-every-change" title="Permanent link">&para;</a></h2>
@@ -1851,8 +1921,8 @@ If a later pack fails, scratchsmith prints the error and continues to watch. A b
 halfway does not end the watch.</p>
 <p><code>--watch</code> works with the default load and with <code>--oci-archive</code>. It refuses three things:</p>
 <ul>
-<li><code>--push</code>, and a <code>push</code> key from the configuration file. A registry is not the place for an
-  image from every save.</li>
+<li><code>--push</code>, and a <code>push</code> key from the configuration file unless <code>--oci-archive</code> replaces it. A
+  registry is not the place for an image from every save.</li>
 <li><code>--no-build</code>. That sink stages into one directory, and a second pack into the same directory
   is an error, because the directory is no longer empty.</li>
 <li><code>--format json</code>. Each pack prints a text report.</li>
@@ -1882,7 +1952,8 @@ changes only with a newer scratchsmith release.</p>
 <p>If <code>SSL_CERT_FILE</code> or <code>SSL_CERT_DIR</code> is set, scratchsmith never uses the compiled-in
 certificates. If the path that you set gives no certificates, the command fails and names the
 variable.</p>
-<p>One subcommand does not run there. <code>pack</code> needs ldconfig, strip, and the SBOM tools.</p>
+<p>One subcommand does not run there. <code>pack</code> needs ldconfig, plus a container engine for the
+default sink and strip, syft or grype for the options that use them.</p>
 <p>The <strong><code>:toolbox</code></strong> image bundles the <code>pack</code> toolchain (ldconfig, strip, syft, grype, cosign,
 upx, tini, the docker CLI) on a Wolfi base. With it, <code>pack</code> itself runs inside a container.
 That image has no dpkg and no rpm database, so <code>--packages</code> has no data there. The <code>packages</code>
@@ -1891,14 +1962,17 @@ output that you set fails too. The default stays quiet.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1"># Daemonless — no socket needed; write an OCI archive or push straight to a registry.</span>
 <a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a><span class="w">  </span>pack<span class="w"> </span>--oci-archive<span class="w"> </span>app.oci.tar<span class="w"> </span>./app
-<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="w">  </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span>./app
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="w">  </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.docker:/docker:ro"</span><span class="w"> </span>-e<span class="w"> </span><span class="nv">DOCKER_CONFIG</span><span class="o">=</span>/docker<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-27-6" name="__codelineno-27-6" href="#__codelineno-27-6"></a><span class="w">  </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span>pack<span class="w"> </span>--push<span class="w"> </span>ghcr.io/you/app:1.0<span class="w"> </span>./app
 </code></pre></div>
+<p><code>--push</code> reads the registry login from the Docker config, so mount one that holds the
+credentials themselves. A credential helper on the host is not available inside the container.</p>
 <p>Prefer the daemonless sinks (<code>--push</code> / <code>--oci-archive</code>) in CI. The <strong>default <code>docker load</code> sink</strong>
 needs a host engine, so mount its socket. That socket is <strong>root-equivalent on the host</strong>, so use
 it only where you trust the workflow:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/var/run/docker.sock:/var/run/docker.sock<span class="w"> </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="w">  </span>pack<span class="w"> </span>./app
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/var/run/docker.sock:/var/run/docker.sock<span class="w"> </span>-v<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:/w"</span><span class="w"> </span>-w<span class="w"> </span>/w<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="w">  </span>ghcr.io/schubydoo/scratchsmith:toolbox<span class="w"> </span>pack<span class="w"> </span>./app
 </code></pre></div>
 <p>Tags: <code>:toolbox</code> (latest), <code>:X.Y.Z-toolbox</code>, <code>:X.Y-toolbox</code>. Verify its signature exactly like the
 scratch image. See <a href="../verifying/">Verifying releases</a>.</p>

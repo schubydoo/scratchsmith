@@ -874,8 +874,9 @@ installs it to <code>~/.local/bin</code> (or <code>/usr/local/bin</code> as root
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install.sh<span class="w"> </span><span class="p">|</span><span class="w"> </span>bash
 </code></pre></div>
 <p>Piping to <code>bash</code> runs <a href="https://github.com/schubydoo/scratchsmith/blob/main/install.sh"><code>install.sh</code></a>.
-You can read it first. <code>VERSION</code> and <code>BIN_DIR</code> env vars override the tag and install
-directory. Without cosign, the script warns and verifies only the SHA-256. With cosign
+You can read it first. The <code>VERSION</code> and <code>BIN_DIR</code> env vars override the tag and install
+directory. <code>VERSION</code> takes the tag with its leading <code>v</code>, for example
+<code>curl -fsSL …/install.sh | VERSION=v2.2.0 bash</code>. Without cosign, the script warns and verifies only the SHA-256. With cosign
 installed, a missing signature bundle stops the install. The <code>INSECURE_ALLOW_MISSING_SIGNATURE=1</code>
 env var installs anyway and verifies only the SHA-256. A signature that fails to verify still
 stops the install.
@@ -889,8 +890,10 @@ timeout feature can still hang. Uninstall with <code>--uninstall</code>:</p>
 </code></pre></div>
 <h2 id="cargo">Cargo<a class="headerlink" href="#cargo" title="Permanent link">&para;</a></h2>
 <p>Build and install from source with Cargo (Rust <strong>1.96+</strong>):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>cargo<span class="w"> </span>install<span class="w"> </span>scratchsmith
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>cargo<span class="w"> </span>install<span class="w"> </span>--locked<span class="w"> </span>scratchsmith
 </code></pre></div>
+<p><code>--locked</code> builds with the dependency versions the release was tested with. Without it, Cargo
+resolves the dependencies fresh and can pick crates that need a newer Rust than 1.96.</p>
 <h2 id="release-binary">Release binary<a class="headerlink" href="#release-binary" title="Permanent link">&para;</a></h2>
 <p>Download a release binary, Linux <strong>amd64</strong> or <strong>arm64</strong>, from the
 <a href="https://github.com/schubydoo/scratchsmith/releases/latest">latest release</a>. Verify the signature
@@ -907,6 +910,10 @@ tool, <code>index</code> included. It does <strong>not</strong> run <code>pack</
 tools <code>pack</code> needs. To run <code>pack</code> inside a container, pull
 the <strong><code>:toolbox</code></strong> image instead (Wolfi base + the full toolchain). The
 <a href="../usage/">toolbox section in Usage</a> lists which subcommands run where.</p>
+<p>To pin a release, use <code>:X.Y.Z</code> or <code>:X.Y</code> (for example <code>:2.2.0</code> or <code>:2.2</code>). The toolbox
+equivalents are <code>:X.Y.Z-toolbox</code> and <code>:X.Y-toolbox</code>. There is no major-only tag. Both images are
+multi-arch (amd64 and arm64) and signed. Verify them with the <code>cosign verify</code> command in
+<a href="../verifying/">Verifying releases</a>.</p>
 <h2 id="build-from-source">Build from source<a class="headerlink" href="#build-from-source" title="Permanent link">&para;</a></h2>
 <p>Rust <strong>1.96+</strong>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/schubydoo/scratchsmith

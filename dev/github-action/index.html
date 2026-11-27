@@ -766,12 +766,15 @@ runner, verifies it against the release checksums, and runs <code>pack</code>:</
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">smoke</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                </span><span class="c1"># fail the job if the packed image can't start</span>
 </code></pre></div>
 <p>To publish the built image, log in first and set <code>push</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">docker/login-action@v3</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> registry</span><span class="p">:</span><span class="w"> </span><span class="nv">ghcr.io</span><span class="p p-Indicator">,</span><span class="nt"> username</span><span class="p">:</span><span class="w"> </span><span class="nv">$</span><span class="p p-Indicator">{{</span><span class="w"> </span><span class="nv">github.actor</span><span class="w"> </span><span class="p p-Indicator">}},</span><span class="nt"> password</span><span class="p">:</span><span class="w"> </span><span class="nv">$</span><span class="p p-Indicator">{{</span><span class="w"> </span><span class="nv">secrets.GITHUB_TOKEN</span><span class="w"> </span><span class="p p-Indicator">}}</span><span class="w"> </span><span class="p p-Indicator">}</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schubydoo/scratchsmith@v&lt;ver&gt;</span><span class="w">   </span><span class="c1"># pin to a release tag</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="nt">binary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./dist/app</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nt">push</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/${{ github.repository }}:latest</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">docker/login-action@v4</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">registry</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nt">username</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${{ github.actor }}</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="nt">password</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${{ secrets.GITHUB_TOKEN }}</span><span class="w">   </span><span class="c1"># the job needs `permissions: packages: write`</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schubydoo/scratchsmith@v&lt;ver&gt;</span><span class="w">   </span><span class="c1"># pin to a release tag</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">binary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./dist/app</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">push</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/${{ github.repository }}:latest</span><span class="w">   </span><span class="c1"># must be lowercase: spell it out if the name has capitals</span>
 </code></pre></div>
 <p>Nine inputs take <strong>one value per line</strong>: <code>cmd</code>, <code>env</code>, <code>label</code>, <code>healthcheck</code>, <code>add-file</code>,
 <code>locale</code>, <code>include</code>, <code>deny</code>, and <code>require</code>. Set image metadata, gate on vulnerabilities, or cap
@@ -779,30 +782,37 @@ the size:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">schubydoo/scratchsmith@v&lt;ver&gt;</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">with</span><span class="p">:</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">binary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./dist/app</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">entrypoint</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/app</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">env</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">      </span><span class="no">LANG=C.UTF-8</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">workdir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/data</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="nt">label</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">      </span><span class="no">org.opencontainers.image.source=https://github.com/you/app</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">      </span><span class="no">role=api</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">    </span><span class="nt">healthcheck</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">      </span><span class="no">/app</span>
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">      </span><span class="no">--health</span>
-<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">    </span><span class="nt">scan</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">    </span><span class="nt">scan-fail-on</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">high</span><span class="w">        </span><span class="c1"># needs grype on the runner</span>
-<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">    </span><span class="nt">max-size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">25MB</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">env</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">      </span><span class="no">LANG=C.UTF-8</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">workdir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/data</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">label</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">      </span><span class="no">org.opencontainers.image.source=https://github.com/you/app</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">      </span><span class="no">role=api</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="nt">healthcheck</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">      </span><span class="no">${{ github.workspace }}/dist/app</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">      </span><span class="no">--health</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">    </span><span class="nt">scan</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">    </span><span class="nt">scan-fail-on</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">high</span><span class="w">        </span><span class="c1"># needs grype on the runner</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">    </span><span class="nt">max-size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">25MB</span>
 </code></pre></div>
+<p>The binary is staged at its real absolute path on the runner, and that path is also the default
+entrypoint. So a healthcheck or <code>entrypoint</code> has to name that path, not a short one like <code>/app</code>.</p>
 <p>Pin <code>@v&lt;ver&gt;</code> to a specific release tag (or a commit SHA). That is the same supply-chain hygiene the
 tool itself practices. <code>version:</code> overrides which scratchsmith release the action runs (defaults to
-the pinned tag, else <code>latest</code>).</p>
+the pinned tag, else <code>latest</code>). The action only reads a version from a <code>vX.Y.Z</code> tag ref, so if you
+pin a commit SHA, also set <code>version:</code> to the matching release (for example <code>version: v2.2.0</code>).
+Otherwise a SHA pin downloads the latest release.</p>
 <h2 id="inputs">Inputs<a class="headerlink" href="#inputs" title="Permanent link">&para;</a></h2>
 <p>Most inputs map to the <code>pack</code> flag of the same name. See <a href="../configuration/">Configuration</a> for what
 each does, and <a href="../usage/">Usage</a> for the equivalent command-line recipes. A few inputs are
 action-specific. <code>version</code> picks which release to download. <code>output</code> maps to <code>--no-build --output</code>.
-<code>args</code> is a verbatim escape hatch for any flag without a dedicated input, for example <code>--sign</code> or
-<code>--oci-archive</code>. Note that <code>push</code> publishes with <code>docker tag</code>/<code>docker push</code>, <strong>not</strong> pack's
-daemonless, cosign-signable <code>--push</code>.</p>
+<code>args</code> is split on whitespace and appended to the command. Quotes are not honoured, so a value
+cannot hold a space, and an unquoted <code>*</code> or <code>?</code> expands against the workspace. It is the escape
+hatch for any flag without a dedicated input, for example
+<code>--oci-archive out.tar</code>, or <code>--push &lt;ref&gt; --sign</code> for a daemonless, cosign-signed push (that job
+needs <code>permissions: id-token: write</code>). With <code>--push</code> or <code>--oci-archive</code> in <code>args</code>, the <code>image</code>
+output is empty, because only the default docker-load sink sets it. Note that <code>push</code> publishes with
+<code>docker tag</code>/<code>docker push</code>, <strong>not</strong> pack's daemonless, cosign-signable <code>--push</code>.</p>
 <p>The action reads the JSON report, so every pack through it runs the <code>--packages</code> lookup by default. The
 <code>report</code> output holds a <code>packages</code> list and a <code>timings</code> object. To turn the lookup off, set
 the <code>packages</code> input to <code>none</code>.</p>
@@ -973,7 +983,7 @@ the <code>packages</code> input to <code>none</code>.</p>
 <tr>
 <td><code>args</code></td>
 <td></td>
-<td>Extra raw <code>pack</code> flags appended verbatim: the escape hatch for anything above.</td>
+<td>Extra raw <code>pack</code> flags, split on whitespace (no quoting) and appended: the escape hatch for anything above.</td>
 </tr>
 </tbody>
 </table>
@@ -988,7 +998,7 @@ the <code>packages</code> input to <code>none</code>.</p>
 <tbody>
 <tr>
 <td><code>image</code></td>
-<td>The loaded image tag. When <code>output</code> staged a rootfs instead, this is empty.</td>
+<td>The loaded image tag. It is empty when <code>output</code> staged a rootfs, or when <code>--push</code> or <code>--oci-archive</code> in <code>args</code> replaced the docker load.</td>
 </tr>
 <tr>
 <td><code>rootfs</code></td>
