@@ -39,4 +39,6 @@ not sandbox or vet those binaries. A malicious input binary produces a malicious
 Report security-relevant behavior such as the following: the resolver stages files outside
 the intended set, or staging does a path traversal. Also report a false "safe" signal from the
 smoke-run or the hardening lint, or a release pipeline that produces unsigned/mis-attested
-artifacts.
+artifacts. `unpack` extracts image archives you did not build, so report it writing outside
+the target directory (path traversal, a symlink or hardlink escape) or keeping an unsafe
+tar entry such as a setuid bit.
