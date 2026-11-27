@@ -1095,7 +1095,7 @@ fn musl_system_dirs(root: &Path, path_file: &Path) -> Vec<PathBuf> {
 // `pthread.`, `rt.`, `m.`, `dl.`, `util.` or `xnet.` (`load_library`, its reserved list).
 // `libcrypt.so.1` is not one.
 fn musl_reserved(name: &str) -> bool {
-    const RESERVED: [&str; 6] = ["c.", "rt.", "m.", "dl.", "util.", "xnet."];
+    const RESERVED: [&str; 7] = ["c.", "pthread.", "rt.", "m.", "dl.", "util.", "xnet."];
     name.strip_prefix("lib")
         .is_some_and(|rest| RESERVED.iter().any(|r| rest.starts_with(r)))
 }
