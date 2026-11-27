@@ -1113,7 +1113,7 @@ fn musl_object_dirs(
     root: &Path,
     notes: &mut Vec<String>,
 ) -> Vec<PathBuf> {
-    let Some(raw) = obj.runpaths.last().or(obj.rpaths.last()) else {
+    let Some(raw) = obj.rpaths.last().or(obj.runpaths.last()) else {
         return Vec::new();
     };
     // One left-to-right pass, as musl's `fixup_rpath` does, so a `$ORIGIN` inside the origin
