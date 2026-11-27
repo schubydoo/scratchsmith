@@ -358,7 +358,7 @@ jobs:
           grep -q '^curl ' <<<"$out"
           # No --cacert: Alpine's curl reads /etc/ssl/cert.pem, which --ca-certs links to the
           # bundle (TASK-268). Without that link this fails with a certificate error.
-          docker run --rm "$id" -fsS -o /dev/null -w '%{http_code}\n' https://github.com
+          docker run --rm "$id" -fsS --retry 3 --max-time 30 -o /dev/null -w '%{http_code}\n' https://github.com
 
   fuzz-check:
     # The fuzz harness lives in a detached workspace (fuzz/), so lint/msrv/test above never
