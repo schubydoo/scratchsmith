@@ -54,9 +54,9 @@ clang -Wl,--enable-new-dtags,-rpath,'$ORIGIN/lib' -o "$elf_seed/elf-runpath-orig
 clang -shared -fPIC -Wl,-soname,libseed.so.1      -o "$elf_seed/elf-shared.so"      "$elf_seed/s.c" # ET_DYN + soname
 clang -static-pie                                 -o "$elf_seed/elf-static-pie"     "$elf_seed/s.c" # static PIE: no INTERP
 clang -Wl,-z,relro,-z,now                         -o "$elf_seed/elf-full-relro"     "$elf_seed/s.c" # PT_GNU_RELRO + BIND_NOW -> lint's Relro::Full
-# musl-shaped ELFs: only PT_INTERP changes, so no musl toolchain is needed. The first takes the
-# musl path (is_musl, the musl walk, lint's FORTIFY unknown); the second names another arch in
-# its loader, which ensure_packable_musl refuses as "musl on aarch64".
+# musl-shaped ELFs: only PT_INTERP changes, so no musl toolchain is needed. In parse_elf_info the
+# first reaches is_musl, uses_libc and the x86_64 pass of ensure_packable_musl. The second names
+# another arch in its loader, so ensure_packable_musl refuses it as "musl on aarch64".
 clang -Wl,--dynamic-linker=/lib/ld-musl-x86_64.so.1  -o "$elf_seed/elf-musl-x86_64"  "$elf_seed/s.c" # musl PT_INTERP
 clang -Wl,--dynamic-linker=/lib/ld-musl-aarch64.so.1 -o "$elf_seed/elf-musl-aarch64" "$elf_seed/s.c" # musl loader of another arch
 rm -f "$elf_seed/s.c"
