@@ -1,5 +1,5 @@
 name: Scratchsmith
-description: Pack a prebuilt dynamic glibc Linux binary into a minimal, non-root FROM scratch OCI image, no Dockerfile.
+description: Pack a prebuilt dynamic Linux binary (glibc, or musl on x86_64) into a minimal, non-root FROM scratch OCI image, no Dockerfile.
 author: schubydoo
 branding:
   icon: package
@@ -16,7 +16,7 @@ branding:
 
 inputs:
   binary:
-    description: Path to the dynamically linked glibc ELF binary to pack.
+    description: Path to the dynamically linked ELF binary to pack (glibc, or musl on x86_64).
     required: true
   version:
     description: >-

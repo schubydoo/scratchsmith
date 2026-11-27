@@ -16,12 +16,12 @@
 
 **The daemonless supply-chain packager for prebuilt dynamic Linux binaries.**
 
-Point Scratchsmith at a dynamically linked glibc ELF binary and get a minimal `FROM scratch`
-OCI image. You need no Dockerfile and no static-linking prerequisite. It resolves the binary's
-shared libraries the way `ld.so` does (RPATH/RUNPATH/`$ORIGIN`, the interpreter, versioned
-soname symlinks). It stages the glibc pieces nothing else remembers (NSS modules, a working
-`nsswitch.conf`, minimal `passwd`/`group`). Then it assembles a **non-root** image with
-reproducible layers.
+Point Scratchsmith at a dynamically linked glibc ELF binary, or a musl/Alpine one on x86_64,
+and get a minimal `FROM scratch` OCI image. You need no Dockerfile and no static-linking
+prerequisite. It resolves the binary's shared libraries the way the loader does
+(RPATH/RUNPATH/`$ORIGIN`, the interpreter, versioned soname symlinks). For glibc it stages the
+pieces nothing else remembers (NSS modules, a working `nsswitch.conf`, minimal
+`passwd`/`group`). Then it assembles a **non-root** image with reproducible layers.
 
 <p align="center">
   <img src="docs/demo/scratchsmith.svg" alt="Scratchsmith packing a dynamic glibc binary into a minimal FROM scratch image with an SBOM and a smoke-run, then running it" width="720">
@@ -48,7 +48,7 @@ build. It is purpose-built for the hard case and useful for the easy one.
 
 | Capability | State |
 |---|---|
-| Pack a dynamic glibc ELF → runnable `FROM scratch` image | ✅ (loaded via `docker`/`podman`/`nerdctl`) |
+| Pack a dynamic glibc ELF, or an x86_64 musl one (see below) → runnable `FROM scratch` image | ✅ (loaded via `docker`/`podman`/`nerdctl`) |
 | `ld.so`-faithful dependency resolution (RPATH/RUNPATH/`$ORIGIN`, interpreter, sonames) | ✅ |
 | glibc **NSS** support staged, so name-service lookups like `getent hosts` work. Trim the modules with `--nss` | ✅ |
 | **Non-root** by default (UID 65532), reproducible layers | ✅ |
@@ -88,7 +88,7 @@ To run `pack` inside a container, see the `:toolbox` section of [Usage](docs/usa
 
 ## Install
 
-Scratchsmith is **Linux only** (amd64/arm64). It stages a Linux glibc rootfs, so it does not run
+Scratchsmith is **Linux only** (amd64/arm64). It stages a Linux rootfs, so it does not run
 on macOS or native Windows. Use a Linux container or WSL2 there.
 
 ```sh
