@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The action is SHA-pinned to a setup-rust-toolchain release (the `# v2.0.0`
+      # The action is SHA-pinned to a setup-rust-toolchain release (the `# v2.0.1`
       # comment is the pinned tag). The Rust TOOLCHAIN is pinned at the declared MSRV
       # via the `toolchain:` input (Cargo.toml rust-version = 1.96); Renovate is told
       # not to bump it by the schubydoo/renovate-config preset (`rust` dep off for

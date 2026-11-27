@@ -97,7 +97,7 @@ curl -fsSL https://raw.githubusercontent.com/schubydoo/scratchsmith/main/install
 
 # ...or a package manager:
 brew install schubydoo/scratchsmith/scratchsmith
-cargo install scratchsmith
+cargo install --locked scratchsmith
 ```
 
 Release binaries, the signed container image, source builds, uninstall, and shell completions

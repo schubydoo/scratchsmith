@@ -42,9 +42,10 @@ assets = "dist/release-assets/*"
 
 # A fragment's `default:` value picks BOTH the changelog section and the version bump.
 # A custom type bumps PATCH, measured with `knope prepare-release --dry-run`: a lone
-# `default: deprecated` fragment took 1.4.0 to 1.4.1. COMPATIBILITY.md:38 makes a
-# deprecation a MINOR, so a deprecation PR ships TWO fragments — one `minor` for the
-# warning it adds, one `deprecated` for the Deprecated section. The minor carries the bump.
+# `default: deprecated` fragment took 1.4.0 to 1.4.1. COMPATIBILITY.md ("Classifying a
+# change") makes a deprecation a MINOR, so a deprecation PR ships TWO fragments — one
+# `minor` for the warning it adds, one `deprecated` for the Deprecated section. The minor
+# carries the bump.
 extra_changelog_sections = [
   { name = "Security", types = ["security"] },
   { name = "Performance", types = ["perf"] },

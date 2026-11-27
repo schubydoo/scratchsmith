@@ -2,7 +2,7 @@
 
 Release artifacts are keyless-signed (cosign) and carry a SLSA build-provenance attestation, at Build
 Level 3 from v2.2.0 on.
-Each release also ships a CycloneDX SBOM of Scratchsmith's own dependency graph. That file is
+Each release from v1.0.0 on also ships a CycloneDX SBOM of Scratchsmith's own dependency graph. That file is
 `scratchsmith-v<ver>.cdx.json`, and it is listed in `checksums.txt`, so the signature and
 provenance cover it too. It reflects the full `Cargo.lock` graph, so it includes build- and
 dev-dependencies, not only the crates that link into the shipped binary.
@@ -24,7 +24,7 @@ release built this way. v2.1.0 and older carry Build Level 2 provenance, signed 
 
 The Build Level 3 provenance covers the tarballs and the SBOM, not the GHCR image. The image packs
 the same release binaries. It carries its own cosign signature, which the `cosign verify` command
-below checks, and a BuildKit provenance attestation in the registry, which is not Level 3.
+below checks, and BuildKit provenance and SBOM attestations in the registry, which are not Level 3.
 
 ```sh
 # SLSA Build L3 provenance — the simplest, ref-agnostic check
@@ -36,7 +36,7 @@ cosign verify-blob checksums.txt \
   --bundle checksums.txt.sigstore.json \
   --certificate-identity-regexp '^https://github\.com/schubydoo/scratchsmith/\.github/workflows/knope-release\.yml@' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
-sha256sum -c checksums.txt        # then check the tarball + SBOM hashes
+sha256sum -c --ignore-missing checksums.txt   # then check the hashes of the files you downloaded
 
 # The signed GHCR image
 cosign verify ghcr.io/schubydoo/scratchsmith:<ver> \

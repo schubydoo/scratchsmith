@@ -15,8 +15,11 @@ runner, verifies it against the release checksums, and runs `pack`:
 To publish the built image, log in first and set `push`:
 
 ```yaml
-- uses: docker/login-action@v3
-  with: { registry: ghcr.io, username: ${{ github.actor }}, password: ${{ secrets.GITHUB_TOKEN }} }
+- uses: docker/login-action@v4
+  with:
+    registry: ghcr.io
+    username: ${{ github.actor }}
+    password: ${{ secrets.GITHUB_TOKEN }}   # the job needs `permissions: packages: write`
 - uses: schubydoo/scratchsmith@v<ver>   # pin to a release tag
   with:
     binary: ./dist/app
@@ -31,7 +34,6 @@ the size:
 - uses: schubydoo/scratchsmith@v<ver>
   with:
     binary: ./dist/app
-    entrypoint: /app
     env: |
       LANG=C.UTF-8
     workdir: /data
@@ -39,25 +41,32 @@ the size:
       org.opencontainers.image.source=https://github.com/you/app
       role=api
     healthcheck: |
-      /app
+      ${{ github.workspace }}/dist/app
       --health
     scan: true
     scan-fail-on: high        # needs grype on the runner
     max-size: 25MB
 ```
 
+The binary is staged at its real absolute path on the runner, and that path is also the default
+entrypoint. So a healthcheck or `entrypoint` has to name that path, not a short one like `/app`.
+
 Pin `@v<ver>` to a specific release tag (or a commit SHA). That is the same supply-chain hygiene the
 tool itself practices. `version:` overrides which scratchsmith release the action runs (defaults to
-the pinned tag, else `latest`).
+the pinned tag, else `latest`). The action only reads a version from a `vX.Y.Z` tag ref, so if you
+pin a commit SHA, also set `version:` to the matching release (for example `version: v2.2.0`).
+Otherwise a SHA pin downloads the latest release.
 
 ## Inputs
 
 Most inputs map to the `pack` flag of the same name. See [Configuration](configuration.md) for what
 each does, and [Usage](usage.md) for the equivalent command-line recipes. A few inputs are
 action-specific. `version` picks which release to download. `output` maps to `--no-build --output`.
-`args` is a verbatim escape hatch for any flag without a dedicated input, for example `--sign` or
-`--oci-archive`. Note that `push` publishes with `docker tag`/`docker push`, **not** pack's
-daemonless, cosign-signable `--push`.
+`args` is a verbatim escape hatch for any flag without a dedicated input, for example
+`--oci-archive out.tar`, or `--push <ref> --sign` for a daemonless, cosign-signed push (that job
+needs `permissions: id-token: write`). With `--push` or `--oci-archive` in `args`, the `image`
+output is empty, because only the default docker-load sink sets it. Note that `push` publishes with
+`docker tag`/`docker push`, **not** pack's daemonless, cosign-signable `--push`.
 
 The action reads the JSON report, so every pack through it runs the `--packages` lookup by default. The
 `report` output holds a `packages` list and a `timings` object. To turn the lookup off, set

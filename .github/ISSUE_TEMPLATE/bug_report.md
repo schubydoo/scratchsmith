@@ -30,15 +30,15 @@ A clear description of the bug, and what you expected instead.
 ## Environment
 
 - Scratchsmith version: [the output of `scratchsmith --version`]
-- Install method: [prebuilt binary / cargo / from source]
+- Install method: [install.sh / Homebrew / cargo / release binary / container image / GitHub Action / from source]
 - OS & arch: [for example: Debian 13 amd64]
 - glibc / `ldconfig --version` (first line): [for example: 2.41]
-- `docker --version` (if the Docker sink is used): [for example: 27.x]
+- `docker --version` (or podman/nerdctl, per `--runtime`) if the default load sink is used: [for example: 27.x]
 - `scratchsmith doctor` output (which external tools are present)
 
 ## Logs
 
-The pack output (run with `RUST_LOG=debug` for more). Redact any private paths.
+The pack output (run with `--verbose` to see each resolution and staging decision). Redact any private paths.
 
 ```
 paste output here

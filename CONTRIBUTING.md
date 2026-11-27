@@ -38,15 +38,17 @@ and `cargo test` still passes:
 **In CI, some of those stop being optional.** A skipped test is recorded as a pass. A runner
 that loses a tool then reports a green suite having run nothing.
 
-Ten tools and a dpkg database are strict in CI: `cc`, `strip`, `upx`, Docker, `getent`,
-`localedef`, `mkfifo`, `/usr/bin/id`, `syft`, `unshare -r`, and `dpkg-query` with
-`/var/lib/dpkg/status`. A missing one **fails** the test instead of skipping it. The workflow
+These are strict in CI: `cc`, `strip`, `upx`, Docker, `getent`, `localedef`, `mkfifo`,
+`sleep`, `syft`, `unshare -r`, the binaries `/usr/bin/id`, `/usr/bin/bash` and `/usr/bin/touch`,
+a host `libc.so.6`, a dpkg database (`dpkg-query` with `/var/lib/dpkg/status`), and a non-root
+user. A missing one **fails** the test instead of skipping it. The workflow
 installs or guarantees all of them, so a miss there is a broken runner. If the `CI` environment variable holds
 anything other than an opt-out word, the strict gate turns on. The opt-out words are `0`, `false`, `no`, `off` and the empty
 string, in any case.
 
-`musl-gcc`, `tini`, the `registry:2` pull, the host locale sources, the host's `os-release` and
-the host CA bundle stay optional everywhere.
+`musl-gcc`, `tini`, the `registry:2` pull, the host locale sources, the host's `os-release`, the
+host timezone (`/etc/localtime`) and the host CA bundle stay optional everywhere. The
+x86_64-only `$PLATFORM` CPU-name test skips on other architectures.
 
 If your own machine has `CI` set for an unrelated reason, set `SCRATCHSMITH_NO_CI_GATE=1` to
 get the local behavior back. That variable reads by the same opt-out words, so an empty value
@@ -108,7 +110,10 @@ A change that breaks one of these is wrong, even with every test green:
    ```
    CI runs all of these plus an MSRV build, coverage (**≥ 90%** lines), and
    `cargo audit`. It also builds the static musl binary, runs ShellCheck on `install.sh`,
-   checks that the fuzz targets compile and tests the shell completions.
+   checks that the fuzz targets compile, tests the shell completions, and packs and runs three
+   real third-party tools (`pack real tools`). It rejects a hand-rolled test skip: use
+   `skip_required` or `skip_optional` from `src/test_support.rs`. The secret scan, workflow
+   audit and CodeQL gates run too.
 3. **Add a changeset** for any user-facing change (see below).
 4. Open the PR and fill in the template.
 

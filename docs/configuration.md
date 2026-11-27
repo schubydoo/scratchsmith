@@ -7,7 +7,7 @@ file**.
 | `scratchsmith.toml` key | CLI flag | What it does |
 |---|---|---|
 | `binary` | *(positional arg)* | The ELF binary to pack. |
-| `entrypoint` | `--entrypoint` | Image `ENTRYPOINT` (defaults to the packed binary's path). |
+| `entrypoint` | `--entrypoint` | Image `ENTRYPOINT` (defaults to the packed binary's path). The binary keeps its real host path in the image, so an entrypoint that runs it must name that path. |
 | `cmd` | `--cmd` | Default arguments appended to the entrypoint (list, and `--cmd` is repeatable). |
 | `env` | `--env` | Image environment entries, each `KEY=VALUE` (list). An entry with no `=` fails the pack with exit code 2. Write `KEY=` for an empty value. |
 | `workdir` | `--workdir` | Image `WORKDIR`. |
@@ -16,7 +16,7 @@ file**.
 | `healthcheck` | `--healthcheck` | Container `HEALTHCHECK` in exec form (list, and repeatable). It runs inside the scratch image, so it must name an executable present there, typically the packed binary. |
 | `strip` | `--strip` | Strip symbols from the binary and libraries. A non-ELF `--include` file ships unchanged. |
 | `upx` | `--upx` | Compress the packed binary with UPX (it self-decompresses at runtime). |
-| `smoke` | `--smoke` | Run the built image once. If the binary cannot start, the pack fails. |
+| `smoke` | `--smoke` | Run the built image once. If the binary cannot start, the pack fails. Needs the default load sink: with `push`, `--oci-archive` or `--no-build` it fails with exit code 2. |
 | `sbom` | `--sbom` | Write an SBOM of the packed rootfs (requires `syft`). |
 | `sbom-file` | `--sbom-file` | SBOM output path (default: `sbom.json`). Without `sbom` it is ignored, and the report warns. |
 | `sbom-format` | `--sbom-format` | SBOM format: `cyclonedx-json` (default) or `spdx-json`. Without `sbom` it is ignored, and the report warns. |
@@ -33,7 +33,7 @@ file**.
 | `include` | `--include` | Force-stage extra libraries by soname or path, for example `dlopen`'d plugins (list). |
 | `nss` | `--nss` | Name-service (NSS) modules to stage for glibc name lookups: `files`, `dns`, or `none` (list). Fewer modules trim CVE surface. A mode without `files` also drops `/etc/passwd` and `/etc/group`, which glibc reads through the `files` module. Default: `files` and `dns`. |
 | `packages` | `--packages` | Where to record the distribution packages that own the bundled files: `report`, `sbom`, `image`, or `none` (list). Default: `report,sbom` (`report` before 2.0, see [Deprecations](deprecations.md#removed-in-200)). With the text report and no value set, scratchsmith drops `report`. `sbom` shows the packages to `--sbom` and `--scan`. If neither is on, `sbom` does nothing. A `sbom` you set then warns, and the default stays quiet. `image` adds package records and `/etc/os-release` to the image. Needs a dpkg or rpm host. On another host, `image` you set fails the pack. If `--sbom` or `--scan` is on, a `sbom` you set fails the pack too. The default stays quiet there. |
-| `deny` | `--deny` | If this library ships, the pack fails (list). Resolved libraries, the loader, and NSS modules are all in scope, matched by soname or staged file name. This is a CI policy gate. Read sonames from `scratchsmith graph`. |
+| `deny` | `--deny` | If this library ships, the pack fails (list). Resolved libraries, the loader, and NSS modules are all in scope, matched by soname or staged file name. This is a CI policy gate. Read library sonames from `scratchsmith graph`. It does not list the NSS modules. |
 | `require` | `--require` | If this library does not ship, the pack fails (list). Same scope as `deny`. |
 | `sign` | `--sign` | cosign-sign the pushed image (keyless, by digest). Requires a push target. |
 | `push-untagged` | `--push-untagged` | Push the image by its digest only, creating or moving no image tag (`sign` still adds cosign's `sha256-<hex>` signature tags). The push reference then names just the repository. Needs a push target, like `sign`. See [Usage](usage.md#quick-start). |
@@ -49,14 +49,14 @@ A full config file, and how to run it:
 
 ```toml
 # scratchsmith.toml — loaded with `scratchsmith pack --config scratchsmith.toml`.
-binary = "./dist/app"
-entrypoint = "/app"
+binary = "/opt/app/bin/app"
+entrypoint = "/opt/app/bin/app"   # the default; the binary keeps its host path in the image
 cmd = ["--serve"]
 env = ["LANG=C.UTF-8"]
 workdir = "/data"
 user = "65532:65532"
 label = ["role=api"]
-healthcheck = ["/app", "--health"]
+healthcheck = ["/opt/app/bin/app", "--health"]
 strip = true
 upx = true
 # smoke = true                 # needs the default load sink, so it cannot go with `push`

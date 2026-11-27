@@ -152,7 +152,7 @@ ok "checksum verified"
 # documented degradation to checksum-only. A missing bundle also aborts: the attacker who
 # swaps the tarball can just as well withhold it. INSECURE_ALLOW_MISSING_SIGNATURE=1 opts out.
 if ! have cosign; then
-  warn "cosign not installed — verified the SHA-256 only. Install cosign for full signature + provenance checks (see the README 'Verifying releases')."
+  warn "cosign not installed — verified the SHA-256 only. Install cosign to also verify the signature on checksums.txt (for provenance, see docs/verifying.md)."
 elif ! download "${base}/checksums.txt.sigstore.json" "${tmp}/checksums.txt.sigstore.json"; then
   [ "${INSECURE_ALLOW_MISSING_SIGNATURE:-}" = "1" ] \
     || die "could not fetch the cosign signature bundle (checksums.txt.sigstore.json) — refusing to install an unverified binary. Re-download, or (at your own risk) set INSECURE_ALLOW_MISSING_SIGNATURE=1 to fall back to checksum-only."
