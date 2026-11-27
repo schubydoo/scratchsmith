@@ -128,7 +128,8 @@ The report also carries `libc` (`"glibc"`, `"musl"`, or null for a binary with n
 `fortify_detectable`. musl's `fortify-headers` check in inline code and leave no `*_chk` symbol,
 so for a musl binary the text report shows `Fortify: unknown (musl's fortify-headers leave no
 symbol)`, `fortify` is `false` and `fortify_detectable` is `false`. `--fail-on no-fortify` cannot
-be checked there, so it exits `2` for a musl binary. The other gates work for musl as for glibc.
+be checked there, so it fails every musl binary: `lint` warns on standard error that the gate
+cannot be checked, prints the report and exits `1`. The other gates work for musl as for glibc.
 
 `--smoke` runs the image once and fails the pack only when the binary could not start: a
 missing library or loader, or an entrypoint the runtime could not exec. An app that starts and

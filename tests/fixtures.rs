@@ -1258,6 +1258,60 @@ fn a_cpu_platform_copy_gets_a_note_or_a_hint_and_packs_as_before() {
     }
 }
 
+// A glibc library added to a musl image names no loader, so only what it loads shows its libc. It
+// would stage `libc.so.6` beside musl's loader and never load, so the pack fails (plan 025, D9).
+#[test]
+fn a_glibc_library_added_to_a_musl_image_is_refused() {
+    if !tool_available("musl-gcc") {
+        skip_required("no musl-gcc");
+        return;
+    }
+    if !tool_available("cc") {
+        skip_required("no cc");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap();
+    let app = build_musl_app(&dir);
+    std::fs::write(
+        dir.join("bar.c"),
+        "#include <stdio.h>\nvoid bar(void){puts(\"bar\");}",
+    )
+    .unwrap();
+    let lib = dir.join("libbar.so");
+    let cc = Command::new("cc")
+        .args(["-shared", "-fPIC", "-o"])
+        .arg(&lib)
+        .arg(dir.join("bar.c"))
+        .output()
+        .expect("run cc");
+    assert!(
+        cc.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cc.stderr)
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_scratchsmith"))
+        .args(["pack", "-n", "-o"])
+        .arg(dir.join("out"))
+        .arg("--add-binary")
+        .arg(&lib)
+        .arg(&app)
+        .output()
+        .expect("run scratchsmith");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "--add-binary {} loads glibc through",
+            lib.display()
+        )) && stderr.contains(&format!(
+            "and {} uses musl. Pack programs and libraries of one libc in one image.",
+            app.display()
+        )),
+        "{stderr}"
+    );
+}
+
 // A glibc-only option is a usage refusal (exit 2) for a musl binary, from the command line, the
 // config's base or a selected profile, and each message says where to remove it (plan 025, D5
 // and D6). A musl pack never runs ldconfig: a failing one on PATH does not stop it (D7).
@@ -1368,7 +1422,7 @@ fn a_musl_pack_refuses_glibc_only_options_and_runs_no_ldconfig() {
 }
 
 // `graph` and `lint` name the libc for a musl binary, and lint says it cannot read fortify,
-// so `--fail-on no-fortify` is a usage refusal there (plan 025, D12 and D13).
+// so `--fail-on no-fortify` warns there (plan 025, D12 and D13).
 #[test]
 fn graph_and_lint_name_musl() {
     if !tool_available("musl-gcc") {
@@ -1401,13 +1455,18 @@ fn graph_and_lint_name_musl() {
         shown.contains("Fortify: unknown (musl's fortify-headers leave no symbol)"),
         "{shown}"
     );
-    let gate = run(&["lint", "--fail-on", "no-fortify"]);
+    // As in 2.2.0, the gate prints the whole report and exits 1, with a warning that it
+    // cannot see fortify on musl.
+    let gate = run(&["lint", "--format", "json", "--fail-on", "no-fortify"]);
     let err = String::from_utf8_lossy(&gate.stderr);
-    assert_eq!(gate.status.code(), Some(2), "{err}");
+    assert_eq!(gate.status.code(), Some(1), "{err}");
+    let json: serde_json::Value = serde_json::from_slice(&gate.stdout).unwrap();
+    assert_eq!(json["violations"], serde_json::json!(["no-fortify"]));
     assert!(
         err.contains(&format!(
-            "--fail-on no-fortify cannot be checked for {}: it uses musl, and musl's \
-             fortify-headers leave no symbol to find. Drop no-fortify for musl binaries.",
+            "warning: --fail-on no-fortify cannot be checked for {}: it uses musl, and musl's \
+             fortify-headers leave no symbol to find, so the gate always fails. Drop \
+             no-fortify for musl binaries.",
             app.display()
         )),
         "{err}"
