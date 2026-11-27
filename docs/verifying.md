@@ -88,7 +88,7 @@ of the workflow.
 ### With `scratchsmith verify`
 
 `scratchsmith verify` runs both checks below with cosign (cosign must be installed). It takes
-cosign's flag names, so a working `cosign verify` line moves over as it is:
+cosign's names for the identity and issuer flags:
 
 ```sh
 scratchsmith verify ghcr.io/you/app@sha256:... \

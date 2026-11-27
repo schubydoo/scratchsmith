@@ -279,9 +279,10 @@ pub fn manifest_kind(raw: &[u8]) -> Result<ManifestKind> {
     })
 }
 
-// Manifest media types accepted when pulling a child. Both OCI and Docker single-image
-// manifests are valid children; the two list types are accepted only so a mistakenly
-// passed index is fetched and rejected with a clear message rather than an opaque error.
+// Manifest media types accepted on a manifest pull. For `index`, both OCI and Docker
+// single-image manifests are valid children, and the two list types are accepted only so a
+// mistakenly passed index is fetched and rejected with a clear message. `resolve` (for
+// `verify`) accepts an index on purpose, since an index is signed by its own digest.
 const CHILD_MANIFEST_TYPES: &[&str] = &[
     crate::image::OCI_MANIFEST,
     "application/vnd.docker.distribution.manifest.v2+json",
