@@ -80,7 +80,7 @@ the `packages` input to `none`.
 
 | Input | Default | Description |
 |---|---|---|
-| `binary` | *(required)* | Path to the dynamically linked ELF binary to pack: glibc, or musl on x86_64. |
+| `binary` | *(required)* | Path to the dynamically linked ELF binary to pack (glibc, or musl on x86_64). |
 | `version` | *(the pinned tag, else `latest`)* | Which scratchsmith release to download: a tag like `v1.0.0`, or `latest`. |
 | `output` | | Stage the rootfs into this directory instead of building an image (`--no-build`). The directory must be new or empty. |
 | `entrypoint` | *(the binary's path)* | Image `ENTRYPOINT`. |
