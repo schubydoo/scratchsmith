@@ -115,7 +115,9 @@ jobs:
       # ⚠️ Required by tests/common::skip_required — dropping this step FAILS the upx tests
       # under CI rather than skipping them. That is the point: a skip reads as a pass.
       - name: Install upx
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends upx-ucl
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update || echo "::warning::apt-get update failed, installing from the lists it did fetch"
+          sudo apt-get install -y --no-install-recommends upx-ucl
       # The musl fixtures in tests/fixtures.rs build a dynamic musl program with musl-gcc, which
       # needs binutils for the assembler.
       # ⚠️ Required by tests/common::skip_required, like upx above.
@@ -125,7 +127,7 @@ jobs:
       # nothing else exercises the guard that takes the package records out of the image.
       # ⚠️ Required by tests/common::skip_required, like upx above.
       - name: Install syft
-        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: $/.github/actions/install-syft
       # tests/differential.rs runs each packed rootfs with `unshare -r chroot`, and Ubuntu's
       # AppArmor can restrict unprivileged user namespaces.
       # ⚠️ Required by tests/common::skip_required, like upx above.
@@ -174,13 +176,15 @@ jobs:
       # tini-absent refusal.
       # ⚠️ Required by tests/common::skip_required — see the note on the test job's copy.
       - name: Install upx and tini
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends upx-ucl tini
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update || echo "::warning::apt-get update failed, installing from the lists it did fetch"
+          sudo apt-get install -y --no-install-recommends upx-ucl tini
       # ⚠️ Required by tests/common::skip_required — see the note on the test job's copy.
       - name: Install musl-tools
         run: sudo apt-get install -y --no-install-recommends musl-tools binutils
       # ⚠️ Required by tests/common::skip_required — see the note on the test job's copy.
       - name: Install syft
-        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: $/.github/actions/install-syft
       # ⚠️ Required by tests/common::skip_required — see the note on the test job's copy.
       - name: Allow unprivileged user namespaces
         run: |
@@ -235,7 +239,7 @@ jobs:
           rustflags: ""
       - name: Install zsh and fish
         run: |
-          sudo apt-get update
+          sudo apt-get -o Acquire::Retries=3 update || echo "::warning::apt-get update failed, installing from the lists it did fetch"
           sudo apt-get install -y --no-install-recommends zsh fish
       # Debug build: completion output is byte-identical to release, and this
       # job is on the required-checks critical path — reuse the warm rust-cache

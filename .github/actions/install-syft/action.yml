@@ -1,0 +1,37 @@
+name: Install syft
+description: >-
+  Install syft with anchore's download-syft, and try again when the download fails.
+  Every workflow that needs syft uses this, so they share one pin.
+
+# download-syft gives up on the first bad response from github.com, and a short
+# github.com outage then fails every job that needs syft. So up to four attempts, waiting
+# 30 s, 60 s and 120 s between them. Keep the four pins equal: Renovate bumps them together.
+
+runs:
+  using: composite
+  steps:
+    - id: try1
+      uses: anchore/sbom-action/download-syft@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
+      continue-on-error: true
+    - if: steps.try1.outcome == 'failure'
+      shell: bash
+      run: echo "::warning::syft download failed, trying again in 30 s" && sleep 30
+    - id: try2
+      if: steps.try1.outcome == 'failure'
+      uses: anchore/sbom-action/download-syft@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
+      continue-on-error: true
+    - if: steps.try2.outcome == 'failure'
+      shell: bash
+      run: echo "::warning::syft download failed, trying again in 60 s" && sleep 60
+    - id: try3
+      if: steps.try2.outcome == 'failure'
+      uses: anchore/sbom-action/download-syft@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
+      continue-on-error: true
+    - if: steps.try3.outcome == 'failure'
+      shell: bash
+      run: echo "::warning::syft download failed, trying again in 120 s" && sleep 120
+    - id: try4
+      if: steps.try3.outcome == 'failure'
+      uses: anchore/sbom-action/download-syft@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
+    - shell: bash
+      run: syft version

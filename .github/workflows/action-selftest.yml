@@ -488,7 +488,9 @@ jobs:
           echo "args input wired"
       # upx and init each need a tool the runner does not carry; the action preflights for upx.
       - name: Install upx and tini (for the upx and init inputs)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends upx-ucl tini
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update || echo "::warning::apt-get update failed, installing from the lists it did fetch"
+          sudo apt-get install -y --no-install-recommends upx-ucl tini
       - name: Pack with upx → image
         id: upx
         uses: $/
@@ -525,7 +527,7 @@ jobs:
       # sbom, sbom-format and sbom-file travel together: sbom turns the SBOM on, and the other
       # two only matter with it. A non-default format and path prove all three.
       - name: Install syft (for the sbom inputs)
-        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: $/.github/actions/install-syft
       - name: Pack with an SPDX SBOM at a chosen path → rootfs
         id: sbom
         uses: $/
