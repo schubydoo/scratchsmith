@@ -6,6 +6,7 @@ use crate::resolver::{MuslSearch, Resolution, ResolvedLib, MUSL_DEFAULT_DIRS};
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -1088,6 +1089,11 @@ fn stage_files(
             });
         }
     }
+    if let Some(search) = &resolution.musl {
+        for (at, real) in &search.links {
+            link_found_path(dest, at, real)?;
+        }
+    }
 
     Ok(StagedTree {
         root: dest.to_path_buf(),
@@ -1229,8 +1235,13 @@ fn write_musl_path_file(dest: &Path, search: &MuslSearch) -> Result<()> {
         return Ok(());
     }
     let dirs: BTreeSet<&PathBuf> = search.system_dirs.iter().chain(&defaults).collect();
-    let body: String = dirs.iter().map(|d| format!("{}\n", d.display())).collect();
-    write_into(dest, &search.path_file, body.as_bytes())?;
+    // The raw bytes, as musl reads them: `display()` would turn a non-UTF-8 name into U+FFFD.
+    let body: Vec<u8> = dirs
+        .iter()
+        .flat_map(|d| d.as_os_str().as_bytes().iter().chain(b"\n"))
+        .copied()
+        .collect();
+    write_into(dest, &search.path_file, &body)?;
     crate::verbose::line(|| {
         format!(
             "wrote {} for {}",
@@ -1407,6 +1418,28 @@ fn symlink_soname(root: &Path, real_abs: &Path, soname: &str) -> Result<()> {
             target
         )
     })?;
+    Ok(())
+}
+
+// Link a path musl's loader opens to the staged file it opens there. musl reads no cache, so a
+// library found through a directory link (`/usr/lib64 -> lib`), or a library link into
+// another directory, needs that path in the image too. A path already staged is left alone,
+// and so is a file that was never staged (a musl libc copy, which the loader replaces).
+fn link_found_path(root: &Path, at: &Path, real_abs: &Path) -> Result<()> {
+    if is_staged(root, at) || !is_staged(root, real_abs) {
+        return Ok(());
+    }
+    let shown = |p: &Path| crate::resolver::escape_for_display(&p.to_string_lossy());
+    let name = at.file_name().context("a found library has no file name")?;
+    let dir = image_dir(root, at.parent().unwrap_or(Path::new("/")), true)?;
+    let real_dir = real_abs.parent().context("library has no parent dir")?;
+    let real_name = real_abs.file_name().context("library has no file name")?;
+    let real_image = image_dir(root, real_dir, false)?.join(real_name);
+    let target = relative_link_value(&dir, &real_image);
+    let link = under(root, &dir.join(name));
+    std::os::unix::fs::symlink(&target, &link)
+        .with_context(|| format!("linking {} -> {}", shown(at), shown(&target)))?;
+    crate::verbose::line(|| format!("linked {} to {}", at.display(), real_abs.display()));
     Ok(())
 }
 
@@ -1633,6 +1666,7 @@ mod tests {
         res.musl = Some(MuslSearch {
             path_file: PathBuf::from("/etc/ld-musl-x86_64.path"),
             system_dirs: system_dirs.iter().map(PathBuf::from).collect(),
+            links: Vec::new(),
         });
         res
     }
@@ -1674,6 +1708,65 @@ mod tests {
             "/lib\n/opt/sys\n/usr/lib\n/usr/local/lib\n"
         );
         assert!(!dest.join("etc/ld.so.cache").exists());
+    }
+
+    // musl opens a library by the path its search found. A path away from the staged file is
+    // linked to it inside the image, the directory made as needed. A path whose file was never
+    // staged (a musl libc copy) gets no link.
+    #[test]
+    fn a_musl_found_path_links_to_the_staged_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&src.join("app"), b"binary");
+        let libz = make_file(&src.join("usr/lib/libz.so.1"), b"Z");
+        let own = make_file(&src.join("opt/other/libown.so.1.0"), b"OWN");
+        let mut res = musl_res(&src, &["/usr/lib64"]);
+        res.libs = vec![
+            ResolvedLib {
+                soname: "libz.so.1".into(),
+                path: libz.clone(),
+            },
+            ResolvedLib {
+                soname: "libown.so.1".into(),
+                path: own.clone(),
+            },
+        ];
+        let found_z = src.join("usr/lib64/libz.so.1");
+        let found_own = src.join("app.d/libs/libown.so.1");
+        let found_copy = src.join("usr/lib64/libc.so");
+        res.musl.as_mut().unwrap().links = vec![
+            (found_z.clone(), libz),
+            (found_own.clone(), own),
+            (found_copy.clone(), src.join("usr/lib/libc.so")),
+        ];
+        stage(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+        for (found, body) in [(&found_z, &b"Z"[..]), (&found_own, &b"OWN"[..])] {
+            let link = under(&dest, found);
+            let value = fs::read_link(&link).expect("the found path is a link");
+            assert!(value.is_relative(), "{value:?}");
+            assert_eq!(fs::read(&link).unwrap(), body);
+        }
+        assert!(under(&dest, &found_copy).symlink_metadata().is_err());
+    }
+
+    // musl reads its path file as bytes, so a directory name that is not UTF-8 is written as
+    // it is, not with U+FFFD in its place.
+    #[test]
+    fn a_musl_path_file_keeps_a_non_utf8_dir() {
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        let binary = make_file(&src.join("app"), b"binary");
+        let mut res = musl_res(&src, &[]);
+        res.musl.as_mut().unwrap().system_dirs =
+            vec![PathBuf::from(OsStr::from_bytes(b"/opt/\xff"))];
+        stage(&binary, &res, &dest, SymlinkMode::CopyAll).unwrap();
+        assert_eq!(
+            fs::read(dest.join("etc/ld-musl-x86_64.path")).unwrap(),
+            b"/lib\n/opt/\xff\n/usr/lib\n/usr/local/lib\n"
+        );
     }
 
     // D5: musl has no NSS, so whatever `--nss` selects, a musl image gets passwd and group and
