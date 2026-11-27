@@ -33,21 +33,21 @@ and `cargo test` still passes:
 - `upx`: the compression tests
 - `tini`: the `--init` test. With `tini` absent, a companion test instead checks that
   `--init` *fails loudly*.
-- unprivileged user namespaces (`unshare -r`): the differential pack-and-run test
+- unprivileged user namespaces (`unshare -r`): the differential pack-and-run tests
 
 **In CI, some of those stop being optional.** A skipped test is recorded as a pass. A runner
 that loses a tool then reports a green suite having run nothing.
 
-These are strict in CI: `cc`, `strip`, `upx`, Docker, `getent`, `localedef`, `mkfifo`,
-`sleep`, `syft`, `unshare -r`, the binaries `/usr/bin/id`, `/usr/bin/bash` and `/usr/bin/touch`,
-a host `libc.so.6`, a dpkg database (`dpkg-query` with `/var/lib/dpkg/status`), and a non-root
+These are strict in CI: `cc`, `musl-gcc` and musl's loader at `/lib`, `strip`, `upx`, Docker,
+`getent`, `localedef`, `mkfifo`, `sleep`, `syft`, `unshare -r`, the binaries `/usr/bin/id`,
+`/usr/bin/bash` and `/usr/bin/touch`, a host `libc.so.6`, a dpkg database (`dpkg-query` with `/var/lib/dpkg/status`), and a non-root
 user. A missing one **fails** the test instead of skipping it. The workflow
 installs or guarantees all of them, so a miss there is a broken runner. If the `CI` environment variable holds
 anything other than an opt-out word, the strict gate turns on. The opt-out words are `0`, `false`, `no`, `off` and the empty
 string, in any case.
 
-`musl-gcc`, `tini`, the `registry:2` pull, the host locale sources, the host's `os-release`, the
-host timezone (`/etc/localtime`) and the host CA bundle stay optional everywhere. The
+`tini`, the `registry:2` pull, the host locale sources, the host's `os-release`, the host
+timezone (`/etc/localtime`) and the host CA bundle stay optional everywhere. The
 x86_64-only `$PLATFORM` CPU-name test skips on other architectures.
 
 If your own machine has `CI` set for an unrelated reason, set `SCRATCHSMITH_NO_CI_GATE=1` to
@@ -65,6 +65,13 @@ layouts with `cc`, packs each one, and runs the packed rootfs in a chroot. If `p
 program must start. Every PR runs 64 fixed cases, and the nightly `differential.yml` workflow
 runs thousands from a new seed. A failure prints the seed of each broken case. To repeat one,
 set `SCRATCHSMITH_DIFF_SEED=<seed>` and `SCRATCHSMITH_DIFF_CASES=1`.
+
+`tests/differential_musl.rs` does the same for musl, with `musl-gcc` and musl's own loader as the
+reference. Its layouts reach the musl rules that real Alpine programs almost never use, such as
+an inherited RUNPATH, a libc alias like `libpthread.so.0`, and a search path dropped for a `$LIB`
+token. On each case that musl runs, `graph` must also resolve exactly the files that
+`ld-musl-x86_64.so.1 --list` maps. The nightly workflow sweeps it too, and the same two variables
+repeat a case.
 
 ```sh
 git clone https://github.com/schubydoo/scratchsmith

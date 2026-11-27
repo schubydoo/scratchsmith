@@ -19,7 +19,9 @@
 /// - `ci.yml` installs `upx-ucl` and `syft` for the test and coverage jobs, which are the
 ///   only two jobs that run the suite.
 /// - `ci.yml` allows unprivileged user namespaces in those two jobs, so `unshare -r` works for
-///   `tests/differential.rs`.
+///   `tests/differential.rs` and `tests/differential_musl.rs`.
+/// - `ci.yml` installs `musl-tools` in those two jobs, which gives `musl-gcc` and puts musl's
+///   loader at `/lib/ld-musl-x86_64.so.1`.
 /// - A dpkg database (`dpkg-query` and `/var/lib/dpkg/status`) ships on `ubuntu-latest`, which
 ///   both suite jobs use. The `--packages` tests read it.
 /// - `localedef` ships in `libc-bin`, the same package as `getent`.
@@ -44,10 +46,11 @@ pub fn skip_required(reason: &str) {
 ///
 /// Three shapes:
 ///
-/// - **Absent on the runner.** `musl-gcc` and `tini` are absent on `ubuntu-latest`, proven by
-///   CI run 35544425984: both gated tests returned in 0.05s or less while their neighbors took
-///   seconds. The host locale sources are the same, at 0.029s. Since then the coverage job
-///   installs tini and the test job does not, so each job runs one of the two tini tests.
+/// - **Absent on the runner.** `tini` is absent on `ubuntu-latest`, proven by CI run
+///   35544425984: its gated test returned in 0.05s or less while its neighbors took seconds.
+///   The host locale sources are the same, at 0.029s. Since then the coverage job installs
+///   tini and the test job does not, so each job runs one of the two tini tests. (`musl-gcc`
+///   was absent too, until both suite jobs began installing `musl-tools`.)
 /// - **Needs the network or the host's own data at test time.** The `registry:2` pull. A miss
 ///   there is an outage, not a broken runner.
 /// - **The inverse gate.** `init_without_tini_fails_clearly` skips because tini IS present. The
