@@ -438,11 +438,16 @@ the detail.
 
 `--add-file` copies a file as it is. An ELF program added that way arrives without the shared
 libraries it needs, so it fails in the image with `error while loading shared libraries`.
-`--add-binary` takes the same `SRC[:DST]` form and also resolves the program's libraries, with
-the same loader rules as the packed binary (glibc's or musl's). `$ORIGIN` in its RPATH or
-RUNPATH names the real directory of the added file on the host, and the loader reads it from the
-program's directory in the image. So the pack fails when a program that uses `$ORIGIN` is given
-a `DST` in another directory, and the message names the `DST` to use.
+`--add-binary` takes the same `SRC[:DST]` form and also resolves the program's libraries, by the
+rules of its own loader (glibc's or musl's). An added shared library names no loader, so the
+libraries it needs are resolved by glibc's rules for now, in a musl image too. On Alpine those
+usually find the same files. In a musl image, `pack` prints a note when it does this. To check,
+run the image on a path that loads the library, such as the command that opens the plugin.
+`--smoke` only checks that the entrypoint starts.
+
+`$ORIGIN` in an added file's RPATH or RUNPATH names its real directory on the host, and the
+loader reads it from the program's directory in the image. So the pack fails when a program that
+uses `$ORIGIN` is given a `DST` in another directory, and the message names the `DST` to use.
 
 ```sh
 scratchsmith pack --add-binary /usr/bin/bash:/bin/bash ./app
@@ -538,7 +543,10 @@ What changes for a musl binary:
   minimal pair and no NSS module. `--nss`, or an `nss` key in `scratchsmith.toml`, exits `2`.
 - **No glibc locales.** musl has a built-in C.UTF-8 and does not read compiled glibc locales, so
   `--locale`, or a `locale` key, exits `2`.
-- **One libc per image.** An `--add-binary` program of the other libc fails the pack.
+- **One libc per image.** An `--add-binary` program or library of the other libc fails the pack.
+- **Added libraries use glibc's search for now.** An `--add-binary` shared library is resolved by
+  glibc's rules, and `pack` prints a note. Check the image by running something that loads the
+  library, because `--smoke` only starts the entrypoint.
 - **`--ca-certs`.** Alpine's OpenSSL and curl read the CA bundle at `/etc/ssl/cert.pem`, not at
   `/etc/ssl/certs/ca-certificates.crt`. `--ca-certs` stages the bundle at the second path and
   links the first to it, as Alpine does, so TLS works with no `--cacert` flag. A file that
