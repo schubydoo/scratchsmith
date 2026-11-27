@@ -104,7 +104,9 @@ change:
   `diff_report_schema_is_stable`, `unpack_report_schema_is_stable`, and
   `lint_report_schema_is_stable` pin the exact key sets.
 - **Exit codes**: the exit-code tests in `tests/cli.rs` pin `0` / `2` / `1`.
-  `post_parse_usage_refusals_exit_2` covers each refusal made after the parse.
+  `post_parse_usage_refusals_exit_2` covers the refusals made after the parse, and the musl
+  refusals and the `verify` refusals have their own tests in `tests/fixtures.rs` and
+  `tests/verify.rs`.
 - **Library API**: a non-blocking `cargo-semver-checks` CI job surfaces `pub`-API changes as a
   heads-up. It is not a gate, because the library is out of contract.
 

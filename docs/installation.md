@@ -1,6 +1,6 @@
 # Installation
 
-Scratchsmith is **Linux only** (amd64/arm64). It stages a Linux glibc rootfs, so it does not run
+Scratchsmith is **Linux only** (amd64/arm64). It stages a Linux rootfs, so it does not run
 on macOS or native Windows. Use a Linux container or WSL2 there.
 
 ## One-line install

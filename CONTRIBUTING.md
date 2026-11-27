@@ -91,8 +91,8 @@ A change that breaks one of these is wrong, even with every test green:
 - **Fail loud, never silently.** A missing library/loader, a musl binary on an architecture
   other than x86_64, glibc and musl mixed in one image, or a missing external tool exits
   non-zero with a fix hint. It is never a silent skip that ships a broken image.
-- **Determinism over host-trust.** Resolution emulates `ld.so`. It never scrapes host
-  `ldd` / `ld.so.cache` / `LD_LIBRARY_PATH`.
+- **Determinism over host-trust.** Resolution emulates the binary's loader, glibc's `ld.so` or
+  musl's. It never scrapes host `ldd` / `ld.so.cache` / `LD_LIBRARY_PATH`.
 - **Non-root + reproducible by default.** Images default to a non-root user, and layers are
   built deterministically.
 - **Do not overstate.** Docs must not claim a capability the code does not have.
@@ -117,12 +117,13 @@ A change that breaks one of these is wrong, even with every test green:
    typos                 # spelling; false positives go in _typos.toml
    cargo deny check      # licenses/advisories
    ```
-   CI runs all of these plus an MSRV build, coverage (**≥ 90%** lines), and
-   `cargo audit`. It also builds the static musl binary, runs ShellCheck on `install.sh`,
-   checks that the fuzz targets compile, tests the shell completions, and packs and runs three
-   real third-party tools (`pack real tools`). It rejects a hand-rolled test skip: use
-   `skip_required` or `skip_optional` from `src/test_support.rs`. The secret scan, workflow
-   audit and CodeQL gates run too.
+   CI runs all of these plus an MSRV build, coverage (**≥ 90%** lines), and `cargo audit`. It
+   also builds the static musl binary, runs ShellCheck on `install.sh`, checks that the fuzz
+   targets compile, tests the shell completions, and packs and runs three real third-party tools
+   (`pack real tools`). `pack on Alpine (musl)` runs the static binary in Alpine, checks its
+   graphs against musl's loader, and packs and runs curl with `--ca-certs`. It rejects a
+   hand-rolled test skip: use `skip_required` or `skip_optional` from `src/test_support.rs`. The
+   secret scan, workflow audit and CodeQL gates run too.
 3. **Add a changeset** for any user-facing change (see below).
 4. Open the PR and fill in the template.
 

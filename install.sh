@@ -10,8 +10,8 @@
 #   INSECURE_ALLOW_MISSING_SIGNATURE=1  install even if the cosign signature bundle cannot
 #             be fetched (SHA-256 only; a failed signature check still aborts)
 #
-# Scratchsmith is LINUX-ONLY: it stages a Linux glibc rootfs (Unix symlinks + mode bits,
-# host NSS/ld.so.cache, `ldconfig`), so it does not run on macOS or native Windows. On
+# Scratchsmith is LINUX-ONLY: it stages a Linux rootfs (Unix symlinks + mode bits, and for
+# glibc host NSS/ld.so.cache and `ldconfig`), so it does not run on macOS or native Windows. On
 # those, run it inside a Linux container or WSL2.
 set -euo pipefail
 
@@ -85,7 +85,7 @@ esac
 
 # --- platform ----------------------------------------------------------------
 os="$(uname -s)"
-[ "$os" = "Linux" ] || die "Scratchsmith is Linux-only (it stages a Linux glibc rootfs and needs ldconfig); detected '$os'. On macOS/Windows, run it inside a Linux container or WSL2."
+[ "$os" = "Linux" ] || die "Scratchsmith is Linux-only (it stages a Linux rootfs); detected '$os'. On macOS/Windows, run it inside a Linux container or WSL2."
 
 case "$(uname -m)" in
   x86_64 | amd64) arch="amd64" ;;

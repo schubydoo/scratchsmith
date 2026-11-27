@@ -9,13 +9,13 @@ scratchsmith pack ./app
 docker run --rm scratchsmith/app:packed --version   # image is scratchsmith/<name>:packed, <name> lowercased (other characters an image name cannot hold become -)
 ```
 
-The image gets the build host's glibc. A binary built against a newer glibc than the host's
-packs, and then fails to start with an error like ``version `GLIBC_2.38' not found``. `pack`
-reads the `GLIBC_` versions that the binary and each library need. For each object that needs
-a version the staged glibc does not define, it adds a warning to the report that names the
-highest missing version. The text report prints it on standard output as `warning: …`, and
-`--format json` lists it in `warnings`. The pack still succeeds, with the same exit code.
-Pack on a host whose glibc is as new as the one the binary was built against.
+The image gets the build host's glibc (or, for a musl binary, its musl). A binary built against a
+newer glibc than the host's packs, and then fails to start with an error like ``version
+`GLIBC_2.38' not found``. `pack` reads the `GLIBC_` versions that the binary and each library
+need. For each object that needs a version the staged glibc does not define, it adds a warning to
+the report that names the highest missing version. The text report prints it on standard output
+as `warning: …`, and `--format json` lists it in `warnings`. The pack still succeeds, with the
+same exit code. Pack on a host whose glibc is as new as the one the binary was built against.
 
 The default sink loads into Docker. To load with **podman** or **nerdctl** instead (and run
 `--smoke` with it), pass `--runtime`:
@@ -402,9 +402,9 @@ the container runs with `--read-only`.
 
 ## Add a host file
 
-`--ca-certs` and `--tz` each add one fixed file. To add any other host file, use `--add-file`.
-A scratch image starts empty. A program that reads a configuration file, a template, or a
-data file at runtime needs that file copied in.
+`--ca-certs` and `--tz` each add a fixed file (`--ca-certs` also links `/etc/ssl/cert.pem` to
+it). To add any other host file, use `--add-file`. A scratch image starts empty. A program that
+reads a configuration file, a template, or a data file at runtime needs that file copied in.
 
 ```sh
 scratchsmith pack --add-file ./app.conf:/etc/app/app.conf ./app   # copy to a chosen path
@@ -437,24 +437,25 @@ the detail.
 
 `--add-file` copies a file as it is. An ELF program added that way arrives without the shared
 libraries it needs, so it fails in the image with `error while loading shared libraries`.
-`--add-binary` takes the same `SRC[:DST]` form and also resolves the program's libraries,
-with the same `ld.so` rules as the packed binary. `$ORIGIN` in its RPATH or RUNPATH names the
-real directory of the added file on the host, and ld.so reads it from the program's directory
-in the image. So the pack fails when a program that uses `$ORIGIN` is given a `DST` in another
-directory, and the message names the `DST` to use.
+`--add-binary` takes the same `SRC[:DST]` form and also resolves the program's libraries, with
+the same loader rules as the packed binary (glibc's or musl's). `$ORIGIN` in its RPATH or
+RUNPATH names the real directory of the added file on the host, and the loader reads it from the
+program's directory in the image. So the pack fails when a program that uses `$ORIGIN` is given
+a `DST` in another directory, and the message names the `DST` to use.
 
 ```sh
 scratchsmith pack --add-binary /usr/bin/bash:/bin/bash ./app
 ```
 
-A library that the packed binary needs too is staged once. The image's `ld.so.cache`,
-`--deny` and `--require`, `--strip`, the SBOM and `--packages` all cover the added libraries.
-The added program itself is copied like an `--add-file` entry, so the same destination rules
-apply to it. It is always copied as a file, whatever `--symlinks` says, so a symlinked `SRC`
-brings its target's content. One image has one loader, so the pack fails when the added ELF is
-built for another architecture or names another program interpreter than the packed binary.
-A static ELF, or a shared library, names none and is accepted. A file that is not an ELF
-fails too: add it with `--add-file`.
+A library that the packed binary needs too is staged once. The image's `ld.so.cache` (or, for
+musl, its search path file and links), `--deny` and `--require`, `--strip`, the SBOM and
+`--packages` all cover the added libraries. The added program itself is copied like an
+`--add-file` entry, so the same destination rules apply to it. It is always copied as a file,
+whatever `--symlinks` says, so a symlinked `SRC` brings its target's content. One image has one
+loader, so the pack fails when the added ELF is built for another architecture or names another
+program interpreter than the packed binary, and when the added program uses the other libc. A
+static ELF, or a shared library, names none and is accepted. A file that is not an ELF fails
+too: add it with `--add-file`.
 
 ## Keep a symlink as a symlink
 
@@ -564,9 +565,10 @@ program and its libraries, which `pack` also stages. The pack report lists the N
 under its payload sizes (`size.entries` in `--format json`).
 
 `graph --format json` prints one object: `root` (the binary's real path), `interpreter` (the
-loader, or null), `libc` (`"glibc"`, `"musl"`, or null with no loader), `nodes` and `missing` (every soname that did not resolve). Each node has `id`
-(its real path), `name` (the soname the loader searched for, or the binary's file name), `needs`
-(the ids of the nodes it needs) and `missing` (its own sonames that did not resolve).
+loader, or null), `libc` (`"glibc"`, `"musl"`, or null with no loader), `nodes` and `missing`
+(every soname that did not resolve). Each node has `id` (its real path), `name` (the soname the
+loader searched for, the loader's own file name for its node, or the binary's file name),
+`needs` (the ids of the nodes it needs) and `missing` (its own sonames that did not resolve).
 
 ## See each decision with `--verbose`
 
@@ -581,10 +583,11 @@ scratchsmith graph --verbose ./app
 `pack` and `graph` then print one line on standard error for each decision, each starting
 `verbose: `. The lines say which directories each object searches, the file each `DT_NEEDED`
 name resolves to (or that it is not found, or already loaded), and, for `pack`, the binary,
-interpreter, libraries and name-service files it stages, each link it makes, and the
-directories in the image's `/etc/ld.so.cache`. Standard output and every other line stay as
-they are without the flag, so `--format json` still prints only JSON. The wording of the
-`verbose: ` lines is for reading, not parsing, and can change in any release.
+interpreter, libraries and name-service files it stages, each link it makes, and the directories
+in the image's `/etc/ld.so.cache` (for musl, the search path file it writes). Standard output
+and every other line stay as they are without the flag, so `--format json` still prints only
+JSON. The wording of the `verbose: ` lines is for reading, not parsing, and can change in any
+release.
 
 ## Gate on libraries
 
@@ -807,11 +810,13 @@ If `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, scratchsmith never uses the compile
 certificates. If the path that you set gives no certificates, the command fails and names the
 variable.
 
-One subcommand does not run there. `pack` needs ldconfig, plus a container engine for the
-default sink and strip, syft or grype for the options that use them.
+Two subcommands do not run there. `pack` needs ldconfig for a glibc binary, plus a container
+engine for the default sink and strip, syft or grype for the options that use them. `verify`
+needs cosign. The `:toolbox` image below runs both.
 
 The **`:toolbox`** image bundles the `pack` toolchain (ldconfig, strip, syft, grype, cosign,
 upx, tini, the docker CLI) on a Wolfi base. With it, `pack` itself runs inside a container.
+Wolfi is glibc-based and has no musl loader, so the toolbox packs glibc binaries only.
 That image has no dpkg and no rpm database, so `--packages` has no data there. The `packages`
 field is `null`. An `image` output that you set fails. If `--sbom` or `--scan` is on, a `sbom`
 output that you set fails too. The default stays quiet.

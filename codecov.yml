@@ -111,6 +111,10 @@ component_management:
       paths:
         - src/packages.rs
         - src/rpm.rs
+    - component_id: verify
+      name: verify (signature and attestation checks)
+      paths:
+        - src/verify.rs
     - component_id: watch
       name: watch (pack --watch)
       paths:

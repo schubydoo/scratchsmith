@@ -26,7 +26,7 @@ Fixes #(issue number)
       never hand-edited
 - [ ] The PR title follows Conventional Commits (it becomes the squash commit), and the PR
       targets `main`
-- [ ] Kept Scratchsmith's invariants: fail loud never silent, emulate `ld.so` (never
+- [ ] Kept Scratchsmith's invariants: fail loud never silent, emulate the loader (never
       scrape host `ldd`/env), non-root images, reproducible layers, no overstated claims
 
 ## Notes for reviewers
