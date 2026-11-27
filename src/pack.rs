@@ -1080,6 +1080,9 @@ fn finish_staging(
         stager::SymlinkMode::CopyAll,
         "--add-binary",
     )?);
+    if opts.extras.ca_certs {
+        stager::stage_ca_bundle_link(dest)?;
+    }
     stager::stage_locales(dest, &opts.locales)?;
     warnings.extend(locale_env_warning(&opts.locales, &opts.image.env));
     // Everything a package can own is in the tree now, so this is where the owners are

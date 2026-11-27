@@ -27,7 +27,7 @@ pub struct StagedTree {
 /// asked for it), not a warning.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RuntimeExtras {
-    /// TLS CA bundle at /etc/ssl/certs/ca-certificates.crt.
+    /// TLS CA bundle at /etc/ssl/certs/ca-certificates.crt, linked from /etc/ssl/cert.pem.
     pub ca_certs: bool,
     /// The resolved local timezone at /etc/localtime.
     pub tz: bool,
@@ -52,6 +52,23 @@ pub struct RuntimeResult {
 
 /// Where the host's CA bundle is read from, and where `--ca-certs` stages it.
 pub const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
+
+/// Where Alpine's OpenSSL and curl look for the CA bundle. `--ca-certs` links it to
+/// [`CA_BUNDLE`], the way Alpine's own `ca-certificates-bundle` package does.
+pub const CA_BUNDLE_LINK: &str = "/etc/ssl/cert.pem";
+
+/// Link [`CA_BUNDLE_LINK`] to the staged bundle, with the relative value Alpine uses.
+///
+/// Run after `--add-file` and `--add-binary`, so a file the user put at that path is kept and
+/// no link is made. That combination worked before the link existed, and still does.
+pub fn stage_ca_bundle_link(dest: &Path) -> Result<()> {
+    let link = Path::new(CA_BUNDLE_LINK);
+    if is_staged(dest, link) {
+        return Ok(());
+    }
+    let dir = link.parent().context("the CA link has no directory")?;
+    place_symlink(dest, link, &relative_link_value(dir, Path::new(CA_BUNDLE)))
+}
 
 /// Inject the requested runtime extras into the staged rootfs.
 pub fn stage_runtime_extras(dest: &Path, extras: &RuntimeExtras) -> Result<RuntimeResult> {
@@ -1574,6 +1591,36 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let result = stage_runtime_extras(tmp.path(), &RuntimeExtras::default()).unwrap();
         assert!(result.warnings.is_empty() && result.tini_image_path.is_none());
+    }
+
+    #[test]
+    fn ca_bundle_link_points_at_the_staged_bundle_by_a_relative_value() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_file(
+            &tmp.path().join("etc/ssl/certs/ca-certificates.crt"),
+            b"bundle",
+        );
+        stage_ca_bundle_link(tmp.path()).unwrap();
+        let link = tmp.path().join("etc/ssl/cert.pem");
+        // Relative, as on Alpine, so it resolves wherever the tree is mounted.
+        assert_eq!(
+            fs::read_link(&link).unwrap(),
+            Path::new("certs/ca-certificates.crt")
+        );
+        assert_eq!(fs::read(&link).unwrap(), b"bundle");
+    }
+
+    #[test]
+    fn ca_bundle_link_keeps_a_file_already_at_cert_pem() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_file(
+            &tmp.path().join("etc/ssl/certs/ca-certificates.crt"),
+            b"bundle",
+        );
+        let own = make_file(&tmp.path().join("etc/ssl/cert.pem"), b"mine");
+        stage_ca_bundle_link(tmp.path()).unwrap();
+        assert!(!fs::symlink_metadata(&own).unwrap().is_symlink());
+        assert_eq!(fs::read(&own).unwrap(), b"mine");
     }
 
     #[test]

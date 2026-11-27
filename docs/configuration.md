@@ -22,7 +22,7 @@ file**.
 | `sbom-format` | `--sbom-format` | SBOM format: `cyclonedx-json` (default) or `spdx-json`. Without `sbom` it is ignored, and the report warns. |
 | `scan` | `--scan` | Vulnerability-scan the packed rootfs with grype. When `--sbom` is set, it reuses that SBOM. Otherwise it scans the rootfs. |
 | `scan-fail-on` | `--scan-fail-on` | Fail the pack on a grype finding at or above this severity: `negligible`/`low`/`medium`/`high`/`critical` (implies `--scan`). `negligible` blocks everything, including findings grype cannot rank. Stricter levels ignore unrankable findings. |
-| `ca-certs` | `--ca-certs` | Add the TLS CA bundle (`/etc/ssl/certs/ca-certificates.crt`). |
+| `ca-certs` | `--ca-certs` | Add the TLS CA bundle (`/etc/ssl/certs/ca-certificates.crt`, linked from `/etc/ssl/cert.pem`). |
 | `tz` | `--tz` | Add the resolved local timezone (`/etc/localtime`). |
 | `tmp` | `--tmp` | Add an empty `/tmp` directory, mode `1777` and owned by uid 0, so the non-root user can write there. A `--no-build` rootfs keeps the mode, owned by the user who packed it. |
 | `init` | `--init` | Add a minimal init (`tini`) as pid 1 wrapping the entrypoint. A static `tini-static` is preferred. A dynamic `tini` still packs, with a warning. |

@@ -9,8 +9,9 @@
 #    that musl's own loader lists (`ld-musl-x86_64.so.1 --list`). This is the musl twin of
 #    tests/differential.rs, and the main guard against a wrong musl rule: a wrong rule gives an
 #    image that exits 127 while `pack` exits 0.
-# 2. `pack /usr/bin/curl --oci-archive <out-dir>/curl.tar`, with a `libc` of "musl". The runner
-#    then loads and runs the archive, where Docker is.
+# 2. `pack --ca-certs /usr/bin/curl --oci-archive <out-dir>/curl.tar`, with a `libc` of "musl".
+#    The runner then loads and runs the archive, where Docker is, and makes one HTTPS request
+#    with it, which needs the CA bundle at Alpine's /etc/ssl/cert.pem.
 set -eu
 
 bin=${1:?usage: alpine-musl-check.sh <scratchsmith> <out-dir>}
@@ -81,7 +82,7 @@ echo "musl oracle: $checked dynamic programs checked, $failed failed"
 [ "$checked" -gt 0 ] || { echo "the oracle checked no program"; exit 1; }
 [ "$failed" -eq 0 ]
 
-report=$("$bin" pack --format json --oci-archive "$out/curl.tar" /usr/bin/curl)
+report=$("$bin" pack --format json --ca-certs --oci-archive "$out/curl.tar" /usr/bin/curl)
 printf '%s\n' "$report" | jq -e '.libc == "musl" and .interpreter == "/lib/ld-musl-x86_64.so.1"' >/dev/null || {
     echo "the curl pack did not report musl: $report"
     exit 1

@@ -159,7 +159,42 @@ fn runtime_extras_stage_ca_and_tz_without_docker() {
         out.join("etc/ssl/certs/ca-certificates.crt").exists(),
         "CA bundle not staged"
     );
+    // Alpine's OpenSSL and curl read /etc/ssl/cert.pem, so it links to the bundle.
+    assert_eq!(
+        std::fs::read_link(out.join("etc/ssl/cert.pem")).unwrap(),
+        Path::new("certs/ca-certificates.crt")
+    );
+    assert_eq!(
+        std::fs::read(out.join("etc/ssl/cert.pem")).unwrap(),
+        std::fs::read(out.join("etc/ssl/certs/ca-certificates.crt")).unwrap()
+    );
     assert!(out.join("etc/localtime").exists(), "localtime not staged");
+}
+
+#[test]
+fn ca_certs_keeps_an_added_file_at_cert_pem() {
+    // `--add-file x:/etc/ssl/cert.pem --ca-certs` packed before the link existed: the user's
+    // file still wins, and no link replaces it.
+    let bin = Path::new(env!("CARGO_BIN_EXE_scratchsmith"));
+    let tmp = tempfile::tempdir().unwrap();
+    let own = tmp.path().join("own.pem");
+    std::fs::write(&own, b"my roots").unwrap();
+    let out = tmp.path().join("rootfs");
+    let opts = PackOptions {
+        extras: RuntimeExtras {
+            ca_certs: true,
+            ..Default::default()
+        },
+        add_files: vec![scratchsmith::stager::AddFile {
+            src: own,
+            dst: "/etc/ssl/cert.pem".into(),
+        }],
+        ..Default::default()
+    };
+    scratchsmith::pack::stage_only(bin, &out, &opts).expect("stage with --add-file and --ca-certs");
+    let pem = out.join("etc/ssl/cert.pem");
+    assert!(!std::fs::symlink_metadata(&pem).unwrap().is_symlink());
+    assert_eq!(std::fs::read(&pem).unwrap(), b"my roots");
 }
 
 #[test]

@@ -173,7 +173,8 @@ pub enum Command {
         /// Fail the pack if grype finds a vuln at or above this severity (implies --scan).
         #[arg(long = "scan-fail-on", value_enum, value_name = "SEVERITY")]
         scan_fail_on: Option<crate::supplychain::Severity>,
-        /// Add the TLS CA bundle (/etc/ssl/certs/ca-certificates.crt).
+        /// Add the TLS CA bundle (/etc/ssl/certs/ca-certificates.crt, linked from
+        /// /etc/ssl/cert.pem).
         #[arg(long = "ca-certs")]
         ca_certs: bool,
         /// Add the resolved local timezone (/etc/localtime).

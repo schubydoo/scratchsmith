@@ -58,7 +58,8 @@ pub struct Config {
     /// Fail the pack when grype finds a vuln at or above this severity (implies `scan`).
     #[serde(rename = "scan-fail-on")]
     pub scan_fail_on: Option<Severity>,
-    /// Add the TLS CA bundle (`/etc/ssl/certs/ca-certificates.crt`).
+    /// Add the TLS CA bundle (`/etc/ssl/certs/ca-certificates.crt`, linked from
+    /// `/etc/ssl/cert.pem`).
     #[serde(default, rename = "ca-certs")]
     pub ca_certs: bool,
     /// Add the resolved local timezone (`/etc/localtime`).
