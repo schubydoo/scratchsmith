@@ -337,23 +337,12 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x "$RUNNER_TEMP/bin/scratchsmith"
-          # TEMPORARY (TASK-266 AC 3): a stub that drops curl's interpreter from graph, to show
-          # the new FAIL line once. Reverted before merge.
-          cat >"$RUNNER_TEMP/bin/stub" <<'EOF'
-          #!/bin/sh
-          if [ "$1" = graph ] && [ "$4" = /usr/bin/curl ]; then
-              /opt/bin/scratchsmith "$@" | jq -c '.interpreter = null'
-          else
-              exec /opt/bin/scratchsmith "$@"
-          fi
-          EOF
-          chmod +x "$RUNNER_TEMP/bin/stub"
           mkdir -p "$RUNNER_TEMP/out"
           docker run --rm \
             -v "$RUNNER_TEMP/bin:/opt/bin:ro" \
             -v "$GITHUB_WORKSPACE/scripts:/opt/scripts:ro" \
             -v "$RUNNER_TEMP/out:/out" \
-            "$ALPINE" /opt/scripts/alpine-musl-check.sh /opt/bin/stub /out
+            "$ALPINE" /opt/scripts/alpine-musl-check.sh /opt/bin/scratchsmith /out
       - name: Load and run the packed curl
         run: |
           set -euo pipefail
