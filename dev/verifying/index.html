@@ -553,6 +553,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Verifying an image you signed with pack">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#with-scratchsmith-verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        With scratchsmith verify
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#with-cosign-directly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        With cosign directly
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -755,6 +783,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Verifying an image you signed with pack">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#with-scratchsmith-verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        With scratchsmith verify
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#with-cosign-directly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        With cosign directly
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -861,28 +917,56 @@ OIDC identity of whoever ran <code>--sign</code>. Verify with the identity and i
 that provider's. Sigstore's <a href="https://docs.sigstore.dev/quickstart/verification-cheat-sheet/">verification cheat sheet</a>
 lists them. In CI, <code>--certificate-identity-regexp</code> lets one check hold for every branch or tag
 of the workflow.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">IMAGE</span><span class="o">=</span>ghcr.io/you/app:latest<span class="w">   </span><span class="c1"># or the @sha256:... reference that the pack printed</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># The signature that --sign made</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>cosign<span class="w"> </span>verify<span class="w"> </span><span class="s2">"</span><span class="nv">$IMAGE</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/you/app/\.github/workflows/release\.yml@'</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># The SBOM attestation that --sbom --sign made (CycloneDX, the default --sbom-format)</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>cosign<span class="w"> </span>verify-attestation<span class="w"> </span><span class="s2">"</span><span class="nv">$IMAGE</span><span class="s2">"</span><span class="w"> </span>--type<span class="w"> </span>cyclonedx<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/you/app/\.github/workflows/release\.yml@'</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com<span class="w"> </span>&gt;<span class="w"> </span>/dev/null
+<h3 id="with-scratchsmith-verify">With <code>scratchsmith verify</code><a class="headerlink" href="#with-scratchsmith-verify" title="Permanent link">&para;</a></h3>
+<p><code>scratchsmith verify</code> runs both checks below with cosign (cosign must be installed). It takes
+cosign's names for the identity and issuer flags:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>scratchsmith<span class="w"> </span>verify<span class="w"> </span>ghcr.io/you/app@sha256:...<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/you/app/\.github/workflows/release\.yml@'</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--sbom
+</code></pre></div>
+<ul>
+<li><strong>Identity:</strong> give exactly one of <code>--certificate-identity</code> (an exact value) and
+  <code>--certificate-identity-regexp</code>. A pattern must start with <code>^</code>. cosign matches a pattern
+  anywhere in the identity, so without the anchor a longer identity that contains it passes too.</li>
+<li><strong><code>--sbom</code>:</strong> also checks the SBOM attestation, of the type that <code>--sbom-format</code> names
+  (<code>cyclonedx-json</code> by default, the same values as <code>pack</code>). Leave it out for an image signed
+  with no SBOM, or for an index.</li>
+<li><strong>A tag:</strong> verify reads the digest the tag points to once, and cosign checks that digest. The
+  report prints it and notes that a tag can move.</li>
+<li><strong>An index</strong> that <code>index --sign</code> signed: verify checks the signature on the index. It does not
+  check the images that the index lists, and <code>--sbom</code> is refused.</li>
+</ul>
+<p>It exits <code>0</code> when every check passed, <code>1</code> when a check failed or could not run (for example the
+image is not found), and <code>2</code> when the command line is refused. <code>--format json</code> prints <code>requested</code>
+(the reference as given), <code>image</code> (the digest reference that cosign checked), <code>kind</code> (<code>image</code> or
+<code>index</code>), <code>identity</code>, <code>identity_is_regexp</code>, <code>issuer</code>, <code>signature</code> and <code>attestation</code> (the type
+checked, or null). A failure prints no report.</p>
+<p>A pass proves who signed that image digest. It does not prove that the image is safe, or that
+the SBOM is complete.</p>
+<h3 id="with-cosign-directly">With cosign directly<a class="headerlink" href="#with-cosign-directly" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">IMAGE</span><span class="o">=</span>ghcr.io/you/app:latest<span class="w">   </span><span class="c1"># or the @sha256:... reference that the pack printed</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1"># The signature that --sign made</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>cosign<span class="w"> </span>verify<span class="w"> </span><span class="s2">"</span><span class="nv">$IMAGE</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/you/app/\.github/workflows/release\.yml@'</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="c1"># The SBOM attestation that --sbom --sign made (CycloneDX, the default --sbom-format)</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>cosign<span class="w"> </span>verify-attestation<span class="w"> </span><span class="s2">"</span><span class="nv">$IMAGE</span><span class="s2">"</span><span class="w"> </span>--type<span class="w"> </span>cyclonedx<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'^https://github\.com/you/app/\.github/workflows/release\.yml@'</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com<span class="w"> </span>&gt;<span class="w"> </span>/dev/null
 </code></pre></div>
 <p>With <code>--sbom-format spdx-json</code>, use <code>--type spdxjson</code>. Pass a tag only if you trust it not to
 move. The digest reference that the pack printed (<code>signed ...@sha256:...</code>, or the <code>signed</code> field
 in <code>--format json</code>) pins the exact image. To read the attested SBOM, drop the <code>&gt; /dev/null</code> and
 decode its payload:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>cosign<span class="w"> </span>verify-attestation<span class="w"> </span><span class="s2">"</span><span class="nv">$IMAGE</span><span class="s2">"</span><span class="w"> </span>--type<span class="w"> </span>cyclonedx<span class="w"> </span>&lt;identity<span class="w"> </span>flags<span class="w"> </span>as<span class="w"> </span>above&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span>.payload<span class="w"> </span><span class="p">|</span><span class="w"> </span>base64<span class="w"> </span>-d<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.predicate
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>cosign<span class="w"> </span>verify-attestation<span class="w"> </span><span class="s2">"</span><span class="nv">$IMAGE</span><span class="s2">"</span><span class="w"> </span>--type<span class="w"> </span>cyclonedx<span class="w"> </span>&lt;identity<span class="w"> </span>flags<span class="w"> </span>as<span class="w"> </span>above&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span>.payload<span class="w"> </span><span class="p">|</span><span class="w"> </span>base64<span class="w"> </span>-d<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.predicate
 </code></pre></div>
 <p>Scratchsmith's <code>push-auth-smoke</code> workflow runs the same <code>cosign verify</code> and
-<code>cosign verify-attestation</code> checks, with its own workflow identity, against an image it packs,
-pushes to GHCR and signs.</p>
+<code>cosign verify-attestation</code> checks, and <code>scratchsmith verify</code>, with its own workflow identity,
+against an image it packs, pushes to GHCR and signs.</p>
 
 
 

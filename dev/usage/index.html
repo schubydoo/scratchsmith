@@ -1293,6 +1293,8 @@ the image later, for example after a review, with <code>crane tag</code> or <cod
 keyless signing prints a login URL there and can ask for a code, and you answer it as you would
 when you run cosign yourself. cosign's standard output stays captured, so <code>--format json</code> stays
 parseable. A failed cosign run is reported with its exit status, and its own messages are above.</p>
+<p>To check the signature later, against the signer you expect, run <code>scratchsmith verify</code>. See
+<a href="../verifying/#with-scratchsmith-verify">Verifying an image you signed with <code>pack</code></a>.</p>
 <h2 id="supply-chain-output-smoke-run-and-size-gates">Supply-chain output, smoke-run, and size gates<a class="headerlink" href="#supply-chain-output-smoke-run-and-size-gates" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--strip<span class="w"> </span>--smoke<span class="w"> </span>./app<span class="w">        </span><span class="c1"># SBOM + stripped + auto smoke-run</span>
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>scratchsmith<span class="w"> </span>pack<span class="w"> </span>--sbom<span class="w"> </span>--sbom-format<span class="w"> </span>spdx-json<span class="w"> </span>--sbom-file<span class="w"> </span>bom.spdx.json<span class="w"> </span>./app<span class="w">   </span><span class="c1"># SPDX SBOM, custom path</span>
