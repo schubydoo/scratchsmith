@@ -309,7 +309,8 @@ jobs:
           echo "add-file directory guard verified"
       # tmp and add-binary in one rootfs pack. curl needs libcurl, which id does not, so a staged
       # libcurl proves add-binary resolved the added program's own libraries. The DST holds a
-      # space, which the args input would split, so it also pins the per-line wiring.
+      # space, which the args input would split, so it also pins the per-line wiring. The second
+      # line is a bare absolute SRC, which keeps its own path, so two programs reach the CLI.
       - name: Pack with tmp and add-binary → rootfs
         id: tmpaddbin
         uses: $/
@@ -319,6 +320,7 @@ jobs:
           tmp: true
           add-binary: |
             /usr/bin/curl:/opt/my tools/curl
+            /usr/bin/stat
       - name: Assert tmp and add-binary staged
         env:
           ROOTFS: ${{ steps.tmpaddbin.outputs.rootfs }}
@@ -328,7 +330,25 @@ jobs:
           [ "$(stat -c %a "$ROOTFS/tmp")" = 1777 ] || { echo "::error::tmp: true did not stage /tmp at mode 1777 — is --tmp wired in action.yml?"; exit 1; }
           test -f "$ROOTFS/opt/my tools/curl" || { echo "::error::add-binary did not copy /usr/bin/curl to '/opt/my tools/curl' — is --add-binary wired in action.yml?"; exit 1; }
           find "$ROOTFS" -name 'libcurl.so.4*' | grep -q . || { echo "::error::add-binary staged curl but not libcurl"; exit 1; }
+          test -f "$ROOTFS/usr/bin/stat" || { echo "::error::a bare absolute add-binary did not mirror /usr/bin/stat into the image, or the second line was dropped"; exit 1; }
           echo "tmp and add-binary inputs wired"
+      # Trip half: --add-binary takes ELF files only, so a text file MUST fail the pack. This pins
+      # that a refused add-binary fails the job instead of being skipped.
+      - name: Pack add-binary with a non-ELF source (must fail)
+        id: addbin-trip
+        continue-on-error: true
+        uses: $/
+        with:
+          binary: /usr/bin/id
+          output: ./staged-add-binary-trip
+          add-binary: /etc/hostname:/usr/bin/not-a-program
+      - name: Assert the add-binary non-ELF guard tripped
+        env:
+          OUTCOME: ${{ steps.addbin-trip.outcome }}
+        run: |
+          set -euo pipefail
+          [ "$OUTCOME" = "failure" ] || { echo "::error::add-binary of a non-ELF file packed anyway — was the --add-binary wiring dropped from action.yml?"; exit 1; }
+          echo "add-binary non-ELF guard verified"
       # --locale stages a COMPILED locale, so the runner must be able to supply one. The runner
       # image ships no en_US directory, so localedef compiles it from /usr/share/i18n. Assert
       # that source rather than skipping when it is absent: a self-skipping selftest proves
