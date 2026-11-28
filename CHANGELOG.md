@@ -5,6 +5,32 @@ All notable changes to Scratchsmith are documented here. This file is generated 
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## 2.3.0 (2026-11-28)
+
+### Features
+
+#### The GitHub Action gains `tmp` and `add-binary` inputs ([#614](https://github.com/schubydoo/scratchsmith/pull/614))
+
+The Action passed `--tmp` and `--add-binary` only through its `args` input, which splits on whitespace, so an `--add-binary` path with a space could not work. The new `tmp` input adds the writable `/tmp`, and the new `add-binary` input takes one `SRC[:DST]` program per line, the same shape as `add-file`. Both need scratchsmith v2.1.0 or later.
+
+#### `pack` and `graph` now support dynamic musl binaries ([#608](https://github.com/schubydoo/scratchsmith/pull/608))
+
+`pack` used to refuse a dynamic musl program, such as one built on Alpine or with `musl-gcc`. It now resolves by musl's own loader rules and packs into a `FROM scratch` image that runs with no NSS and no `ld.so.cache`, on x86_64. `--nss` and `--locale` exit `2` for a musl binary, because musl has no NSS and reads no glibc locales. The `pack`, `graph` and `lint` JSON reports gain a `libc` field (`"glibc"`, `"musl"` or null), and `lint` gains `fortify_detectable`: musl's fortify-headers leave no symbol, so `lint --fail-on no-fortify` fails every musl binary and warns that the gate cannot be checked. One image holds one libc: `--add-binary` fails the pack for a program, or a shared library, that uses the other libc. An added shared library's own dependencies are still found by glibc's search rules, in a musl image too, and `pack` prints a note when that happens. Check such an image by running something that loads the library, because `--smoke` only starts the entrypoint.
+
+#### New `verify` subcommand checks the signature that `--sign` made ([#615](https://github.com/schubydoo/scratchsmith/pull/615))
+
+`scratchsmith verify <IMAGE>` checks an image's keyless cosign signature against the signer you expect, with cosign's own `--certificate-identity` or `--certificate-identity-regexp` and `--certificate-oidc-issuer`. `--sbom` also checks the SBOM attestation, of the type `--sbom-format` names. A tag is read once and cosign checks the digest it pointed to, which the report prints. An index that `index --sign` signed is checked by its own signature, and `--sbom` is refused for it. A pattern must start with `^`, since cosign matches it anywhere in the identity. It exits `0` when the checks pass, `1` when one fails, and `2` for a refused command line, and `--format json` prints the result for a CI gate. It needs cosign.
+
+### Fixes
+
+#### `--ca-certs` links `/etc/ssl/cert.pem` to the CA bundle ([#617](https://github.com/schubydoo/scratchsmith/pull/617))
+
+`--ca-certs` now also stages `/etc/ssl/cert.pem` as a relative link to the bundle at `/etc/ssl/certs/ca-certificates.crt`, as Alpine does. Alpine's OpenSSL and curl read that path, so a packed musl program finds the bundle without being told where it is. Every `--ca-certs` image gains the link, glibc images included. A file that `--add-file` puts at `/etc/ssl/cert.pem` is kept, and no link is made.
+
+#### `install.sh` accepts `VERSION` with or without the leading `v` ([#604](https://github.com/schubydoo/scratchsmith/pull/604))
+
+`VERSION=2.2.0` used to look for a release tag named `2.2.0`, which does not exist, so the download failed. The installer now adds the `v` when it is missing, so `VERSION=2.2.0` and `VERSION=v2.2.0` install the same release, as the GitHub Action's `version` input already did.
+
 ## 2.2.0 (2026-11-26)
 
 ### Features
